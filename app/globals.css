@@ -171,41 +171,9 @@ button:focus-visible {
   filter: drop-shadow(0 18px 28px rgba(18, 127, 136, 0.18));
 }
 
-.k2-wordmark {
-  font-family: "Nunito", "Noto Sans Thai", ui-sans-serif, system-ui, sans-serif;
-  font-weight: 800 !important;
-  letter-spacing: -0.052em;
-  background: linear-gradient(105deg, #7a2f64 0%, #e14d9d 20%, #ff9ac8 38%, #f4d8e7 50%, #ff70b7 64%, #c83c8a 82%, #6f2d62 100%);
-  background-size: 320% 100%;
-  -webkit-background-clip: text;
-  background-clip: text;
-  color: transparent;
-  animation: wordmarkFlow 8s ease-in-out infinite;
-}
-
 .white-surface {
   background: rgba(255, 255, 255, 0.92);
   box-shadow: 0 18px 45px rgba(40, 139, 146, 0.16);
-}
-
-@keyframes logoFloat {
-  0%,
-  100% {
-    transform: translateZ(0) scale(1);
-  }
-  50% {
-    transform: translate3d(0, -3px, 0) scale(1.012);
-  }
-}
-
-@keyframes wordmarkFlow {
-  0%,
-  100% {
-    background-position: 0% 50%;
-  }
-  50% {
-    background-position: 100% 50%;
-  }
 }
 
 @keyframes borderRun {

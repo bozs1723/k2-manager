@@ -1892,7 +1892,7 @@ function KLogoLockup({ size }: { size: "hero" | "sidebar" }) {
   if (size === "sidebar") {
     return (
       <div className="leading-none">
-        <h1 className="k2-wordmark whitespace-nowrap text-xl font-black tracking-normal">K2Smart</h1>
+        <span className="sr-only">K2Smart</span>
       </div>
     );
   }
@@ -1900,9 +1900,7 @@ function KLogoLockup({ size }: { size: "hero" | "sidebar" }) {
   return (
     <div className="w-fit">
       <KLogoMark className="mx-auto h-28 w-28 sm:h-36 sm:w-36" />
-      <h1 className="k2-wordmark mt-3 whitespace-nowrap text-center text-5xl font-black tracking-normal sm:text-7xl">
-        K2Smart
-      </h1>
+      <span className="sr-only">K2Smart</span>
     </div>
   );
 }
