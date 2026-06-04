@@ -410,6 +410,39 @@ function quoteNumberFor(index: number, prefix: string) {
   return `${prefix || "QT"}${stamp}${String(index).padStart(4, "0")}`;
 }
 
+function nextSequentialNumber(values: string[], prefix: string, fallback = 1028) {
+  const escapedPrefix = prefix.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const pattern = new RegExp(`^${escapedPrefix}(\\d+)$`);
+  const maxNumber = values.reduce((max, value) => {
+    const match = value.match(pattern);
+    const parsed = match ? Number(match[1]) : Number.NaN;
+    return Number.isFinite(parsed) ? Math.max(max, parsed) : max;
+  }, fallback - 1);
+  return maxNumber + 1;
+}
+
+function jobNumberFromValues(values: string[], offset = 0) {
+  const next = nextSequentialNumber(values, "K2-", 1028) + offset;
+  return `K2-${next}`;
+}
+
+function jobNumberFor(existingJobs: Job[], offset = 0) {
+  return jobNumberFromValues(existingJobs.map((job) => job.id), offset);
+}
+
+function quoteNumberFromValues(values: string[], prefix: string, offset = 0) {
+  const safePrefix = prefix || "QT";
+  const stamp = new Date().toISOString().slice(0, 10).replace(/-/g, "");
+  const next = nextSequentialNumber(values, `${safePrefix}${stamp}`, 1) + offset;
+  return quoteNumberFor(next, safePrefix);
+}
+
+function isDuplicateKeyError(error: unknown) {
+  if (!error || typeof error !== "object") return false;
+  const detail = error as { code?: string; message?: string };
+  return detail.code === "23505" || detail.message?.toLowerCase().includes("duplicate key");
+}
+
 function initialsFromName(name: string) {
   return (
     name
@@ -1007,7 +1040,6 @@ export default function Page() {
       setDataError("บทบาทนี้ยังไม่มีสิทธิ์สร้างงาน");
       return;
     }
-    const nextNumber = 1000 + jobs.length + 28;
     const isNewCustomer = input?.customerId === "new";
     const fallbackCustomer: Customer = {
       id: "new",
@@ -1046,8 +1078,11 @@ export default function Page() {
       : existingCustomer;
     const price = input?.price ?? 14400;
     const deposit = input?.deposit ?? 4000;
-    const jobNumber = `K2-${nextNumber}`;
-    const quoteNumber = quoteNumberFor(jobs.length + 1, companyProfile.quotePrefix);
+    const initialJobNumber = jobNumberFor(jobs);
+    const initialQuoteNumber = quoteNumberFromValues(
+      jobs.map((job) => job.quoteNumber ?? ""),
+      companyProfile.quotePrefix
+    );
 
     if (supabase && isSupabaseConfigured) {
       try {
@@ -1074,40 +1109,65 @@ export default function Page() {
           customerId = insertedCustomer.id;
         }
 
-        const { data: insertedJob, error: jobError } = await supabase
+        const { data: existingNumbers, error: existingNumbersError } = await supabase
           .from("jobs")
-          .insert({
-            job_number: jobNumber,
-            quote_number: quoteNumber,
-            quote_status: "draft",
-            customer_id: customerId,
-            customer_name: input?.customerName ?? customer.name,
-            customer_phone: input?.phone ?? customer.phone,
-            customer_line_id: input?.lineId ?? customer.lineId,
-            company_name: input?.companyName ?? customer.companyName,
-            tax_id: input?.taxId ?? customer.taxId,
-            branch: input?.branch ?? customer.branch,
-            billing_address: input?.billingAddress ?? customer.billingAddress,
-            accounting_email: input?.accountingEmail ?? customer.accountingEmail,
-            requires_invoice: input?.requiresInvoice ?? customer.requiresInvoice ?? false,
-            title: input?.title ?? "งานสินค้าใหม่",
-            type: input?.type ?? "UV Print",
-            description: input?.description ?? "ออเดอร์ใหม่จากฝ่ายขาย",
-            quantity: input?.quantity ?? 1,
-            order_date: input?.orderDate ?? todayISO(),
-            due_date: input?.dueDate ?? todayISO(),
-            priority: input?.priority ?? "Normal",
-            status: "New Order",
-            assigned_designer: teamIdByName(teamMembers, input?.assignedDesigner),
-            assigned_production: teamIdByName(teamMembers, input?.assignedProduction),
-            price,
-            deposit,
-            internal_notes: input?.internalNotes ?? "",
-            created_by: uuidPattern.test(currentUser.id) ? currentUser.id : null
-          })
-          .select("id, job_number")
-          .single();
-        if (jobError) throw jobError;
+          .select("job_number, quote_number");
+        if (existingNumbersError) throw existingNumbersError;
+
+        const existingJobNumbers = [
+          ...jobs.map((job) => job.id),
+          ...(existingNumbers ?? []).map((job) => job.job_number).filter(Boolean)
+        ];
+        const existingQuoteNumbers = [
+          ...jobs.map((job) => job.quoteNumber ?? ""),
+          ...(existingNumbers ?? []).map((job) => job.quote_number ?? "").filter(Boolean)
+        ];
+
+        let insertedJob: { id: string; job_number: string } | null = null;
+        let insertedJobNumber = initialJobNumber;
+        for (let attempt = 0; attempt < 3; attempt += 1) {
+          insertedJobNumber = jobNumberFromValues(existingJobNumbers, attempt);
+          const insertedQuoteNumber = quoteNumberFromValues(existingQuoteNumbers, companyProfile.quotePrefix, attempt);
+          const { data, error: jobError } = await supabase
+            .from("jobs")
+            .insert({
+              job_number: insertedJobNumber,
+              quote_number: insertedQuoteNumber,
+              quote_status: "draft",
+              customer_id: customerId,
+              customer_name: input?.customerName ?? customer.name,
+              customer_phone: input?.phone ?? customer.phone,
+              customer_line_id: input?.lineId ?? customer.lineId,
+              company_name: input?.companyName ?? customer.companyName,
+              tax_id: input?.taxId ?? customer.taxId,
+              branch: input?.branch ?? customer.branch,
+              billing_address: input?.billingAddress ?? customer.billingAddress,
+              accounting_email: input?.accountingEmail ?? customer.accountingEmail,
+              requires_invoice: input?.requiresInvoice ?? customer.requiresInvoice ?? false,
+              title: input?.title ?? "งานสินค้าใหม่",
+              type: input?.type ?? "UV Print",
+              description: input?.description ?? "ออเดอร์ใหม่จากฝ่ายขาย",
+              quantity: input?.quantity ?? 1,
+              order_date: input?.orderDate ?? todayISO(),
+              due_date: input?.dueDate ?? todayISO(),
+              priority: input?.priority ?? "Normal",
+              status: "New Order",
+              assigned_designer: teamIdByName(teamMembers, input?.assignedDesigner),
+              assigned_production: teamIdByName(teamMembers, input?.assignedProduction),
+              price,
+              deposit,
+              internal_notes: input?.internalNotes ?? "",
+              created_by: uuidPattern.test(currentUser.id) ? currentUser.id : null
+            })
+            .select("id, job_number")
+            .single();
+          if (!jobError) {
+            insertedJob = data;
+            break;
+          }
+          if (!isDuplicateKeyError(jobError)) throw jobError;
+        }
+        if (!insertedJob) throw new Error("เลขงานซ้ำ กรุณากดสร้างงานอีกครั้ง");
         if (insertedJob && uuidPattern.test(currentUser.id)) {
           await supabase.from("job_status_history").insert({
             job_id: insertedJob.id,
@@ -1116,9 +1176,9 @@ export default function Page() {
             changed_by: currentUser.id
           });
         }
-        await appendAudit("created job", jobNumber, "jobs", insertedJob.id);
+        await appendAudit("created job", insertedJobNumber, "jobs", insertedJob.id);
         await refreshWorkspaceData();
-        setSelectedJobId(jobNumber);
+        setSelectedJobId(insertedJobNumber);
         setActiveView("Detail");
         return;
       } catch (error) {
@@ -1128,8 +1188,8 @@ export default function Page() {
     }
 
     const job: Job = {
-      id: jobNumber,
-      quoteNumber,
+      id: initialJobNumber,
+      quoteNumber: initialQuoteNumber,
       quoteStatus: "draft",
       customerId: customer.id,
       customerName: input?.customerName ?? customer.name,
