@@ -3,10 +3,10 @@
 ## Netlify build settings
 
 - Build command: `npm run build`
-- Publish directory: `.next`
+- Publish directory: `out`
 - Node version: `20`
 
-These values are also saved in `netlify.toml`.
+These values are also saved in `netlify.toml`. The app is exported as a static Next.js site because all production data access happens in the browser through Supabase.
 
 ## Required environment variables
 

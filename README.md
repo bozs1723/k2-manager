@@ -64,7 +64,7 @@ npm run build
 Netlify settings:
 
 - Build command: `npm run build`
-- Publish directory: `.next`
+- Publish directory: `out`
 - Node version: `20`
 
 Set these environment variables in Netlify:
