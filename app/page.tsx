@@ -1675,7 +1675,7 @@ export default function Page() {
           <header className="glass sticky top-3 z-30 mb-4 rounded-[1.5rem] p-3">
             <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
               <div className="flex items-center gap-3">
-                <KLogoMark className="h-12 w-12 shrink-0 lg:hidden" />
+                <KLogoMark className="h-16 w-16 shrink-0 lg:hidden" />
                 <div>
                   <p className="text-sm font-semibold text-k2-muted">พื้นที่ทำงานฝ่ายผลิต</p>
                   <h2 className="text-2xl font-semibold">{viewLabel[activeView] ?? activeView}</h2>
@@ -1838,7 +1838,7 @@ function BrandBlock({ currentUser }: { currentUser: TeamMember }) {
   return (
     <div className="mb-6">
       <div className="mb-5 flex items-center gap-3">
-        <KLogoMark className="h-14 w-14" />
+        <KLogoMark className="h-20 w-20" />
         <KLogoLockup size="sidebar" />
       </div>
       <div className="rounded-3xl bg-white/60 p-4">
@@ -1899,7 +1899,7 @@ function KLogoLockup({ size }: { size: "hero" | "sidebar" }) {
 
   return (
     <div className="w-fit">
-      <KLogoMark className="mx-auto h-28 w-28 sm:h-36 sm:w-36" />
+      <KLogoMark className="mx-auto h-44 w-44 sm:h-56 sm:w-56" />
       <span className="sr-only">K2Smart</span>
     </div>
   );
