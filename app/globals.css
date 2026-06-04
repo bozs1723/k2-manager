@@ -1,0 +1,238 @@
+@import url("https://fonts.googleapis.com/css2?family=Noto+Sans+Thai:wght@400;500;600;700;800&family=Nunito:wght@400;500;600;700;800&display=swap");
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: light;
+}
+
+@property --glow-angle {
+  syntax: "<angle>";
+  inherits: false;
+  initial-value: 0deg;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  min-height: 100vh;
+  margin: 0;
+  color: #18212f;
+  font-family: "Nunito", "Noto Sans Thai", ui-sans-serif, system-ui, sans-serif;
+  font-weight: 500;
+  background:
+    radial-gradient(circle at 15% 8%, rgba(255, 255, 255, 0.62), transparent 26%),
+    radial-gradient(circle at 84% 12%, rgba(179, 223, 222, 0.72), transparent 30%),
+    linear-gradient(180deg, #4fc2c9 0%, #7ed4d7 34%, #eaf9f8 68%, #ffffff 100%);
+}
+
+h1,
+h2,
+h3,
+h4 {
+  font-family: "Nunito", "Noto Sans Thai", ui-sans-serif, system-ui, sans-serif;
+  font-weight: 800 !important;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}
+
+button {
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+  transform: translateZ(0);
+  transition:
+    transform 150ms ease,
+    box-shadow 180ms ease,
+    border-color 180ms ease,
+    filter 180ms ease;
+}
+
+button[class] {
+  border-color: rgba(255, 255, 255, 0.82);
+  background-image:
+    linear-gradient(145deg, rgba(255, 255, 255, 0.46), rgba(255, 255, 255, 0.18)),
+    radial-gradient(circle at 18% 12%, rgba(255, 255, 255, 0.78), transparent 32%);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.72),
+    inset 0 -10px 22px rgba(79, 194, 201, 0.13),
+    0 14px 28px rgba(40, 139, 146, 0.15);
+  backdrop-filter: blur(18px) saturate(1.28);
+}
+
+button.text-white,
+button.bg-k2-ink {
+  background-image:
+    linear-gradient(145deg, rgba(255, 255, 255, 0.32), rgba(255, 255, 255, 0.06)),
+    linear-gradient(135deg, rgba(79, 194, 201, 0.98), rgba(179, 223, 222, 0.9) 54%, rgba(26, 164, 172, 0.94));
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.62),
+    inset 0 -12px 24px rgba(7, 117, 125, 0.18),
+    0 16px 32px rgba(20, 148, 156, 0.25);
+}
+
+button::before {
+  content: "";
+  position: absolute;
+  inset: 1px;
+  z-index: -1;
+  border-radius: inherit;
+  background: linear-gradient(145deg, rgba(255, 255, 255, 0.28), rgba(255, 255, 255, 0.06));
+  pointer-events: none;
+}
+
+button::after {
+  content: "";
+  position: absolute;
+  inset: -2px;
+  z-index: 1;
+  border-radius: inherit;
+  padding: 2px;
+  background: conic-gradient(
+    from var(--glow-angle, 0deg),
+    transparent 0deg,
+    rgba(255, 255, 255, 0) 55deg,
+    rgba(179, 223, 222, 0.98) 105deg,
+    rgba(79, 194, 201, 0.98) 145deg,
+    rgba(16, 164, 174, 0.98) 205deg,
+    rgba(255, 255, 255, 0) 265deg,
+    transparent 360deg
+  );
+  opacity: 0;
+  pointer-events: none;
+  -webkit-mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+}
+
+button:hover {
+  transform: translateY(-1px);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.8),
+    inset 0 -10px 22px rgba(79, 194, 201, 0.11),
+    0 18px 40px rgba(40, 139, 146, 0.2);
+  filter: saturate(1.08);
+}
+
+button:hover::after {
+  opacity: 1;
+  animation: borderRun 1.45s linear infinite;
+}
+
+button:active {
+  transform: translateY(3px) scale(0.985);
+  box-shadow:
+    inset 0 8px 18px rgba(11, 113, 121, 0.19),
+    inset 0 1px 0 rgba(255, 255, 255, 0.56),
+    0 6px 14px rgba(40, 139, 146, 0.12);
+}
+
+button:focus-visible {
+  outline: 3px solid rgba(79, 194, 201, 0.72);
+  outline-offset: 3px;
+}
+
+.glass {
+  border: 1px solid rgba(255, 255, 255, 0.88);
+  background: rgba(255, 255, 255, 0.84);
+  box-shadow: 0 24px 68px rgba(37, 143, 151, 0.2);
+  backdrop-filter: blur(26px);
+}
+
+.bg-k2-ink {
+  background: linear-gradient(135deg, #4fc2c9 0%, #b3dfde 52%, #18aeb6 100%) !important;
+}
+
+.text-k2-ink {
+  color: #1f2a3d !important;
+}
+
+.text-k2-muted {
+  color: #637f82 !important;
+}
+
+.k2-logo-mark {
+  display: block;
+  overflow: visible;
+  filter: drop-shadow(0 18px 22px rgba(18, 127, 136, 0.22)) drop-shadow(0 0 18px rgba(79, 194, 201, 0.24));
+  animation: logoFloat 3.4s ease-in-out infinite;
+}
+
+.k2-logo-shadow {
+  fill: rgba(10, 92, 99, 0.14);
+  transform: translate(0, 7px);
+  filter: blur(2px);
+}
+
+.k2-wordmark {
+  font-family: "Nunito", "Noto Sans Thai", ui-sans-serif, system-ui, sans-serif;
+  font-weight: 800 !important;
+  letter-spacing: -0.052em;
+  background: linear-gradient(105deg, #7a2f64 0%, #e14d9d 20%, #ff9ac8 38%, #f4d8e7 50%, #ff70b7 64%, #c83c8a 82%, #6f2d62 100%);
+  background-size: 320% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: wordmarkFlow 8s ease-in-out infinite;
+}
+
+.white-surface {
+  background: rgba(255, 255, 255, 0.92);
+  box-shadow: 0 18px 45px rgba(40, 139, 146, 0.16);
+}
+
+@keyframes logoFloat {
+  0%,
+  100% {
+    transform: translateZ(0) scale(1);
+  }
+  50% {
+    transform: translate3d(0, -3px, 0) scale(1.012);
+  }
+}
+
+@keyframes wordmarkFlow {
+  0%,
+  100% {
+    background-position: 0% 50%;
+  }
+  50% {
+    background-position: 100% 50%;
+  }
+}
+
+@keyframes borderRun {
+  to {
+    --glow-angle: 360deg;
+  }
+}
+
+.soft-scrollbar {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(102, 112, 133, 0.28) transparent;
+}
+
+.soft-scrollbar::-webkit-scrollbar {
+  height: 8px;
+  width: 8px;
+}
+
+.soft-scrollbar::-webkit-scrollbar-thumb {
+  background: rgba(102, 112, 133, 0.28);
+  border-radius: 999px;
+}
