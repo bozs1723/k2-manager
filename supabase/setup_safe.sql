@@ -471,7 +471,7 @@ insert into public.company_settings (
   quote_terms
 )
 select
-  'K2 Manager',
+  'K2Smart',
   'บริษัท เคทู ไซน์ มีเดีย จำกัด',
   '0565567000869',
   'สาขาที่ 00001',

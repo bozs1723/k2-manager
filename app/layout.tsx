@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "K2 Manager",
+  title: "K2Smart",
   description: "ระบบจัดการคิวงานผลิตสำหรับร้านพิมพ์และสินค้าสั่งทำ"
 };
 

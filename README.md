@@ -1,4 +1,4 @@
-# K2 Manager
+# K2Smart
 
 A production job queue management app for custom printing and merchandise teams.
 

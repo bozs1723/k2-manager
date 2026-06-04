@@ -1,4 +1,4 @@
-# Deploy K2 Manager to Netlify
+# Deploy K2Smart to Netlify
 
 ## Netlify build settings
 

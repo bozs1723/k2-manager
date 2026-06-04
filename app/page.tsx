@@ -242,7 +242,7 @@ const priorities: Priority[] = ["Normal", "Urgent", "Very Urgent", "Today"];
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 const initialCompanyProfile: CompanyProfile = {
-  name: "K2 Manager",
+  name: "K2Smart",
   legalName: "บริษัท เคทู ไซน์ มีเดีย จำกัด",
   taxId: "0565567000869",
   branch: "สาขาที่ 00001",
@@ -1508,7 +1508,7 @@ export default function Page() {
             <div className="space-y-5">
               <KLogoLockup size="hero" />
               <p className="max-w-2xl text-lg leading-8 text-k2-muted">
-                K2 Manager Keep every job flowing
+                K2Smart Keep every job flowing
               </p>
             </div>
             <div className="flex max-w-2xl flex-wrap gap-2.5">
@@ -1877,7 +1877,7 @@ function MemberAvatar({ member, className = "h-12 w-12 rounded-2xl text-sm" }: {
 
 function KLogoMark({ className = "" }: { className?: string }) {
   return (
-    <svg className={`k2-logo-mark ${className}`} viewBox="0 0 160 160" role="img" aria-label="K2 Manager app logo">
+    <svg className={`k2-logo-mark ${className}`} viewBox="0 0 160 160" role="img" aria-label="K2Smart app logo">
       <defs>
         <linearGradient id="k2MainGradient" x1="18" y1="25" x2="142" y2="140" gradientUnits="userSpaceOnUse">
           <stop offset="0" stopColor="#B3DFDE" />
@@ -1921,7 +1921,7 @@ function KLogoLockup({ size }: { size: "hero" | "sidebar" }) {
   if (size === "sidebar") {
     return (
       <div className="leading-none">
-        <h1 className="k2-wordmark whitespace-nowrap text-xl font-black tracking-normal">K2 Manager</h1>
+        <h1 className="k2-wordmark whitespace-nowrap text-xl font-black tracking-normal">K2Smart</h1>
       </div>
     );
   }
@@ -1930,7 +1930,7 @@ function KLogoLockup({ size }: { size: "hero" | "sidebar" }) {
     <div className="w-fit">
       <KLogoMark className="mx-auto h-28 w-28 sm:h-36 sm:w-36" />
       <h1 className="k2-wordmark mt-3 whitespace-nowrap text-center text-5xl font-black tracking-normal sm:text-7xl">
-        K2 Manager
+        K2Smart
       </h1>
     </div>
   );
