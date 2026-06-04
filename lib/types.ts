@@ -30,6 +30,7 @@ export type TeamMember = {
   name: string;
   role: Role;
   avatar: string;
+  avatarUrl?: string;
 };
 
 export type Customer = {

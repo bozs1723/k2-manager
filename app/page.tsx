@@ -88,6 +88,7 @@ type SupabaseProfileRow = {
   id: string;
   full_name: string | null;
   role: Role | null;
+  avatar_url?: string | null;
   is_active?: boolean | null;
 };
 
@@ -420,14 +421,24 @@ function initialsFromName(name: string) {
   );
 }
 
-function profileToMember(profile: { id: string; full_name: string | null; role: Role | null }): TeamMember {
+function profileToMember(profile: { id: string; full_name: string | null; role: Role | null; avatar_url?: string | null }): TeamMember {
   const name = profile.full_name || "K2 User";
   return {
     id: profile.id,
     name,
     role: profile.role ?? "Sales Staff",
-    avatar: initialsFromName(name)
+    avatar: initialsFromName(name),
+    avatarUrl: profile.avatar_url ?? undefined
   };
+}
+
+function readImageAsDataUrl(file: File) {
+  return new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result ?? ""));
+    reader.onerror = () => reject(new Error("อ่านไฟล์รูปภาพไม่สำเร็จ"));
+    reader.readAsDataURL(file);
+  });
 }
 
 function normalizeHeader(value: string) {
@@ -663,11 +674,11 @@ export default function Page() {
     async function loadProfile(userId: string) {
       const { data, error } = await supabase!
         .from("profiles")
-        .select("id, full_name, role")
+        .select("id, full_name, role, avatar_url")
         .eq("id", userId)
         .single();
       if (!isMounted || error || !data) return;
-      const member = profileToMember(data as { id: string; full_name: string | null; role: Role | null });
+      const member = profileToMember(data as SupabaseProfileRow);
       setCurrentUser(member);
       setTeamMembers((current) => (current.some((item) => item.id === member.id) ? current.map((item) => (item.id === member.id ? member : item)) : [member, ...current]));
       setIsAuthed(true);
@@ -728,7 +739,7 @@ export default function Page() {
         auditResult,
         rolePermissionsResult
       ] = await Promise.all([
-        supabase.from("profiles").select("id, full_name, role, is_active").eq("is_active", true).order("created_at", { ascending: true }),
+        supabase.from("profiles").select("id, full_name, role, avatar_url, is_active").eq("is_active", true).order("created_at", { ascending: true }),
         supabase.from("company_settings").select("*").order("created_at", { ascending: true }).limit(1),
         supabase.from("customers").select("*").order("created_at", { ascending: false }),
         supabase.from("jobs").select("*").order("created_at", { ascending: false }),
@@ -863,11 +874,11 @@ export default function Page() {
         if (error) throw error;
         const { data: profile, error: profileError } = await supabase
           .from("profiles")
-          .select("id, full_name, role")
+          .select("id, full_name, role, avatar_url")
           .eq("id", data.user.id)
           .single();
         if (profileError) throw profileError;
-        const member = profileToMember(profile as { id: string; full_name: string | null; role: Role | null });
+        const member = profileToMember(profile as SupabaseProfileRow);
         setCurrentUser(member);
         setTeamMembers((current) => (current.some((item) => item.id === member.id) ? current.map((item) => (item.id === member.id ? member : item)) : [member, ...current]));
         setIsAuthed(true);
@@ -1195,8 +1206,8 @@ export default function Page() {
     if (supabase && isSupabaseConfigured) {
       const { data, error } = await supabase
         .from("profiles")
-        .insert({ id: nextMember.id, full_name: member.name, role: member.role, is_active: true })
-        .select("id, full_name, role")
+        .insert({ id: nextMember.id, full_name: member.name, role: member.role, avatar_url: member.avatarUrl ?? null, is_active: true })
+        .select("id, full_name, role, avatar_url")
         .single();
       if (error) {
         setDataError(error.message);
@@ -1225,10 +1236,30 @@ export default function Page() {
         return;
       }
     }
-    const updatedMember = { ...existingMember, ...updates };
+    const updatedMember = { ...existingMember, ...updates, avatar: existingMember.avatarUrl ? existingMember.avatar : initialsFromName(updates.name) };
     setTeamMembers((current) => current.map((member) => (member.id === memberId ? updatedMember : member)));
     if (currentUser.id === memberId) setCurrentUser(updatedMember);
     void appendAudit("updated team member", updates.name, "profiles", memberId);
+  }
+
+  async function updateTeamMemberAvatar(memberId: string, avatarUrl: string) {
+    if (!can("manage_users")) {
+      setDataError("บทบาทนี้ยังไม่มีสิทธิ์จัดการผู้ใช้");
+      return;
+    }
+    const existingMember = teamMembers.find((member) => member.id === memberId);
+    if (!existingMember) return;
+    if (supabase && uuidPattern.test(memberId)) {
+      const { error } = await supabase.from("profiles").update({ avatar_url: avatarUrl || null }).eq("id", memberId);
+      if (error) {
+        setDataError(error.message);
+        return;
+      }
+    }
+    const updatedMember = { ...existingMember, avatarUrl: avatarUrl || undefined };
+    setTeamMembers((current) => current.map((member) => (member.id === memberId ? updatedMember : member)));
+    if (currentUser.id === memberId) setCurrentUser(updatedMember);
+    void appendAudit(avatarUrl ? "updated profile image" : "removed profile image", existingMember.name, "profiles", memberId);
   }
 
   async function removeTeamMember(memberId: string) {
@@ -1523,9 +1554,7 @@ export default function Page() {
                   }`}
                 >
                   <span className="flex items-center gap-3">
-                    <span className="grid h-11 w-11 place-items-center rounded-2xl bg-white/85 text-sm font-semibold text-sky-600 shadow-sm">
-                      {member.avatar}
-                    </span>
+                    <MemberAvatar member={member} className="h-11 w-11 rounded-2xl text-sm" />
                     <span>
                       <span className="block font-semibold">{member.name}</span>
                       <span className="text-sm text-k2-muted">{roleLabel[member.role]}</span>
@@ -1708,6 +1737,7 @@ export default function Page() {
                   onUpdateCompany={saveCompanyProfile}
                   onAddMember={addTeamMember}
                   onUpdateMember={updateTeamMember}
+                  onUpdateMemberAvatar={updateTeamMemberAvatar}
                   onRemoveMember={removeTeamMember}
                   permissionMatrix={permissionMatrix}
                   onUpdateRolePermission={updateRolePermission}
@@ -1746,7 +1776,7 @@ function BrandBlock({ currentUser }: { currentUser: TeamMember }) {
       </div>
       <div className="rounded-3xl bg-white/60 p-4">
         <div className="flex items-center gap-3">
-          <div className="grid h-10 w-10 place-items-center rounded-2xl bg-k2-lilac text-sm font-bold text-violet-800">{currentUser.avatar}</div>
+          <MemberAvatar member={currentUser} className="h-10 w-10 rounded-2xl text-sm" />
           <div>
             <p className="font-semibold">{currentUser.name}</p>
             <p className="text-sm text-k2-muted">{roleLabel[currentUser.role]}</p>
@@ -1754,6 +1784,27 @@ function BrandBlock({ currentUser }: { currentUser: TeamMember }) {
         </div>
       </div>
     </div>
+  );
+}
+
+function MemberAvatar({ member, className = "h-12 w-12 rounded-2xl text-sm" }: { member: TeamMember; className?: string }) {
+  if (member.avatarUrl) {
+    return (
+      <Image
+        src={member.avatarUrl}
+        alt={member.name}
+        width={96}
+        height={96}
+        unoptimized
+        className={`${className} object-cover shadow-sm ring-2 ring-white/75`}
+      />
+    );
+  }
+
+  return (
+    <span className={`grid place-items-center bg-k2-lilac font-extrabold text-violet-800 shadow-sm ring-2 ring-white/70 ${className}`}>
+      {member.avatar}
+    </span>
   );
 }
 
@@ -2749,6 +2800,7 @@ function SettingsView({
   onUpdateCompany,
   onAddMember,
   onUpdateMember,
+  onUpdateMemberAvatar,
   onRemoveMember,
   permissionMatrix,
   onUpdateRolePermission,
@@ -2760,6 +2812,7 @@ function SettingsView({
   onUpdateCompany: (profile: CompanyProfile) => void;
   onAddMember: (member: Omit<TeamMember, "id" | "avatar">) => void;
   onUpdateMember: (memberId: string, updates: Pick<TeamMember, "name" | "role">) => void;
+  onUpdateMemberAvatar: (memberId: string, avatarUrl: string) => void;
   onRemoveMember: (memberId: string) => void;
   permissionMatrix: Record<Role, PermissionKey[]>;
   onUpdateRolePermission: (role: Role, permission: PermissionKey, enabled: boolean) => void;
@@ -2773,6 +2826,7 @@ function SettingsView({
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingMember, setEditingMember] = useState({ name: "", role: "Designer" as Role });
   const [companyDraft, setCompanyDraft] = useState(companyProfile);
+  const [avatarError, setAvatarError] = useState("");
 
   useEffect(() => {
     setCompanyDraft(companyProfile);
@@ -2793,6 +2847,21 @@ function SettingsView({
     if (!editingMember.name.trim() || !canManageTeam) return;
     onUpdateMember(memberId, { name: editingMember.name.trim(), role: editingMember.role });
     setEditingId(null);
+  }
+
+  async function handleAvatarUpload(member: TeamMember, file: File | null) {
+    if (!file || !canManageTeam) return;
+    setAvatarError("");
+    if (!file.type.startsWith("image/")) {
+      setAvatarError("กรุณาเลือกไฟล์รูปภาพเท่านั้น");
+      return;
+    }
+    if (file.size > 1_200_000) {
+      setAvatarError("รูปโปรไฟล์ต้องมีขนาดไม่เกิน 1.2 MB");
+      return;
+    }
+    const avatarUrl = await readImageAsDataUrl(file);
+    onUpdateMemberAvatar(member.id, avatarUrl);
   }
 
   return (
@@ -2868,6 +2937,7 @@ function SettingsView({
             เพิ่ม
           </button>
         </div>
+        {avatarError ? <p className="mt-3 rounded-2xl bg-amber-50 px-4 py-3 text-sm font-bold text-amber-700">{avatarError}</p> : null}
 
         <div className="mt-4 space-y-3">
           {teamMembers.map((member) => {
@@ -2875,9 +2945,34 @@ function SettingsView({
             return (
               <div key={member.id} className="rounded-[1.35rem] border border-white/70 bg-white/60 p-3 shadow-sm">
                 <div className="grid gap-3 md:grid-cols-[auto_1fr_auto] md:items-center">
-                  <span className="grid h-12 w-12 place-items-center rounded-2xl bg-k2-lilac text-sm font-extrabold text-violet-800">
-                    {member.avatar}
-                  </span>
+                  <div className="flex items-center gap-3">
+                    <MemberAvatar member={member} />
+                    <div className="flex flex-col gap-1.5">
+                      <label className={`inline-flex cursor-pointer items-center justify-center rounded-full bg-white/80 px-3 py-1.5 text-xs font-extrabold text-k2-muted shadow-sm ${!canManageTeam ? "pointer-events-none opacity-45" : ""}`}>
+                        เปลี่ยนรูป
+                        <input
+                          type="file"
+                          accept="image/*"
+                          disabled={!canManageTeam}
+                          onChange={(event) => {
+                            void handleAvatarUpload(member, event.target.files?.[0] ?? null);
+                            event.target.value = "";
+                          }}
+                          className="sr-only"
+                        />
+                      </label>
+                      {member.avatarUrl ? (
+                        <button
+                          type="button"
+                          onClick={() => onUpdateMemberAvatar(member.id, "")}
+                          disabled={!canManageTeam}
+                          className="rounded-full bg-rose-50 px-3 py-1.5 text-xs font-extrabold text-rose-600 disabled:opacity-45"
+                        >
+                          ลบรูป
+                        </button>
+                      ) : null}
+                    </div>
+                  </div>
                   {isEditing ? (
                     <div className="grid gap-2 md:grid-cols-[1fr_210px]">
                       <input
