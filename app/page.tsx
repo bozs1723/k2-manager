@@ -660,7 +660,7 @@ export default function Page() {
         { label: "Customers", icon: UsersRound, visible: currentRolePermissions.includes("create_customer") || currentRolePermissions.includes("edit_customer") || currentRolePermissions.includes("delete_customer") },
         { label: "Payments", icon: WalletCards, visible: currentRolePermissions.includes("view_finance") || currentRolePermissions.includes("edit_payment") },
         { label: "Reports", icon: BarChart3, visible: currentRolePermissions.includes("view_dashboard") },
-        { label: "Settings", icon: Settings, visible: currentRolePermissions.includes("manage_users") || currentRolePermissions.includes("manage_permissions") || currentRolePermissions.includes("manage_company_settings") },
+        { label: "Settings", icon: Settings, visible: true },
         { label: "Detail", icon: FileImage, visible: currentRolePermissions.includes("view_dashboard") },
         { label: "Audit", icon: ShieldCheck, visible: currentRolePermissions.includes("view_audit_log") }
       ].filter((item) => item.visible),
@@ -1223,27 +1223,33 @@ export default function Page() {
   }
 
   async function updateTeamMember(memberId: string, updates: Pick<TeamMember, "name" | "role">) {
-    if (!can("manage_users")) {
+    const isOwnProfile = currentUser.id === memberId;
+    if (!can("manage_users") && !isOwnProfile) {
       setDataError("บทบาทนี้ยังไม่มีสิทธิ์จัดการผู้ใช้");
       return;
     }
     const existingMember = teamMembers.find((member) => member.id === memberId);
     if (!existingMember) return;
+    const safeUpdates = {
+      name: updates.name,
+      role: can("manage_users") ? updates.role : existingMember.role
+    };
     if (supabase && uuidPattern.test(memberId)) {
-      const { error } = await supabase.from("profiles").update({ full_name: updates.name, role: updates.role }).eq("id", memberId);
+      const { error } = await supabase.from("profiles").update({ full_name: safeUpdates.name, role: safeUpdates.role }).eq("id", memberId);
       if (error) {
         setDataError(error.message);
         return;
       }
     }
-    const updatedMember = { ...existingMember, ...updates, avatar: existingMember.avatarUrl ? existingMember.avatar : initialsFromName(updates.name) };
+    const updatedMember = { ...existingMember, ...safeUpdates, avatar: existingMember.avatarUrl ? existingMember.avatar : initialsFromName(safeUpdates.name) };
     setTeamMembers((current) => current.map((member) => (member.id === memberId ? updatedMember : member)));
     if (currentUser.id === memberId) setCurrentUser(updatedMember);
-    void appendAudit("updated team member", updates.name, "profiles", memberId);
+    void appendAudit(isOwnProfile && !can("manage_users") ? "updated own profile" : "updated team member", safeUpdates.name, "profiles", memberId);
   }
 
   async function updateTeamMemberAvatar(memberId: string, avatarUrl: string) {
-    if (!can("manage_users")) {
+    const isOwnProfile = currentUser.id === memberId;
+    if (!can("manage_users") && !isOwnProfile) {
       setDataError("บทบาทนี้ยังไม่มีสิทธิ์จัดการผู้ใช้");
       return;
     }
@@ -1731,6 +1737,7 @@ export default function Page() {
             {activeView === "Settings" && (
               <motion.div key="settings" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}>
                 <SettingsView
+                  currentUserId={currentUser.id}
                   currentRole={currentUser.role}
                   teamMembers={teamMembers}
                   companyProfile={companyProfile}
@@ -2794,6 +2801,7 @@ function ReportsView({ jobs, canSeeMoney }: { jobs: Job[]; canSeeMoney: boolean 
 }
 
 function SettingsView({
+  currentUserId,
   currentRole,
   teamMembers,
   companyProfile,
@@ -2806,6 +2814,7 @@ function SettingsView({
   onUpdateRolePermission,
   onResetRolePermissions
 }: {
+  currentUserId: string;
   currentRole: Role;
   teamMembers: TeamMember[];
   companyProfile: CompanyProfile;
@@ -2844,13 +2853,13 @@ function SettingsView({
   }
 
   function submitEdit(memberId: string) {
-    if (!editingMember.name.trim() || !canManageTeam) return;
+    if (!editingMember.name.trim() || (!canManageTeam && memberId !== currentUserId)) return;
     onUpdateMember(memberId, { name: editingMember.name.trim(), role: editingMember.role });
     setEditingId(null);
   }
 
   async function handleAvatarUpload(member: TeamMember, file: File | null) {
-    if (!file || !canManageTeam) return;
+    if (!file || (!canManageTeam && member.id !== currentUserId)) return;
     setAvatarError("");
     if (!file.type.startsWith("image/")) {
       setAvatarError("กรุณาเลือกไฟล์รูปภาพเท่านั้น");
@@ -2904,8 +2913,8 @@ function SettingsView({
             <h3 className="text-2xl font-semibold">ทีมงานและบทบาท</h3>
             <p className="mt-2 text-sm font-semibold text-k2-muted">เพิ่มสมาชิก แก้บทบาท และจัดสิทธิ์สำหรับแต่ละแผนก</p>
           </div>
-          <span className={`w-fit rounded-full px-3 py-1 text-xs font-extrabold ${canManageTeam ? "bg-emerald-100 text-emerald-700" : "bg-amber-100 text-amber-700"}`}>
-            {canManageTeam ? "แก้ไขได้" : "อ่านอย่างเดียว"}
+          <span className={`w-fit rounded-full px-3 py-1 text-xs font-extrabold ${canManageTeam ? "bg-emerald-100 text-emerald-700" : "bg-sky-100 text-sky-700"}`}>
+            {canManageTeam ? "แก้ไขทีมได้" : "แก้โปรไฟล์ตัวเองได้"}
           </span>
         </div>
 
@@ -2942,18 +2951,20 @@ function SettingsView({
         <div className="mt-4 space-y-3">
           {teamMembers.map((member) => {
             const isEditing = editingId === member.id;
+            const canEditThisMember = canManageTeam || member.id === currentUserId;
+            const canEditThisRole = canManageTeam;
             return (
               <div key={member.id} className="rounded-[1.35rem] border border-white/70 bg-white/60 p-3 shadow-sm">
                 <div className="grid gap-3 md:grid-cols-[auto_1fr_auto] md:items-center">
                   <div className="flex items-center gap-3">
                     <MemberAvatar member={member} />
                     <div className="flex flex-col gap-1.5">
-                      <label className={`inline-flex cursor-pointer items-center justify-center rounded-full bg-white/80 px-3 py-1.5 text-xs font-extrabold text-k2-muted shadow-sm ${!canManageTeam ? "pointer-events-none opacity-45" : ""}`}>
+                      <label className={`inline-flex cursor-pointer items-center justify-center rounded-full bg-white/80 px-3 py-1.5 text-xs font-extrabold text-k2-muted shadow-sm ${!canEditThisMember ? "pointer-events-none opacity-45" : ""}`}>
                         เปลี่ยนรูป
                         <input
                           type="file"
                           accept="image/*"
-                          disabled={!canManageTeam}
+                          disabled={!canEditThisMember}
                           onChange={(event) => {
                             void handleAvatarUpload(member, event.target.files?.[0] ?? null);
                             event.target.value = "";
@@ -2965,7 +2976,7 @@ function SettingsView({
                         <button
                           type="button"
                           onClick={() => onUpdateMemberAvatar(member.id, "")}
-                          disabled={!canManageTeam}
+                          disabled={!canEditThisMember}
                           className="rounded-full bg-rose-50 px-3 py-1.5 text-xs font-extrabold text-rose-600 disabled:opacity-45"
                         >
                           ลบรูป
@@ -2983,7 +2994,8 @@ function SettingsView({
                       <select
                         value={editingMember.role}
                         onChange={(event) => setEditingMember((current) => ({ ...current, role: event.target.value as Role }))}
-                        className="rounded-2xl border border-white/80 bg-white/85 px-4 py-3 text-sm font-semibold outline-none"
+                        disabled={!canEditThisRole}
+                        className="rounded-2xl border border-white/80 bg-white/85 px-4 py-3 text-sm font-semibold outline-none disabled:opacity-60"
                       >
                         {roles.map((role) => (
                           <option key={role} value={role}>{roleLabel[role]}</option>
@@ -3010,7 +3022,7 @@ function SettingsView({
                       <button
                         type="button"
                         onClick={() => startEditing(member)}
-                        disabled={!canManageTeam}
+                        disabled={!canEditThisMember}
                         className="grid h-10 w-10 place-items-center rounded-2xl bg-white text-k2-muted disabled:opacity-45"
                         title="แก้ไข"
                       >
