@@ -1877,43 +1877,14 @@ function MemberAvatar({ member, className = "h-12 w-12 rounded-2xl text-sm" }: {
 
 function KLogoMark({ className = "" }: { className?: string }) {
   return (
-    <svg className={`k2-logo-mark ${className}`} viewBox="0 0 160 160" role="img" aria-label="K2Smart app logo">
-      <defs>
-        <linearGradient id="k2MainGradient" x1="18" y1="25" x2="142" y2="140" gradientUnits="userSpaceOnUse">
-          <stop offset="0" stopColor="#B3DFDE" />
-          <stop offset="0.28" stopColor="#4FC2C9" />
-          <stop offset="0.55" stopColor="#28AEB7" />
-          <stop offset="0.78" stopColor="#F6A7CF" />
-          <stop offset="1" stopColor="#F59E3D" />
-        </linearGradient>
-        <linearGradient id="k2LightSweep" x1="30" y1="35" x2="132" y2="126" gradientUnits="userSpaceOnUse">
-          <stop offset="0" stopColor="#ffffff" stopOpacity="0.28" />
-          <stop offset="0.48" stopColor="#ffffff" stopOpacity="0.72" />
-          <stop offset="1" stopColor="#ffffff" stopOpacity="0" />
-        </linearGradient>
-        <radialGradient id="k2Depth" cx="0" cy="0" r="1" gradientTransform="matrix(78 60 -53 69 78 82)" gradientUnits="userSpaceOnUse">
-          <stop offset="0.18" stopColor="#ffffff" stopOpacity="0.5" />
-          <stop offset="0.74" stopColor="#075f67" stopOpacity="0.2" />
-          <stop offset="1" stopColor="#075f67" stopOpacity="0" />
-        </radialGradient>
-      </defs>
-      <path
-        className="k2-logo-shadow"
-        d="M33 32c0-15 12-27 27-27s27 12 27 27v22l25-32c9-12 26-14 38-5s14 26 5 38l-31 39 31 39c9 12 7 29-5 38s-29 7-38-5l-25-32v2c0 15-12 27-27 27s-27-12-27-27V32Z"
-      />
-      <path
-        d="M33 32c0-15 12-27 27-27s27 12 27 27v22l25-32c9-12 26-14 38-5s14 26 5 38l-31 39 31 39c9 12 7 29-5 38s-29 7-38-5l-25-32v2c0 15-12 27-27 27s-27-12-27-27V32Z"
-        fill="url(#k2MainGradient)"
-      />
-      <path d="M42 31c7 9 18 16 31 15 12-1 22-8 30-17l7-8c5-6 13-8 20-5-27 26-55 53-86 78-2-22-2-43-2-63Z" fill="url(#k2LightSweep)" opacity="0.76" />
-      <path
-        d="M38 96c17-7 32-7 47 0 18 8 35 8 54-2l15 19c8 10 7 25-4 33-11 8-26 6-34-5L87 105v28c0 14-11 25-25 25s-25-11-25-25V96Z"
-        fill="url(#k2Depth)"
-        opacity="0.7"
-      />
-      <path d="M49 104c8-11 24-14 36-8 9 4 15 13 16 23l-14-18v34c0 15-12 27-27 27s-27-12-27-27v-20c4-2 10-5 16-11Z" fill="#B3DFDE" opacity="0.42" />
-      <path d="M99 116c14 1 26-6 35-17l14 18c9 12 7 29-5 38-11 9-28 7-37-5l-24-31c5-3 11-4 17-3Z" fill="#0F8E98" opacity="0.32" />
-    </svg>
+    <Image
+      src="/assets/k2smart-logo.png"
+      alt="K2Smart app logo"
+      width={320}
+      height={320}
+      className={`k2-logo-mark object-contain ${className}`}
+      priority
+    />
   );
 }
 
