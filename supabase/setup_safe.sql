@@ -76,6 +76,21 @@ create table if not exists public.company_settings (
   created_at timestamptz not null default now()
 );
 
+alter table public.company_settings add column if not exists name text;
+alter table public.company_settings add column if not exists legal_name text;
+alter table public.company_settings add column if not exists tax_id text;
+alter table public.company_settings add column if not exists branch text;
+alter table public.company_settings add column if not exists address text;
+alter table public.company_settings add column if not exists phone text;
+alter table public.company_settings add column if not exists email text;
+alter table public.company_settings add column if not exists bank_name text;
+alter table public.company_settings add column if not exists bank_account text;
+alter table public.company_settings add column if not exists bank_account_name text;
+alter table public.company_settings add column if not exists quote_prefix text default 'QT';
+alter table public.company_settings add column if not exists quote_terms text;
+alter table public.company_settings add column if not exists updated_at timestamptz not null default now();
+alter table public.company_settings add column if not exists created_at timestamptz not null default now();
+
 create table if not exists public.profiles (
   id uuid primary key references auth.users(id) on delete cascade,
   email text unique,
@@ -86,6 +101,14 @@ create table if not exists public.profiles (
   updated_at timestamptz not null default now(),
   created_at timestamptz not null default now()
 );
+
+alter table public.profiles add column if not exists email text;
+alter table public.profiles add column if not exists full_name text;
+alter table public.profiles add column if not exists role public.app_role not null default 'Sales Staff';
+alter table public.profiles add column if not exists avatar_url text;
+alter table public.profiles add column if not exists is_active boolean not null default true;
+alter table public.profiles add column if not exists updated_at timestamptz not null default now();
+alter table public.profiles add column if not exists created_at timestamptz not null default now();
 
 create table if not exists public.customers (
   id uuid primary key default gen_random_uuid(),
@@ -103,6 +126,19 @@ create table if not exists public.customers (
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
+
+alter table public.customers add column if not exists phone text;
+alter table public.customers add column if not exists line_id text;
+alter table public.customers add column if not exists email text;
+alter table public.customers add column if not exists notes text;
+alter table public.customers add column if not exists company_name text;
+alter table public.customers add column if not exists tax_id text;
+alter table public.customers add column if not exists branch text;
+alter table public.customers add column if not exists billing_address text;
+alter table public.customers add column if not exists accounting_email text;
+alter table public.customers add column if not exists requires_invoice boolean not null default false;
+alter table public.customers add column if not exists created_at timestamptz not null default now();
+alter table public.customers add column if not exists updated_at timestamptz not null default now();
 
 create table if not exists public.jobs (
   id uuid primary key default gen_random_uuid(),
@@ -144,6 +180,22 @@ create table if not exists public.jobs (
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
+
+alter table public.jobs add column if not exists quote_number text;
+alter table public.jobs add column if not exists quote_status public.quote_status not null default 'draft';
+alter table public.jobs add column if not exists customer_name text;
+alter table public.jobs add column if not exists customer_phone text;
+alter table public.jobs add column if not exists customer_line_id text;
+alter table public.jobs add column if not exists company_name text;
+alter table public.jobs add column if not exists tax_id text;
+alter table public.jobs add column if not exists branch text;
+alter table public.jobs add column if not exists billing_address text;
+alter table public.jobs add column if not exists accounting_email text;
+alter table public.jobs add column if not exists requires_invoice boolean not null default false;
+alter table public.jobs add column if not exists internal_notes text;
+alter table public.jobs add column if not exists created_by uuid references public.profiles(id);
+alter table public.jobs add column if not exists updated_at timestamptz not null default now();
+alter table public.jobs add column if not exists created_at timestamptz not null default now();
 
 create table if not exists public.job_files (
   id uuid primary key default gen_random_uuid(),
