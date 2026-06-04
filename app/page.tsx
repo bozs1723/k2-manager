@@ -2432,6 +2432,10 @@ function CreateJobView({
     lifetimeValue: 0,
     lastOrderDate: "-"
   };
+  const designerOptions = useMemo(() => teamMembers.filter((member) => ["Designer", "Admin", "Owner"].includes(member.role)), [teamMembers]);
+  const productionOptions = useMemo(() => teamMembers.filter((member) => ["Production Staff", "Admin", "Owner"].includes(member.role)), [teamMembers]);
+  const defaultDesigner = designerOptions[0]?.name ?? "Unassigned";
+  const defaultProduction = productionOptions[0]?.name ?? "Unassigned";
   const [form, setForm] = useState({
     customerId: defaultCustomer.id === "new" ? "new" : defaultCustomer.id,
     customerName: defaultCustomer.name,
@@ -2450,8 +2454,8 @@ function CreateJobView({
     orderDate: todayISO(),
     dueDate: todayISO(),
     priority: "Normal" as Priority,
-    assignedDesigner: "Beam S.",
-    assignedProduction: "Art T.",
+    assignedDesigner: defaultDesigner,
+    assignedProduction: defaultProduction,
     price: 12000,
     deposit: 3000,
     internalNotes: "ยืนยันขนาดไฟล์อาร์ตก่อนเริ่มออกแบบ",
@@ -2462,12 +2466,27 @@ function CreateJobView({
     setForm((current) => ({ ...current, [key]: value }));
   }
 
+  useEffect(() => {
+    setForm((current) => ({
+      ...current,
+      assignedDesigner: designerOptions.some((member) => member.name === current.assignedDesigner) ? current.assignedDesigner : defaultDesigner,
+      assignedProduction: productionOptions.some((member) => member.name === current.assignedProduction) || current.assignedProduction === "Unassigned"
+        ? current.assignedProduction
+        : defaultProduction
+    }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [teamMembers]);
+
   return (
     <form
       onSubmit={(event) => {
         event.preventDefault();
         onCreate({
           ...form,
+          assignedDesigner: designerOptions.some((member) => member.name === form.assignedDesigner) ? form.assignedDesigner : defaultDesigner,
+          assignedProduction: productionOptions.some((member) => member.name === form.assignedProduction) || form.assignedProduction === "Unassigned"
+            ? form.assignedProduction
+            : defaultProduction,
           files: form.fileName
             ? [{ id: crypto.randomUUID(), name: form.fileName, type: "pdf", size: "ไฟล์ตัวอย่าง" }]
             : []
@@ -2573,7 +2592,7 @@ function CreateJobView({
               onChange={(event) => setField("assignedDesigner", event.target.value)}
               className="w-full rounded-2xl border border-white/80 bg-white/80 px-4 py-3 outline-none"
             >
-              {teamMembers.filter((member) => ["Designer", "Admin", "Owner"].includes(member.role)).map((member) => (
+              {designerOptions.map((member) => (
                 <option key={member.id}>{member.name}</option>
               ))}
             </select>
@@ -2585,7 +2604,7 @@ function CreateJobView({
               onChange={(event) => setField("assignedProduction", event.target.value)}
               className="w-full rounded-2xl border border-white/80 bg-white/80 px-4 py-3 outline-none"
             >
-              {teamMembers.filter((member) => ["Production Staff", "Admin", "Owner"].includes(member.role)).map((member) => (
+              {productionOptions.map((member) => (
                 <option key={member.id}>{member.name}</option>
               ))}
               <option value="Unassigned">ยังไม่มอบหมาย</option>
