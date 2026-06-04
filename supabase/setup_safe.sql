@@ -5,6 +5,7 @@ begin
   if not exists (select 1 from pg_type where typname = 'app_role') then
     create type public.app_role as enum (
       'Owner',
+      'Manager',
       'Admin',
       'Designer',
       'Production Staff',
@@ -58,6 +59,8 @@ begin
   end if;
 end $$;
 
+alter type public.app_role add value if not exists 'Manager';
+
 create table if not exists public.company_settings (
   id uuid primary key default gen_random_uuid(),
   name text not null,
@@ -92,7 +95,7 @@ alter table public.company_settings add column if not exists updated_at timestam
 alter table public.company_settings add column if not exists created_at timestamptz not null default now();
 
 create table if not exists public.profiles (
-  id uuid primary key references auth.users(id) on delete cascade,
+  id uuid primary key default gen_random_uuid(),
   email text unique,
   full_name text not null,
   role public.app_role not null default 'Sales Staff',
@@ -102,6 +105,8 @@ create table if not exists public.profiles (
   created_at timestamptz not null default now()
 );
 
+alter table public.profiles drop constraint if exists profiles_id_fkey;
+alter table public.profiles alter column id set default gen_random_uuid();
 alter table public.profiles add column if not exists email text;
 alter table public.profiles add column if not exists full_name text;
 alter table public.profiles add column if not exists role public.app_role not null default 'Sales Staff';
@@ -109,6 +114,17 @@ alter table public.profiles add column if not exists avatar_url text;
 alter table public.profiles add column if not exists is_active boolean not null default true;
 alter table public.profiles add column if not exists updated_at timestamptz not null default now();
 alter table public.profiles add column if not exists created_at timestamptz not null default now();
+
+create table if not exists public.role_permissions (
+  role public.app_role primary key,
+  permissions text[] not null default '{}',
+  updated_at timestamptz not null default now(),
+  created_at timestamptz not null default now()
+);
+
+alter table public.role_permissions add column if not exists permissions text[] not null default '{}';
+alter table public.role_permissions add column if not exists updated_at timestamptz not null default now();
+alter table public.role_permissions add column if not exists created_at timestamptz not null default now();
 
 create table if not exists public.customers (
   id uuid primary key default gen_random_uuid(),
@@ -250,6 +266,11 @@ create trigger profiles_set_updated_at
 before update on public.profiles
 for each row execute function public.set_updated_at();
 
+drop trigger if exists role_permissions_set_updated_at on public.role_permissions;
+create trigger role_permissions_set_updated_at
+before update on public.role_permissions
+for each row execute function public.set_updated_at();
+
 drop trigger if exists company_settings_set_updated_at on public.company_settings;
 create trigger company_settings_set_updated_at
 before update on public.company_settings
@@ -295,6 +316,7 @@ after insert on auth.users
 for each row execute function public.handle_new_user();
 
 alter table public.profiles enable row level security;
+alter table public.role_permissions enable row level security;
 alter table public.company_settings enable row level security;
 alter table public.customers enable row level security;
 alter table public.jobs enable row level security;
@@ -319,6 +341,19 @@ on public.profiles for select
 to authenticated
 using (true);
 
+drop policy if exists "authenticated users read role permissions" on public.role_permissions;
+create policy "authenticated users read role permissions"
+on public.role_permissions for select
+to authenticated
+using (true);
+
+drop policy if exists "owners and admins manage role permissions" on public.role_permissions;
+create policy "owners and admins manage role permissions"
+on public.role_permissions for all
+to authenticated
+using (public.current_role()::text in ('Owner', 'Admin'))
+with check (public.current_role()::text in ('Owner', 'Admin'));
+
 drop policy if exists "authenticated users read company settings" on public.company_settings;
 create policy "authenticated users read company settings"
 on public.company_settings for select
@@ -329,15 +364,15 @@ drop policy if exists "owners and admins manage company settings" on public.comp
 create policy "owners and admins manage company settings"
 on public.company_settings for all
 to authenticated
-using (public.current_role() in ('Owner', 'Admin'))
-with check (public.current_role() in ('Owner', 'Admin'));
+using (public.current_role()::text in ('Owner', 'Admin'))
+with check (public.current_role()::text in ('Owner', 'Admin'));
 
 drop policy if exists "owners and admins manage profiles" on public.profiles;
 create policy "owners and admins manage profiles"
 on public.profiles for all
 to authenticated
-using (public.current_role() in ('Owner', 'Admin'))
-with check (public.current_role() in ('Owner', 'Admin'));
+using (public.current_role()::text in ('Owner', 'Admin'))
+with check (public.current_role()::text in ('Owner', 'Admin'));
 
 drop policy if exists "users can update their own profile" on public.profiles;
 create policy "users can update their own profile"
@@ -356,8 +391,8 @@ drop policy if exists "sales admins owners manage customers" on public.customers
 create policy "sales admins owners manage customers"
 on public.customers for all
 to authenticated
-using (public.current_role() in ('Owner', 'Admin', 'Sales Staff'))
-with check (public.current_role() in ('Owner', 'Admin', 'Sales Staff'));
+using (public.current_role()::text in ('Owner', 'Manager', 'Admin', 'Sales Staff'))
+with check (public.current_role()::text in ('Owner', 'Manager', 'Admin', 'Sales Staff'));
 
 drop policy if exists "authenticated users read jobs" on public.jobs;
 create policy "authenticated users read jobs"
@@ -369,8 +404,8 @@ drop policy if exists "staff can create and update jobs" on public.jobs;
 create policy "staff can create and update jobs"
 on public.jobs for all
 to authenticated
-using (public.current_role() in ('Owner', 'Admin', 'Designer', 'Production Staff', 'Packing Staff', 'Sales Staff'))
-with check (public.current_role() in ('Owner', 'Admin', 'Designer', 'Production Staff', 'Packing Staff', 'Sales Staff'));
+using (public.current_role()::text in ('Owner', 'Manager', 'Admin', 'Designer', 'Production Staff', 'Packing Staff', 'Sales Staff'))
+with check (public.current_role()::text in ('Owner', 'Manager', 'Admin', 'Designer', 'Production Staff', 'Packing Staff', 'Sales Staff'));
 
 drop policy if exists "authenticated users read job children" on public.job_files;
 create policy "authenticated users read job children"
@@ -413,7 +448,7 @@ drop policy if exists "owners admins read audit log" on public.audit_log;
 create policy "owners admins read audit log"
 on public.audit_log for select
 to authenticated
-using (public.current_role() in ('Owner', 'Admin'));
+using (public.current_role()::text in ('Owner', 'Manager', 'Admin'));
 
 drop policy if exists "authenticated users write audit log" on public.audit_log;
 create policy "authenticated users write audit log"

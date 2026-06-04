@@ -16,6 +16,7 @@ export const statuses: JobStatus[] = [
 
 export const team: TeamMember[] = [
   { id: "u1", name: "Kanda R.", role: "Owner", avatar: "KR" },
+  { id: "u7", name: "Nop Manager", role: "Manager", avatar: "NM" },
   { id: "u2", name: "Mina P.", role: "Admin", avatar: "MP" },
   { id: "u3", name: "Beam S.", role: "Designer", avatar: "BS" },
   { id: "u4", name: "Art T.", role: "Production Staff", avatar: "AT" },

@@ -66,6 +66,24 @@ type CompanyProfile = {
   quoteTerms: string;
 };
 
+type PermissionKey =
+  | "view_dashboard"
+  | "create_job"
+  | "edit_job"
+  | "delete_job"
+  | "move_status"
+  | "assign_staff"
+  | "view_finance"
+  | "edit_payment"
+  | "create_customer"
+  | "edit_customer"
+  | "delete_customer"
+  | "export_quote"
+  | "manage_users"
+  | "manage_permissions"
+  | "manage_company_settings"
+  | "view_audit_log";
+
 type SupabaseProfileRow = {
   id: string;
   full_name: string | null;
@@ -138,6 +156,11 @@ type SupabaseCompanyRow = {
   quote_terms: string | null;
 };
 
+type SupabaseRolePermissionRow = {
+  role: Role;
+  permissions: PermissionKey[] | null;
+};
+
 const money = new Intl.NumberFormat("th-TH", {
   style: "currency",
   currency: "THB",
@@ -184,8 +207,27 @@ const statusDot: Record<JobStatus, string> = {
   Cancelled: "bg-red-400"
 };
 
-const rolePermissions: Record<Role, string[]> = {
+const permissionGroups: Array<{ title: string; permissions: PermissionKey[] }> = [
+  { title: "งานและคิวผลิต", permissions: ["view_dashboard", "create_job", "edit_job", "delete_job", "move_status", "assign_staff"] },
+  { title: "ลูกค้าและบัญชี", permissions: ["create_customer", "edit_customer", "delete_customer", "view_finance", "edit_payment", "export_quote"] },
+  { title: "ผู้ใช้และระบบ", permissions: ["manage_users", "manage_permissions", "manage_company_settings", "view_audit_log"] }
+];
+
+const allPermissionKeys = permissionGroups.flatMap((group) => group.permissions);
+
+const defaultRolePermissions: Record<Role, PermissionKey[]> = {
+  Owner: ["view_dashboard", "create_job", "edit_job", "delete_job", "move_status", "assign_staff", "view_finance", "edit_payment", "create_customer", "edit_customer", "delete_customer", "export_quote", "manage_users", "manage_permissions", "manage_company_settings", "view_audit_log"],
+  Manager: ["view_dashboard", "create_job", "edit_job", "move_status", "assign_staff", "view_finance", "edit_payment", "create_customer", "edit_customer", "export_quote", "view_audit_log"],
+  Admin: ["view_dashboard", "create_job", "edit_job", "move_status", "assign_staff", "view_finance", "edit_payment", "create_customer", "edit_customer", "export_quote", "manage_users", "view_audit_log"],
+  Designer: ["view_dashboard", "edit_job", "move_status"],
+  "Production Staff": ["view_dashboard", "edit_job", "move_status"],
+  "Packing Staff": ["view_dashboard", "edit_job", "move_status"],
+  "Sales Staff": ["view_dashboard", "create_job", "edit_job", "create_customer", "edit_customer", "view_finance", "edit_payment", "export_quote"]
+};
+
+const roleSummaryPermissions: Record<Role, string[]> = {
   Owner: ["Full access", "Financials", "Audit log", "Team assignments"],
+  Manager: ["Jobs", "Financials", "Assignments", "Reports"],
   Admin: ["Jobs", "Payments", "Assignments", "Audit log"],
   Designer: ["Design queue", "Files", "Comments", "Approval status"],
   "Production Staff": ["Production queue", "QC", "Internal notes"],
@@ -193,8 +235,7 @@ const rolePermissions: Record<Role, string[]> = {
   "Sales Staff": ["Orders", "Customers", "Payment intake"]
 };
 
-const visibleMoneyRoles: Role[] = ["Owner", "Admin", "Sales Staff"];
-const roles: Role[] = ["Owner", "Admin", "Designer", "Production Staff", "Packing Staff", "Sales Staff"];
+const roles: Role[] = ["Owner", "Manager", "Admin", "Designer", "Production Staff", "Packing Staff", "Sales Staff"];
 const jobTypes: JobType[] = ["DTG Shirt", "UV Print", "Laser Cut", "Signage", "3D Print", "Other"];
 const priorities: Priority[] = ["Normal", "Urgent", "Very Urgent", "Today"];
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -250,6 +291,7 @@ const priorityLabel: Record<Priority, string> = {
 
 const roleLabel: Record<Role, string> = {
   Owner: "เจ้าของ",
+  Manager: "ผู้จัดการ",
   Admin: "แอดมิน",
   Designer: "ดีไซเนอร์",
   "Production Staff": "ฝ่ายผลิต",
@@ -280,6 +322,22 @@ const quoteLabel: Record<QuoteStatus, string> = {
 };
 
 const permissionLabel: Record<string, string> = {
+  view_dashboard: "ดูแดชบอร์ด",
+  create_job: "สร้างงาน",
+  edit_job: "แก้ไขงาน",
+  delete_job: "ลบงาน",
+  move_status: "ย้ายสถานะงาน",
+  assign_staff: "มอบหมายงาน",
+  view_finance: "ดูยอดเงิน",
+  edit_payment: "แก้ไขการชำระเงิน",
+  create_customer: "เพิ่มลูกค้า",
+  edit_customer: "แก้ไขลูกค้า",
+  delete_customer: "ลบลูกค้า",
+  export_quote: "ออกใบเสนอราคา",
+  manage_users: "จัดการผู้ใช้",
+  manage_permissions: "จัดการสิทธิ์",
+  manage_company_settings: "ตั้งค่าบริษัท",
+  view_audit_log: "ดูประวัติการแก้ไข",
   "Full access": "เข้าถึงทั้งหมด",
   Financials: "ดูการเงิน",
   "Audit log": "ดูประวัติการแก้ไข",
@@ -556,6 +614,7 @@ function errorMessage(error: unknown, fallback: string) {
 export default function Page() {
   const [teamMembers, setTeamMembers] = useState<TeamMember[]>(initialTeam);
   const [currentUser, setCurrentUser] = useState(initialTeam[0]);
+  const [permissionMatrix, setPermissionMatrix] = useState<Record<Role, PermissionKey[]>>(defaultRolePermissions);
   const [companyProfile, setCompanyProfile] = useState<CompanyProfile>(initialCompanyProfile);
   const [customerRecords, setCustomerRecords] = useState<Customer[]>(initialCustomers);
   const [isAuthed, setIsAuthed] = useState(false);
@@ -573,8 +632,29 @@ export default function Page() {
   const [draggedJobId, setDraggedJobId] = useState<string | null>(null);
 
   const selectedJob = jobs.find((job) => job.id === selectedJobId) ?? jobs[0] ?? null;
-  const canSeeMoney = visibleMoneyRoles.includes(currentUser.role);
+  const currentRolePermissions = useMemo(
+    () => permissionMatrix[currentUser.role] ?? [],
+    [permissionMatrix, currentUser.role]
+  );
+  const can = (permission: PermissionKey) => currentRolePermissions.includes(permission);
+  const canSeeMoney = can("view_finance");
   const activeJobs = jobs.filter((job) => !["Completed", "Cancelled"].includes(job.status));
+  const navigationItems = useMemo(
+    () =>
+      [
+        { label: "Dashboard", icon: LayoutDashboard, visible: currentRolePermissions.includes("view_dashboard") },
+        { label: "Board", icon: ClipboardList, visible: currentRolePermissions.includes("view_dashboard") },
+        { label: "Create Job", icon: ClipboardPlus, visible: currentRolePermissions.includes("create_job") },
+        { label: "Calendar", icon: CalendarDays, visible: currentRolePermissions.includes("view_dashboard") },
+        { label: "Customers", icon: UsersRound, visible: currentRolePermissions.includes("create_customer") || currentRolePermissions.includes("edit_customer") || currentRolePermissions.includes("delete_customer") },
+        { label: "Payments", icon: WalletCards, visible: currentRolePermissions.includes("view_finance") || currentRolePermissions.includes("edit_payment") },
+        { label: "Reports", icon: BarChart3, visible: currentRolePermissions.includes("view_dashboard") },
+        { label: "Settings", icon: Settings, visible: currentRolePermissions.includes("manage_users") || currentRolePermissions.includes("manage_permissions") || currentRolePermissions.includes("manage_company_settings") },
+        { label: "Detail", icon: FileImage, visible: currentRolePermissions.includes("view_dashboard") },
+        { label: "Audit", icon: ShieldCheck, visible: currentRolePermissions.includes("view_audit_log") }
+      ].filter((item) => item.visible),
+    [currentRolePermissions]
+  );
 
   useEffect(() => {
     if (!supabase) return;
@@ -612,10 +692,25 @@ export default function Page() {
   }, []);
 
   useEffect(() => {
+    const saved = window.localStorage.getItem("k2-permission-matrix");
+    if (!saved) return;
+    try {
+      setPermissionMatrix({ ...defaultRolePermissions, ...JSON.parse(saved) });
+    } catch {
+      window.localStorage.removeItem("k2-permission-matrix");
+    }
+  }, []);
+
+  useEffect(() => {
     if (!isAuthed || !supabase) return;
     void refreshWorkspaceData();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isAuthed]);
+
+  useEffect(() => {
+    if (!isAuthed || navigationItems.some((item) => item.label === activeView)) return;
+    setActiveView(navigationItems[0]?.label ?? "Dashboard");
+  }, [activeView, isAuthed, navigationItems]);
 
   async function refreshWorkspaceData() {
     if (!supabase) return;
@@ -630,7 +725,8 @@ export default function Page() {
         commentsResult,
         historyResult,
         filesResult,
-        auditResult
+        auditResult,
+        rolePermissionsResult
       ] = await Promise.all([
         supabase.from("profiles").select("id, full_name, role, is_active").eq("is_active", true).order("created_at", { ascending: true }),
         supabase.from("company_settings").select("*").order("created_at", { ascending: true }).limit(1),
@@ -639,7 +735,8 @@ export default function Page() {
         supabase.from("job_comments").select("id, job_id, comment, created_at, author_id").order("created_at", { ascending: false }),
         supabase.from("job_status_history").select("id, job_id, from_status, to_status, created_at, changed_by").order("created_at", { ascending: true }),
         supabase.from("job_files").select("id, job_id, file_name, file_type, file_size").order("created_at", { ascending: true }),
-        supabase.from("audit_log").select("id, action, target_table, target_id, metadata, created_at, actor_id").order("created_at", { ascending: false }).limit(80)
+        supabase.from("audit_log").select("id, action, target_table, target_id, metadata, created_at, actor_id").order("created_at", { ascending: false }).limit(80),
+        supabase.from("role_permissions").select("role, permissions")
       ]);
 
       const failures = [profilesResult, customersResult, jobsResult, commentsResult, historyResult, filesResult].filter((result) => result.error);
@@ -652,6 +749,14 @@ export default function Page() {
 
       const companyRows = companyResult.error ? [] : (companyResult.data ?? []) as SupabaseCompanyRow[];
       if (companyRows[0]) setCompanyProfile(companyFromRow(companyRows[0]));
+
+      if (!rolePermissionsResult.error) {
+        const savedPermissions = ((rolePermissionsResult.data ?? []) as SupabaseRolePermissionRow[]).reduce<Record<string, PermissionKey[]>>((acc, row) => {
+          acc[row.role] = (row.permissions ?? []).filter((permission): permission is PermissionKey => allPermissionKeys.includes(permission as PermissionKey));
+          return acc;
+        }, {});
+        setPermissionMatrix({ ...defaultRolePermissions, ...savedPermissions });
+      }
 
       const jobRows = (jobsResult.data ?? []) as SupabaseJobRow[];
       const customerRows = (customersResult.data ?? []) as SupabaseCustomerRow[];
@@ -781,6 +886,10 @@ export default function Page() {
   }
 
   async function moveJob(jobId: string, nextStatus: JobStatus) {
+    if (!can("move_status")) {
+      setDataError("บทบาทนี้ยังไม่มีสิทธิ์ย้ายสถานะงาน");
+      return;
+    }
     const existingJob = jobs.find((job) => job.id === jobId);
     if (!existingJob || existingJob.status === nextStatus) return;
     setJobs((current) =>
@@ -820,6 +929,10 @@ export default function Page() {
   }
 
   async function updatePayment(jobId: string, deposit: number) {
+    if (!can("edit_payment")) {
+      setDataError("บทบาทนี้ยังไม่มีสิทธิ์แก้ไขการชำระเงิน");
+      return;
+    }
     const existingJob = jobs.find((job) => job.id === jobId);
     if (!existingJob) return;
     setJobs((current) =>
@@ -879,6 +992,10 @@ export default function Page() {
   }
 
   async function createJob(input?: Partial<Job>) {
+    if (!can("create_job")) {
+      setDataError("บทบาทนี้ยังไม่มีสิทธิ์สร้างงาน");
+      return;
+    }
     const nextNumber = 1000 + jobs.length + 28;
     const isNewCustomer = input?.customerId === "new";
     const fallbackCustomer: Customer = {
@@ -1063,9 +1180,9 @@ export default function Page() {
     void appendAudit("created job", job.id);
   }
 
-  function addTeamMember(member: Omit<TeamMember, "id" | "avatar">) {
-    if (supabase && isSupabaseConfigured) {
-      setDataError(`ระบบจริงต้องสร้างผู้ใช้ "${member.name}" ผ่านหน้า "สร้างผู้ใช้" หรือ Supabase Auth ก่อน แล้วค่อยแก้บทบาทในหน้านี้`);
+  async function addTeamMember(member: Omit<TeamMember, "id" | "avatar">) {
+    if (!can("manage_users")) {
+      setDataError("บทบาทนี้ยังไม่มีสิทธิ์จัดการผู้ใช้");
       return;
     }
     const initials = member.name
@@ -1075,11 +1192,30 @@ export default function Page() {
       .map((part) => part[0]?.toUpperCase())
       .join("") || "K2";
     const nextMember = { ...member, id: crypto.randomUUID(), avatar: initials };
+    if (supabase && isSupabaseConfigured) {
+      const { data, error } = await supabase
+        .from("profiles")
+        .insert({ id: nextMember.id, full_name: member.name, role: member.role, is_active: true })
+        .select("id, full_name, role")
+        .single();
+      if (error) {
+        setDataError(error.message);
+        return;
+      }
+      const savedMember = profileToMember(data as SupabaseProfileRow);
+      setTeamMembers((current) => [...current, savedMember]);
+      void appendAudit("added team member", savedMember.name, "profiles", savedMember.id);
+      return;
+    }
     setTeamMembers((current) => [...current, nextMember]);
     void appendAudit("added team member", member.name, "profiles");
   }
 
   async function updateTeamMember(memberId: string, updates: Pick<TeamMember, "name" | "role">) {
+    if (!can("manage_users")) {
+      setDataError("บทบาทนี้ยังไม่มีสิทธิ์จัดการผู้ใช้");
+      return;
+    }
     const existingMember = teamMembers.find((member) => member.id === memberId);
     if (!existingMember) return;
     if (supabase && uuidPattern.test(memberId)) {
@@ -1096,6 +1232,10 @@ export default function Page() {
   }
 
   async function removeTeamMember(memberId: string) {
+    if (!can("manage_users")) {
+      setDataError("บทบาทนี้ยังไม่มีสิทธิ์จัดการผู้ใช้");
+      return;
+    }
     const member = teamMembers.find((item) => item.id === memberId);
     if (!member || member.role === "Owner") return;
     if (supabase && uuidPattern.test(memberId)) {
@@ -1113,6 +1253,10 @@ export default function Page() {
   }
 
   async function addCustomer(customer: Omit<Customer, "id" | "totalOrders" | "lifetimeValue" | "lastOrderDate">) {
+    if (!can("create_customer")) {
+      setDataError("บทบาทนี้ยังไม่มีสิทธิ์เพิ่มลูกค้า");
+      return;
+    }
     if (supabase && isSupabaseConfigured) {
       const { data, error } = await supabase.from("customers").insert(customerInsertPayload(customer)).select("*").single();
       if (error) {
@@ -1136,6 +1280,10 @@ export default function Page() {
   }
 
   async function updateCustomer(customerId: string, updates: Pick<Customer, "name" | "phone" | "lineId" | "email" | "companyName" | "taxId" | "branch" | "billingAddress" | "accountingEmail" | "requiresInvoice">) {
+    if (!can("edit_customer")) {
+      setDataError("บทบาทนี้ยังไม่มีสิทธิ์แก้ไขลูกค้า");
+      return;
+    }
     if (supabase && uuidPattern.test(customerId)) {
       const { error } = await supabase.from("customers").update(customerInsertPayload(updates)).eq("id", customerId);
       if (error) {
@@ -1166,6 +1314,10 @@ export default function Page() {
   }
 
   async function removeCustomer(customerId: string) {
+    if (!can("delete_customer")) {
+      setDataError("บทบาทนี้ยังไม่มีสิทธิ์ลบลูกค้า");
+      return;
+    }
     const customer = customerRecords.find((item) => item.id === customerId);
     const hasJobs = jobs.some((job) => job.customerId === customerId);
     if (!customer || hasJobs) return;
@@ -1181,6 +1333,10 @@ export default function Page() {
   }
 
   async function saveCompanyProfile(profile: CompanyProfile) {
+    if (!can("manage_company_settings")) {
+      setDataError("บทบาทนี้ยังไม่มีสิทธิ์ตั้งค่าบริษัท");
+      return;
+    }
     setCompanyProfile(profile);
     if (!supabase || !isSupabaseConfigured) return;
     const payload = {
@@ -1211,6 +1367,36 @@ export default function Page() {
       return;
     }
     void appendAudit("updated company settings", profile.legalName, "company_settings", existingId);
+  }
+
+  async function persistRolePermissions(role: Role, permissions: PermissionKey[]) {
+    if (!supabase || !isSupabaseConfigured) return;
+    const { error } = await supabase.from("role_permissions").upsert({ role, permissions }, { onConflict: "role" });
+    if (error) setDataError(error.message);
+  }
+
+  function updateRolePermission(role: Role, permission: PermissionKey, enabled: boolean) {
+    if (!can("manage_permissions") || role === "Owner") return;
+    setPermissionMatrix((current) => {
+      const currentPermissions = new Set(current[role] ?? []);
+      if (enabled) currentPermissions.add(permission);
+      else currentPermissions.delete(permission);
+      const next = { ...current, [role]: Array.from(currentPermissions) as PermissionKey[] };
+      window.localStorage.setItem("k2-permission-matrix", JSON.stringify(next));
+      void persistRolePermissions(role, next[role]);
+      void appendAudit(enabled ? "enabled permission" : "disabled permission", `${role}:${permission}`, "role_permissions");
+      return next;
+    });
+  }
+
+  function resetRolePermissions() {
+    if (!can("manage_permissions")) return;
+    setPermissionMatrix(defaultRolePermissions);
+    window.localStorage.removeItem("k2-permission-matrix");
+    roles.filter((role) => role !== "Owner").forEach((role) => {
+      void persistRolePermissions(role, defaultRolePermissions[role]);
+    });
+    void appendAudit("reset permissions", "default role permissions", "role_permissions");
   }
 
   if (!isAuthed) {
@@ -1352,7 +1538,7 @@ export default function Page() {
             <div className="mt-5 rounded-2xl bg-white/60 p-4">
               <p className="mb-2 text-sm font-semibold text-k2-muted">สิทธิ์การใช้งาน</p>
               <div className="flex flex-wrap gap-2">
-                {rolePermissions[currentUser.role].map((permission) => (
+                {roleSummaryPermissions[currentUser.role].map((permission) => (
                   <span key={permission} className="rounded-full bg-k2-mint px-3 py-1 text-xs font-semibold text-emerald-800">
                     {permissionLabel[permission] ?? permission}
                   </span>
@@ -1377,11 +1563,11 @@ export default function Page() {
       <div className="mx-auto flex max-w-[1800px] gap-4">
         <aside className="glass sticky top-5 hidden h-[calc(100vh-2.5rem)] w-72 shrink-0 rounded-[1.7rem] p-4 lg:block">
           <BrandBlock currentUser={currentUser} />
-          <Nav activeView={activeView} onChange={setActiveView} />
+          <Nav activeView={activeView} items={navigationItems} onChange={setActiveView} />
           <div className="mt-6 rounded-3xl bg-white/55 p-4">
             <p className="text-xs font-bold uppercase tracking-[0.18em] text-k2-muted">สิทธิ์ปัจจุบัน</p>
             <div className="mt-3 flex flex-wrap gap-2">
-              {rolePermissions[currentUser.role].slice(0, 4).map((item) => (
+              {roleSummaryPermissions[currentUser.role].slice(0, 4).map((item) => (
                 <span key={item} className="rounded-full bg-white px-3 py-1 text-xs font-semibold shadow-sm">
                   {permissionLabel[item] ?? item}
                 </span>
@@ -1412,6 +1598,7 @@ export default function Page() {
                 </label>
                 <button
                   onClick={() => setActiveView("Create Job")}
+                  disabled={!can("create_job")}
                   className="inline-flex items-center justify-center gap-2 rounded-2xl bg-k2-ink px-4 py-2.5 text-sm font-semibold text-white shadow-lg shadow-slate-900/15"
                 >
                   <Plus className="h-4 w-4" />
@@ -1427,7 +1614,7 @@ export default function Page() {
               </div>
             </div>
             <div className="mt-3 flex gap-2 overflow-x-auto pb-1 lg:hidden">
-              {["Dashboard", "Board", "Create Job", "Calendar", "Customers", "Payments", "Reports", "Settings", "Detail", "Audit"].map((item) => (
+              {navigationItems.map(({ label: item }) => (
                 <button
                   key={item}
                   onClick={() => setActiveView(item)}
@@ -1522,6 +1709,9 @@ export default function Page() {
                   onAddMember={addTeamMember}
                   onUpdateMember={updateTeamMember}
                   onRemoveMember={removeTeamMember}
+                  permissionMatrix={permissionMatrix}
+                  onUpdateRolePermission={updateRolePermission}
+                  onResetRolePermissions={resetRolePermissions}
                 />
               </motion.div>
             )}
@@ -1628,19 +1818,15 @@ function KLogoLockup({ size }: { size: "hero" | "sidebar" }) {
   );
 }
 
-function Nav({ activeView, onChange }: { activeView: string; onChange: (view: string) => void }) {
-  const items = [
-    { label: "Dashboard", icon: LayoutDashboard },
-    { label: "Board", icon: ClipboardList },
-    { label: "Create Job", icon: ClipboardPlus },
-    { label: "Calendar", icon: CalendarDays },
-    { label: "Customers", icon: UsersRound },
-    { label: "Payments", icon: WalletCards },
-    { label: "Reports", icon: BarChart3 },
-    { label: "Settings", icon: Settings },
-    { label: "Detail", icon: FileImage },
-    { label: "Audit", icon: ShieldCheck }
-  ];
+function Nav({
+  activeView,
+  items,
+  onChange
+}: {
+  activeView: string;
+  items: Array<{ label: string; icon: LucideIcon }>;
+  onChange: (view: string) => void;
+}) {
   return (
     <nav className="grid gap-2">
       {items.map(({ label, icon: Icon }) => (
@@ -2563,7 +2749,10 @@ function SettingsView({
   onUpdateCompany,
   onAddMember,
   onUpdateMember,
-  onRemoveMember
+  onRemoveMember,
+  permissionMatrix,
+  onUpdateRolePermission,
+  onResetRolePermissions
 }: {
   currentRole: Role;
   teamMembers: TeamMember[];
@@ -2572,8 +2761,14 @@ function SettingsView({
   onAddMember: (member: Omit<TeamMember, "id" | "avatar">) => void;
   onUpdateMember: (memberId: string, updates: Pick<TeamMember, "name" | "role">) => void;
   onRemoveMember: (memberId: string) => void;
+  permissionMatrix: Record<Role, PermissionKey[]>;
+  onUpdateRolePermission: (role: Role, permission: PermissionKey, enabled: boolean) => void;
+  onResetRolePermissions: () => void;
 }) {
-  const canManageTeam = ["Owner", "Admin"].includes(currentRole);
+  const currentPermissions = permissionMatrix[currentRole] ?? [];
+  const canManageTeam = currentPermissions.includes("manage_users");
+  const canManagePermissions = currentPermissions.includes("manage_permissions");
+  const canManageCompany = currentPermissions.includes("manage_company_settings");
   const [newMember, setNewMember] = useState({ name: "", role: "Designer" as Role });
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingMember, setEditingMember] = useState({ name: "", role: "Designer" as Role });
@@ -2612,7 +2807,7 @@ function SettingsView({
           <button
             type="button"
             onClick={() => onUpdateCompany(companyDraft)}
-            disabled={!canManageTeam}
+            disabled={!canManageCompany}
             className="inline-flex items-center justify-center gap-2 rounded-2xl bg-k2-ink px-4 py-3 text-sm font-extrabold text-white disabled:cursor-not-allowed disabled:opacity-50"
           >
             <CheckCircle2 className="h-4 w-4" />
@@ -2745,14 +2940,63 @@ function SettingsView({
       </section>
 
       <section className="glass rounded-[1.5rem] p-5">
-        <h3 className="text-2xl font-semibold">บทบาทและสิทธิ์</h3>
-        <div className="mt-5 space-y-3">
-          {Object.entries(rolePermissions).map(([role, permissions]) => (
-            <div key={role} className={`rounded-2xl p-4 ${role === currentRole ? "bg-k2-lilac" : "bg-white/65"}`}>
-              <p className="font-semibold">{roleLabel[role as Role]}</p>
-              <p className="mt-1 text-sm text-k2-muted">{permissions.map((item) => permissionLabel[item] ?? item).join(", ")}</p>
-            </div>
-          ))}
+        <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+          <div>
+            <h3 className="text-2xl font-semibold">บทบาทและสิทธิ์</h3>
+            <p className="mt-2 text-sm font-semibold text-k2-muted">ติ๊กสิทธิ์ให้แต่ละตำแหน่งทำงานได้ต่างกัน เจ้าของถูกล็อกให้มีสิทธิ์ครบเสมอ</p>
+          </div>
+          <button
+            type="button"
+            onClick={onResetRolePermissions}
+            disabled={!canManagePermissions}
+            className="inline-flex items-center justify-center gap-2 rounded-2xl bg-white/75 px-4 py-3 text-sm font-extrabold text-k2-muted shadow-sm disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            <ShieldCheck className="h-4 w-4" />
+            รีเซ็ตค่าเริ่มต้น
+          </button>
+        </div>
+        <div className="mt-5 space-y-4">
+          {roles.map((role) => {
+            const isLockedOwner = role === "Owner";
+            const selectedPermissions = permissionMatrix[role] ?? [];
+            return (
+              <div key={role} className={`rounded-[1.35rem] border border-white/70 p-4 ${role === currentRole ? "bg-k2-lilac/70" : "bg-white/60"}`}>
+                <div className="mb-4 flex items-center justify-between gap-3">
+                  <div>
+                    <p className="text-lg font-extrabold">{roleLabel[role]}</p>
+                    <p className="text-xs font-bold text-k2-muted">{selectedPermissions.length} / {allPermissionKeys.length} permissions</p>
+                  </div>
+                  {isLockedOwner ? (
+                    <span className="rounded-full bg-white px-3 py-1 text-xs font-extrabold text-k2-muted">ล็อก</span>
+                  ) : null}
+                </div>
+                <div className="grid gap-4">
+                  {permissionGroups.map((group) => (
+                    <div key={`${role}-${group.title}`}>
+                      <p className="mb-2 text-xs font-extrabold uppercase tracking-[0.14em] text-k2-muted">{group.title}</p>
+                      <div className="grid gap-2 sm:grid-cols-2">
+                        {group.permissions.map((permission) => {
+                          const checked = isLockedOwner || selectedPermissions.includes(permission);
+                          return (
+                            <label key={`${role}-${permission}`} className="flex items-center gap-3 rounded-2xl bg-white/70 px-3 py-2.5 text-sm font-extrabold text-k2-ink">
+                              <input
+                                type="checkbox"
+                                checked={checked}
+                                disabled={!canManagePermissions || isLockedOwner}
+                                onChange={(event) => onUpdateRolePermission(role, permission, event.target.checked)}
+                                className="h-4 w-4 accent-[#EC5CA8] disabled:opacity-40"
+                              />
+                              <span>{permissionLabel[permission]}</span>
+                            </label>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            );
+          })}
         </div>
       </section>
       <section className="glass rounded-[1.5rem] p-5">

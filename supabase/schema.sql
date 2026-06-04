@@ -1,5 +1,6 @@
 create type public.app_role as enum (
   'Owner',
+  'Manager',
   'Admin',
   'Designer',
   'Production Staff',
@@ -59,12 +60,19 @@ create table public.company_settings (
 );
 
 create table public.profiles (
-  id uuid primary key references auth.users(id) on delete cascade,
+  id uuid primary key default gen_random_uuid(),
   email text unique,
   full_name text not null,
   role public.app_role not null default 'Sales Staff',
   avatar_url text,
   is_active boolean not null default true,
+  updated_at timestamptz not null default now(),
+  created_at timestamptz not null default now()
+);
+
+create table public.role_permissions (
+  role public.app_role primary key,
+  permissions text[] not null default '{}',
   updated_at timestamptz not null default now(),
   created_at timestamptz not null default now()
 );
@@ -179,6 +187,10 @@ create trigger profiles_set_updated_at
 before update on public.profiles
 for each row execute function public.set_updated_at();
 
+create trigger role_permissions_set_updated_at
+before update on public.role_permissions
+for each row execute function public.set_updated_at();
+
 create trigger company_settings_set_updated_at
 before update on public.company_settings
 for each row execute function public.set_updated_at();
@@ -219,6 +231,7 @@ after insert on auth.users
 for each row execute function public.handle_new_user();
 
 alter table public.profiles enable row level security;
+alter table public.role_permissions enable row level security;
 alter table public.company_settings enable row level security;
 alter table public.customers enable row level security;
 alter table public.jobs enable row level security;
@@ -242,6 +255,17 @@ on public.profiles for select
 to authenticated
 using (true);
 
+create policy "authenticated users read role permissions"
+on public.role_permissions for select
+to authenticated
+using (true);
+
+create policy "owners and admins manage role permissions"
+on public.role_permissions for all
+to authenticated
+using (public.current_role()::text in ('Owner', 'Admin'))
+with check (public.current_role()::text in ('Owner', 'Admin'));
+
 create policy "authenticated users read company settings"
 on public.company_settings for select
 to authenticated
@@ -250,14 +274,14 @@ using (true);
 create policy "owners and admins manage company settings"
 on public.company_settings for all
 to authenticated
-using (public.current_role() in ('Owner', 'Admin'))
-with check (public.current_role() in ('Owner', 'Admin'));
+using (public.current_role()::text in ('Owner', 'Admin'))
+with check (public.current_role()::text in ('Owner', 'Admin'));
 
 create policy "owners and admins manage profiles"
 on public.profiles for all
 to authenticated
-using (public.current_role() in ('Owner', 'Admin'))
-with check (public.current_role() in ('Owner', 'Admin'));
+using (public.current_role()::text in ('Owner', 'Admin'))
+with check (public.current_role()::text in ('Owner', 'Admin'));
 
 create policy "users can update their own profile"
 on public.profiles for update
@@ -273,8 +297,8 @@ using (true);
 create policy "sales admins owners manage customers"
 on public.customers for all
 to authenticated
-using (public.current_role() in ('Owner', 'Admin', 'Sales Staff'))
-with check (public.current_role() in ('Owner', 'Admin', 'Sales Staff'));
+using (public.current_role()::text in ('Owner', 'Manager', 'Admin', 'Sales Staff'))
+with check (public.current_role()::text in ('Owner', 'Manager', 'Admin', 'Sales Staff'));
 
 create policy "authenticated users read jobs"
 on public.jobs for select
@@ -284,8 +308,8 @@ using (true);
 create policy "staff can create and update jobs"
 on public.jobs for all
 to authenticated
-using (public.current_role() in ('Owner', 'Admin', 'Designer', 'Production Staff', 'Packing Staff', 'Sales Staff'))
-with check (public.current_role() in ('Owner', 'Admin', 'Designer', 'Production Staff', 'Packing Staff', 'Sales Staff'));
+using (public.current_role()::text in ('Owner', 'Manager', 'Admin', 'Designer', 'Production Staff', 'Packing Staff', 'Sales Staff'))
+with check (public.current_role()::text in ('Owner', 'Manager', 'Admin', 'Designer', 'Production Staff', 'Packing Staff', 'Sales Staff'));
 
 create policy "authenticated users read job children"
 on public.job_files for select
@@ -321,7 +345,7 @@ with check (changed_by = auth.uid());
 create policy "owners admins read audit log"
 on public.audit_log for select
 to authenticated
-using (public.current_role() in ('Owner', 'Admin'));
+using (public.current_role()::text in ('Owner', 'Manager', 'Admin'));
 
 create policy "authenticated users write audit log"
 on public.audit_log for insert
