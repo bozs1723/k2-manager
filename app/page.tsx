@@ -2126,29 +2126,49 @@ function Board({
                   {columnJobs.length} งาน
                 </span>
               </div>
-              <p className="mt-1.5 text-xs font-semibold text-k2-muted">ลากการ์ดมาวางเพื่อเปลี่ยนสถานะ</p>
+              <p className="mt-1.5 text-xs font-semibold text-k2-muted">
+                <span className="hidden sm:inline">ลากการ์ดมาวางเพื่อเปลี่ยนสถานะ · </span>
+                <span>แตะ ▼ ใต้การ์ดเพื่อย้ายขั้นตอน</span>
+              </p>
             </div>
             <div className="space-y-3">
               {columnJobs.map((job) => (
-                <motion.button
+                <motion.div
                   layout
-                  draggable
                   key={job.id}
-                  onDragStart={() => setDraggedJobId(job.id)}
-                  onClick={() => onSelect(job.id)}
-                  className="w-full rounded-[1.25rem] border border-white/80 bg-white/75 p-4 text-left shadow-sm transition hover:-translate-y-0.5 hover:bg-white"
+                  className="overflow-hidden rounded-[1.25rem] border border-white/80 bg-white/75 shadow-sm transition hover:bg-white"
                 >
-                  <div className="mb-3 flex items-center justify-between gap-2">
-                    <span className="text-sm font-bold">{job.id}</span>
-                    <span className={`rounded-full px-2 py-1 text-[11px] font-bold ${priorityClass[job.priority]}`}>{priorityLabel[job.priority]}</span>
+                  {/* แตะเพื่อดูรายละเอียด / ลากเพื่อย้ายขั้นตอน (desktop) */}
+                  <button
+                    draggable
+                    onDragStart={() => setDraggedJobId(job.id)}
+                    onClick={() => onSelect(job.id)}
+                    className="w-full p-4 text-left"
+                  >
+                    <div className="mb-3 flex items-center justify-between gap-2">
+                      <span className="text-sm font-bold">{job.id}</span>
+                      <span className={`rounded-full px-2 py-1 text-[11px] font-bold ${priorityClass[job.priority]}`}>{priorityLabel[job.priority]}</span>
+                    </div>
+                    <p className="font-semibold leading-5">{job.title}</p>
+                    <p className="mt-1 text-sm text-k2-muted">{job.customerName}</p>
+                    <div className="mt-4 flex items-center justify-between text-xs font-semibold text-k2-muted">
+                      <span>{jobTypeLabel[job.type]}</span>
+                      <span>{job.dueDate}</span>
+                    </div>
+                  </button>
+                  {/* เลือกขั้นตอนใหม่ — ใช้งานได้ทั้ง mobile touch และ desktop */}
+                  <div className="border-t border-white/60 px-3 py-2">
+                    <select
+                      value={status}
+                      onChange={(event) => moveJob(job.id, event.target.value as JobStatus)}
+                      className="w-full cursor-pointer rounded-xl bg-white/60 px-3 py-2 text-xs font-bold text-k2-muted outline-none"
+                    >
+                      {statuses.map((s) => (
+                        <option key={s} value={s}>{statusLabel[s]}</option>
+                      ))}
+                    </select>
                   </div>
-                  <p className="font-semibold leading-5">{job.title}</p>
-                  <p className="mt-1 text-sm text-k2-muted">{job.customerName}</p>
-                  <div className="mt-4 flex items-center justify-between text-xs font-semibold text-k2-muted">
-                    <span>{jobTypeLabel[job.type]}</span>
-                    <span>{job.dueDate}</span>
-                  </div>
-                </motion.button>
+                </motion.div>
               ))}
               {columnJobs.length === 0 ? (
                 <div className="rounded-[1.25rem] border border-dashed border-white/90 bg-white/35 px-4 py-6 text-center text-sm font-semibold text-k2-muted">
