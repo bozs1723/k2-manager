@@ -11,6 +11,7 @@ import {
   Building2,
   CalendarDays,
   CheckCircle2,
+  ChevronDown,
   ChevronRight,
   ClipboardList,
   ClipboardPlus,
@@ -2922,6 +2923,114 @@ function MoneyLine({ label, value, visible }: { label: string; value: number; vi
   );
 }
 
+// ตัวเลือกลูกค้าแบบค้นหาได้ — พิมพ์ชื่อ เบอร์โทร หรือรหัสเพื่อกรอง เริ่มต้นเป็น "ลูกค้าใหม่" (ว่าง)
+function CustomerPicker({
+  customers,
+  selectedId,
+  selectedName,
+  onPickNew,
+  onPickCustomer
+}: {
+  customers: Customer[];
+  selectedId: string;
+  selectedName: string;
+  onPickNew: () => void;
+  onPickCustomer: (customer: Customer) => void;
+}) {
+  const [query, setQuery] = useState("");
+  const [open, setOpen] = useState(false);
+  const boxRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    function handleClickOutside(event: MouseEvent) {
+      if (boxRef.current && !boxRef.current.contains(event.target as Node)) setOpen(false);
+    }
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, [open]);
+
+  const normalized = query.trim().toLowerCase();
+  const matches = useMemo(() => {
+    const list = normalized
+      ? customers.filter((customer) =>
+          [customer.name, customer.phone, customer.id, customer.companyName, customer.lineId, customer.taxId]
+            .filter(Boolean)
+            .join(" ")
+            .toLowerCase()
+            .includes(normalized)
+        )
+      : customers;
+    return list.slice(0, 40);
+  }, [customers, normalized]);
+
+  const isNew = selectedId === "new";
+
+  return (
+    <div ref={boxRef} className="relative">
+      <button
+        type="button"
+        onClick={() => setOpen((current) => !current)}
+        className="flex w-full items-center justify-between gap-2 rounded-2xl border border-white/80 bg-white/80 px-4 py-3 text-left outline-none"
+      >
+        <span className={isNew ? "text-k2-muted" : "font-semibold"}>
+          {isNew ? "+ ลูกค้าใหม่ (ยังไม่เลือก)" : selectedName || "เลือกลูกค้า"}
+        </span>
+        <ChevronDown className="h-4 w-4 shrink-0 text-k2-muted" />
+      </button>
+      {open ? (
+        <div className="absolute left-0 right-0 top-full z-40 mt-2 overflow-hidden rounded-2xl border border-white/80 bg-white/97 shadow-2xl backdrop-blur-xl">
+          <div className="flex items-center gap-2 border-b border-white/60 px-3 py-2">
+            <Search className="h-4 w-4 shrink-0 text-k2-muted" />
+            <input
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              placeholder="ค้นหาด้วยชื่อ เบอร์โทร หรือรหัส"
+              autoFocus
+              className="w-full bg-transparent text-sm outline-none"
+            />
+          </div>
+          <div className="max-h-64 overflow-y-auto">
+            <button
+              type="button"
+              onClick={() => {
+                onPickNew();
+                setQuery("");
+                setOpen(false);
+              }}
+              className="flex w-full items-center gap-2 border-b border-white/40 px-4 py-3 text-left text-sm font-bold text-teal-700 hover:bg-white/60"
+            >
+              <Plus className="h-4 w-4" /> สร้างลูกค้าใหม่
+            </button>
+            {matches.map((customer) => (
+              <button
+                key={customer.id}
+                type="button"
+                onClick={() => {
+                  onPickCustomer(customer);
+                  setQuery("");
+                  setOpen(false);
+                }}
+                className={`flex w-full flex-col gap-0.5 border-b border-white/40 px-4 py-2.5 text-left hover:bg-white/60 ${
+                  customer.id === selectedId ? "bg-teal-50/70" : ""
+                }`}
+              >
+                <span className="text-sm font-semibold">{customer.name}</span>
+                <span className="text-xs text-k2-muted">
+                  {[customer.phone, customer.lineId].filter(Boolean).join(" · ") || "ไม่มีเบอร์/LINE"}
+                </span>
+              </button>
+            ))}
+            {matches.length === 0 ? (
+              <p className="px-4 py-6 text-center text-sm font-semibold text-k2-muted">ไม่พบลูกค้าที่ค้นหา</p>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function CreateJobView({
   customers,
   teamMembers,
@@ -2972,8 +3081,42 @@ function CreateJobView({
     deliveryMethod: "รับหน้าร้าน"
   });
 
+  const [formError, setFormError] = useState("");
+
   function setField<Key extends keyof typeof form>(key: Key, value: (typeof form)[Key]) {
     setForm((current) => ({ ...current, [key]: value }));
+  }
+
+  function pickNewCustomer() {
+    setForm((current) => ({
+      ...current,
+      customerId: "new",
+      customerName: "",
+      phone: "",
+      lineId: "",
+      companyName: "",
+      taxId: "",
+      branch: "สำนักงานใหญ่",
+      billingAddress: "",
+      accountingEmail: "",
+      requiresInvoice: false
+    }));
+  }
+
+  function pickCustomer(customer: Customer) {
+    setForm((current) => ({
+      ...current,
+      customerId: customer.id,
+      customerName: customer.name,
+      phone: customer.phone,
+      lineId: customer.lineId,
+      companyName: customer.companyName ?? "",
+      taxId: customer.taxId ?? "",
+      branch: customer.branch ?? "สำนักงานใหญ่",
+      billingAddress: customer.billingAddress ?? "",
+      accountingEmail: customer.accountingEmail ?? customer.email,
+      requiresInvoice: customer.requiresInvoice ?? false
+    }));
   }
 
   useEffect(() => {
@@ -2991,6 +3134,12 @@ function CreateJobView({
     <form
       onSubmit={(event) => {
         event.preventDefault();
+        // ลูกค้าใหม่ต้องมีชื่อ เพื่อไม่ให้เกิดเรคคอร์ด "ลูกค้าใหม่" ค้างในระบบ
+        if (form.customerId === "new" && !form.customerName.trim()) {
+          setFormError("กรุณากรอกชื่อลูกค้า หรือเลือกลูกค้าเดิมจากช่องค้นหา");
+          return;
+        }
+        setFormError("");
         const workOrderSpec = [
           `ช่องทางรับงาน: ${form.sourceChannel || "-"}`,
           `สถานะไฟล์: ${form.fileStatus || "-"}`,
@@ -3029,47 +3178,13 @@ function CreateJobView({
         <div className="grid gap-4 md:grid-cols-2">
           <label className="space-y-2">
             <span className="text-sm font-semibold text-k2-muted">ลูกค้า</span>
-            <select
-              value={form.customerId}
-              onChange={(event) => {
-                if (event.target.value === "new") {
-                  setForm((current) => ({
-                    ...current,
-                    customerId: "new",
-                    customerName: "",
-                    phone: "",
-                    lineId: "",
-                    companyName: "",
-                    taxId: "",
-                    branch: "สำนักงานใหญ่",
-                    billingAddress: "",
-                    accountingEmail: "",
-                    requiresInvoice: false
-                  }));
-                  return;
-                }
-                const customer = customers.find((item) => item.id === event.target.value) ?? customers[0];
-                setForm((current) => ({
-                  ...current,
-                  customerId: customer.id,
-                  customerName: customer.name,
-                  phone: customer.phone,
-                  lineId: customer.lineId,
-                  companyName: customer.companyName ?? "",
-                  taxId: customer.taxId ?? "",
-                  branch: customer.branch ?? "สำนักงานใหญ่",
-                  billingAddress: customer.billingAddress ?? "",
-                  accountingEmail: customer.accountingEmail ?? customer.email,
-                  requiresInvoice: customer.requiresInvoice ?? false
-                }));
-              }}
-              className="w-full rounded-2xl border border-white/80 bg-white/80 px-4 py-3 outline-none"
-            >
-              <option value="new">+ สร้างลูกค้าใหม่</option>
-              {customers.map((customer) => (
-                <option key={customer.id} value={customer.id}>{customer.name}</option>
-              ))}
-            </select>
+            <CustomerPicker
+              customers={customers}
+              selectedId={form.customerId}
+              selectedName={form.customerName}
+              onPickNew={pickNewCustomer}
+              onPickCustomer={pickCustomer}
+            />
           </label>
           <TextField
             label={form.customerId === "new" ? "ชื่อลูกค้าใหม่" : "ชื่อลูกค้า"}
@@ -3297,6 +3412,9 @@ function CreateJobView({
             <MiniStat label="สถานะชำระเงิน" value={paymentLabel[getPaymentStatus(form.price, form.deposit)]} />
             <MiniStat label="สถานะแรก" value={statusLabel["New Order"]} />
           </div>
+          {formError ? (
+            <p className="mt-4 rounded-2xl bg-amber-50 px-4 py-3 text-sm font-bold text-amber-700">{formError}</p>
+          ) : null}
           <button className="mt-5 w-full rounded-2xl bg-k2-ink px-5 py-4 font-semibold text-white shadow-lg shadow-slate-900/15">
             สร้างงาน
           </button>
