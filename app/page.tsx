@@ -2671,6 +2671,18 @@ function CreateJobView({
             value={form.customerName}
             onChange={(value) => setField("customerName", value)}
           />
+          <label className="space-y-2">
+            <span className="text-sm font-semibold text-k2-muted">ลูกค้าจากช่องทาง</span>
+            <select
+              value={form.sourceChannel}
+              onChange={(event) => setField("sourceChannel", event.target.value)}
+              className="w-full rounded-2xl border border-white/80 bg-white/80 px-4 py-3 outline-none"
+            >
+              {["Facebook", "LINE", "หน้าร้าน", "โทรศัพท์", "Sales", "ลูกค้าเก่า", "อื่น ๆ"].map((channel) => (
+                <option key={channel}>{channel}</option>
+              ))}
+            </select>
+          </label>
           <TextField label="เบอร์โทร" value={form.phone} onChange={(value) => setField("phone", value)} />
           <TextField label="LINE ID" value={form.lineId} onChange={(value) => setField("lineId", value)} />
           <TextField label="ชื่องาน" value={form.title} onChange={(value) => setField("title", value)} />
@@ -2737,18 +2749,6 @@ function CreateJobView({
             <p className="text-sm font-semibold text-k2-muted">ข้อมูลที่ทีมออกแบบ ผลิต QC และแพ็กของต้องใช้ทำงานจริง</p>
           </div>
           <div className="grid gap-4 md:grid-cols-2">
-            <label className="space-y-2">
-              <span className="text-sm font-semibold text-k2-muted">ช่องทางรับงาน</span>
-              <select
-                value={form.sourceChannel}
-                onChange={(event) => setField("sourceChannel", event.target.value)}
-                className="w-full rounded-2xl border border-white/80 bg-white/80 px-4 py-3 outline-none"
-              >
-                {["หน้าร้าน", "LINE", "Facebook", "Sales", "ลูกค้าเก่า", "อื่น ๆ"].map((channel) => (
-                  <option key={channel}>{channel}</option>
-                ))}
-              </select>
-            </label>
             <label className="space-y-2">
               <span className="text-sm font-semibold text-k2-muted">สถานะไฟล์</span>
               <select
