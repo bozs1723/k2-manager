@@ -135,6 +135,7 @@ type SupabaseJobRow = {
   due_date: string;
   priority: Priority;
   status: JobStatus;
+  is_express?: boolean | null;
   assigned_designer: string | null;
   assigned_production: string | null;
   price: number | string;
@@ -142,6 +143,18 @@ type SupabaseJobRow = {
   remaining_balance: number | string;
   payment_status: PaymentStatus;
   internal_notes: string | null;
+  created_at: string;
+};
+
+type SupabaseNotificationRow = {
+  id: string;
+  recipient_id: string;
+  type: AppNotification["type"];
+  job_id: string | null;
+  job_number: string | null;
+  job_title: string | null;
+  message: string;
+  is_read: boolean;
   created_at: string;
 };
 
@@ -648,6 +661,7 @@ function jobFromRow(
     orderDate: row.order_date,
     dueDate: row.due_date,
     priority: row.priority,
+    isExpress: row.is_express ?? false,
     status: row.status,
     assignedDesigner: row.assigned_designer ? profileNames.get(row.assigned_designer) ?? "Unassigned" : "Unassigned",
     assignedProduction: row.assigned_production ? profileNames.get(row.assigned_production) ?? "Unassigned" : "Unassigned",
@@ -669,6 +683,18 @@ function jobFromRow(
       by: event.changed_by ? profileNames.get(event.changed_by) ?? "K2 User" : "K2 User",
       at: new Date(event.created_at).toLocaleString("en-GB")
     }))
+  };
+}
+
+function notifFromRow(row: SupabaseNotificationRow): AppNotification {
+  return {
+    id: row.id,
+    type: row.type,
+    jobId: row.job_number ?? "",
+    jobTitle: row.job_title ?? "",
+    message: row.message,
+    at: new Date(row.created_at).toLocaleString("th-TH", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" }),
+    read: row.is_read
   };
 }
 
@@ -806,8 +832,10 @@ export default function Page() {
     }
   }, []);
 
-  // โหลด / บันทึก notification ตาม user ที่ login อยู่
+  // โหมด mock (ไม่มี Supabase): โหลด/บันทึก notification ลง localStorage ต่อผู้ใช้
+  // โหมด Supabase: notification มาจากตาราง + Realtime จึงไม่ใช้ localStorage
   useEffect(() => {
+    if (isSupabaseConfigured) return;
     try {
       const stored = window.localStorage.getItem(`k2-notifs-${currentUser.id}`);
       setNotifications(stored ? (JSON.parse(stored) as AppNotification[]) : []);
@@ -815,25 +843,60 @@ export default function Page() {
   }, [currentUser.id]);
 
   useEffect(() => {
+    if (isSupabaseConfigured) return;
     try {
       window.localStorage.setItem(`k2-notifs-${currentUser.id}`, JSON.stringify(notifications));
     } catch {}
   }, [notifications, currentUser.id]);
 
-  // โหลด / บันทึก สถานะเปิดรับงานด่วน (ตั้งโดยผู้จัดการ/เจ้าของ ใช้ร่วมทั้งร้าน)
+  // สถานะเปิดรับงานด่วน — โหมด mock อ่านจาก localStorage / โหมด Supabase อ่านจาก shop_state (ใน refreshWorkspaceData)
   useEffect(() => {
+    if (isSupabaseConfigured) return;
     setExpressOrdersEnabled(window.localStorage.getItem("k2-express-enabled") === "1");
   }, []);
 
   function toggleExpressOrders() {
-    setExpressOrdersEnabled((prev) => {
-      const next = !prev;
+    const next = !expressOrdersEnabled;
+    setExpressOrdersEnabled(next);
+    if (supabase && isSupabaseConfigured) {
+      void supabase
+        .from("shop_state")
+        .update({ express_orders_enabled: next, updated_by: uuidPattern.test(currentUser.id) ? currentUser.id : null })
+        .eq("id", true);
+    } else {
       try { window.localStorage.setItem("k2-express-enabled", next ? "1" : "0"); } catch {}
-      return next;
-    });
+    }
   }
 
   const canManageExpress = currentUser.role === "Owner" || currentUser.role === "Manager";
+
+  // Realtime: รับแจ้งเตือนใหม่ของตัวเอง + ติดตามสวิตช์งานด่วนแบบสด (เฉพาะโหมด Supabase)
+  useEffect(() => {
+    if (!supabase || !isSupabaseConfigured || !uuidPattern.test(currentUser.id)) return;
+    const client = supabase;
+    const channel = client
+      .channel(`k2-rt-${currentUser.id}`)
+      .on(
+        "postgres_changes",
+        { event: "INSERT", schema: "public", table: "notifications", filter: `recipient_id=eq.${currentUser.id}` },
+        (payload) => {
+          const row = payload.new as SupabaseNotificationRow;
+          setNotifications((current) => (current.some((item) => item.id === row.id) ? current : [notifFromRow(row), ...current].slice(0, 50)));
+        }
+      )
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "shop_state" },
+        (payload) => {
+          const row = payload.new as { express_orders_enabled?: boolean };
+          if (typeof row?.express_orders_enabled === "boolean") setExpressOrdersEnabled(row.express_orders_enabled);
+        }
+      )
+      .subscribe();
+    return () => {
+      void client.removeChannel(channel);
+    };
+  }, [currentUser.id]);
 
   // ปิด notification panel เมื่อคลิกนอกกล่อง
   useEffect(() => {
@@ -866,7 +929,7 @@ export default function Page() {
         : urgency.days === 0
           ? "ครบกำหนดส่งวันนี้"
           : `อีก ${urgency.days} วันถึงกำหนดส่ง`;
-      pushNotif("due_soon", job, `⏰ งาน ${job.id} – ${detail}`);
+      notifyDueSoonSelf(job, `⏰ งาน ${job.id} – ${detail}`);
     });
     if (fresh.length) {
       try { window.localStorage.setItem(stampKey, JSON.stringify([...notified, ...fresh].slice(-200))); } catch {}
@@ -899,7 +962,9 @@ export default function Page() {
         historyResult,
         filesResult,
         auditResult,
-        rolePermissionsResult
+        rolePermissionsResult,
+        shopStateResult,
+        notificationsResult
       ] = await Promise.all([
         supabase.from("profiles").select("id, email, full_name, role, avatar_url, is_active").eq("is_active", true).order("created_at", { ascending: true }),
         supabase.from("company_settings").select("*").order("created_at", { ascending: true }).limit(1),
@@ -909,7 +974,9 @@ export default function Page() {
         supabase.from("job_status_history").select("id, job_id, from_status, to_status, created_at, changed_by").order("created_at", { ascending: true }),
         supabase.from("job_files").select("id, job_id, file_name, file_type, file_size").order("created_at", { ascending: true }),
         supabase.from("audit_log").select("id, action, target_table, target_id, metadata, created_at, actor_id").order("created_at", { ascending: false }).limit(80),
-        supabase.from("role_permissions").select("role, permissions")
+        supabase.from("role_permissions").select("role, permissions"),
+        supabase.from("shop_state").select("express_orders_enabled").limit(1),
+        supabase.from("notifications").select("*").eq("recipient_id", currentUser.id).order("created_at", { ascending: false }).limit(50)
       ]);
 
       const failures = [profilesResult, customersResult, jobsResult, commentsResult, historyResult, filesResult].filter((result) => result.error);
@@ -945,6 +1012,13 @@ export default function Page() {
       setJobs(nextJobs);
       setCustomerRecords(customerRows.map((row) => customerFromRow(row, jobRows)));
       setAuditLog(auditResult.error ? [] : ((auditResult.data ?? []) as Parameters<typeof auditFromRow>[0][]).map((row) => auditFromRow(row, profileNames)));
+
+      if (!shopStateResult.error && shopStateResult.data?.[0]) {
+        setExpressOrdersEnabled(Boolean((shopStateResult.data[0] as { express_orders_enabled?: boolean }).express_orders_enabled));
+      }
+      if (!notificationsResult.error) {
+        setNotifications(((notificationsResult.data ?? []) as SupabaseNotificationRow[]).map(notifFromRow));
+      }
       setSelectedJobId(nextJobs[0]?.id ?? "");
     } catch (error) {
       setDataError(errorMessage(error, "โหลดข้อมูลจาก Supabase ไม่สำเร็จ"));
@@ -1064,7 +1138,8 @@ export default function Page() {
     setActiveView("Dashboard");
   }
 
-  function pushNotif(type: AppNotification["type"], job: Pick<Job, "id" | "title">, message: string) {
+  // เพิ่มแจ้งเตือนลง state ปัจจุบัน (ใช้ในโหมด mock และ due_soon ของตัวเอง)
+  function pushLocalNotif(type: AppNotification["type"], job: Pick<Job, "id" | "title">, message: string) {
     setNotifications((current) => [
       {
         id: crypto.randomUUID(),
@@ -1077,6 +1152,66 @@ export default function Page() {
       },
       ...current
     ].slice(0, 50));
+  }
+
+  // แจ้งเตือนผู้รับผิดชอบงาน (ออกแบบ/ผลิต) ยกเว้นตัวผู้กระทำเอง
+  // โหมด Supabase: insert ลงตาราง notifications -> Realtime ส่งถึงเครื่องผู้รับ
+  // โหมด mock: ถ้าผู้รับคือ user ปัจจุบัน ค่อยเด้งในเครื่อง (เดโมเครื่องเดียว)
+  function notifyAssignees(
+    type: AppNotification["type"],
+    job: Pick<Job, "id" | "title" | "dbId" | "assignedDesigner" | "assignedProduction">,
+    message: string
+  ) {
+    const recipients = Array.from(new Set([job.assignedDesigner, job.assignedProduction])).filter(
+      (name): name is string => Boolean(name) && name !== "Unassigned"
+    );
+    if (supabase && isSupabaseConfigured) {
+      const rows = recipients
+        .filter((name) => name !== currentUser.name)
+        .map((name) => teamMembers.find((member) => member.name === name)?.id)
+        .filter((id): id is string => typeof id === "string" && uuidPattern.test(id))
+        .map((recipientId) => ({
+          recipient_id: recipientId,
+          type,
+          job_id: job.dbId ?? null,
+          job_number: job.id,
+          job_title: job.title,
+          message
+        }));
+      if (rows.length) void supabase.from("notifications").insert(rows);
+    } else if (recipients.includes(currentUser.name)) {
+      pushLocalNotif(type, job, message);
+    }
+  }
+
+  // แจ้งเตือนตัวเอง (งานใกล้ถึงกำหนด) — โหมด Supabase insert ถึงตัวเอง แล้ว Realtime ส่งกลับ
+  function notifyDueSoonSelf(job: Pick<Job, "id" | "title" | "dbId">, message: string) {
+    if (supabase && isSupabaseConfigured && uuidPattern.test(currentUser.id)) {
+      void supabase.from("notifications").insert({
+        recipient_id: currentUser.id,
+        type: "due_soon",
+        job_id: job.dbId ?? null,
+        job_number: job.id,
+        job_title: job.title,
+        message
+      });
+    } else {
+      pushLocalNotif("due_soon", job, message);
+    }
+  }
+
+  function markAllNotifsRead() {
+    setNotifications((current) => current.map((item) => ({ ...item, read: true })));
+    if (supabase && isSupabaseConfigured && uuidPattern.test(currentUser.id)) {
+      void supabase.from("notifications").update({ is_read: true }).eq("recipient_id", currentUser.id).eq("is_read", false);
+    }
+  }
+
+  function clearAllNotifs() {
+    setNotifications([]);
+    if (supabase && isSupabaseConfigured && uuidPattern.test(currentUser.id)) {
+      void supabase.from("notifications").delete().eq("recipient_id", currentUser.id);
+    }
   }
 
   async function moveJob(jobId: string, nextStatus: JobStatus) {
@@ -1120,9 +1255,7 @@ export default function Page() {
       });
     }
     void appendAudit(`moved status to ${nextStatus}`, jobId, "jobs", existingJob.dbId);
-    if (existingJob.assignedDesigner === currentUser.name || existingJob.assignedProduction === currentUser.name) {
-      pushNotif("status_moved", existingJob, `งาน ${existingJob.id} ย้ายไป "${statusLabel[nextStatus]}" แล้ว`);
-    }
+    notifyAssignees("status_moved", existingJob, `งาน ${existingJob.id} ย้ายไป "${statusLabel[nextStatus]}" แล้ว`);
   }
 
   async function updatePayment(jobId: string, deposit: number) {
@@ -1186,9 +1319,7 @@ export default function Page() {
       }
     }
     void appendAudit("added comment", jobId, "jobs", existingJob.dbId);
-    if (existingJob.assignedDesigner === currentUser.name || existingJob.assignedProduction === currentUser.name) {
-      pushNotif("comment", existingJob, `คอมเมนต์ใน ${existingJob.id}: "${text.slice(0, 40)}${text.length > 40 ? "…" : ""}"`);
-    }
+    notifyAssignees("comment", existingJob, `${currentUser.name} คอมเมนต์ใน ${existingJob.id}: "${text.slice(0, 40)}${text.length > 40 ? "…" : ""}"`);
   }
 
   async function createJob(input?: Partial<Job>) {
@@ -1307,6 +1438,7 @@ export default function Page() {
               order_date: input?.orderDate ?? todayISO(),
               due_date: input?.dueDate ?? todayISO(),
               priority: input?.priority ?? "Normal",
+              is_express: input?.isExpress ?? false,
               status: "New Order",
               assigned_designer: teamIdByName(teamMembers, input?.assignedDesigner),
               assigned_production: teamIdByName(teamMembers, input?.assignedProduction),
@@ -1333,6 +1465,17 @@ export default function Page() {
           });
         }
         await appendAudit("created job", insertedJobNumber, "jobs", insertedJob.id);
+        notifyAssignees(
+          "assigned",
+          {
+            id: insertedJobNumber,
+            title: input?.title ?? "งานใหม่",
+            dbId: insertedJob.id,
+            assignedDesigner: input?.assignedDesigner ?? "Unassigned",
+            assignedProduction: input?.assignedProduction ?? "Unassigned"
+          },
+          `ได้รับมอบหมายงาน ${insertedJobNumber} – ${input?.title ?? "งานใหม่"}`
+        );
         await refreshWorkspaceData();
         setSelectedJobId(insertedJobNumber);
         setActiveView("Detail");
@@ -1403,9 +1546,7 @@ export default function Page() {
       );
     }
     setJobs((current) => [job, ...current]);
-    if (job.assignedDesigner === currentUser.name || job.assignedProduction === currentUser.name) {
-      pushNotif("assigned", job, `คุณได้รับมอบหมายงาน ${job.id} – ${job.title}`);
-    }
+    notifyAssignees("assigned", job, `ได้รับมอบหมายงาน ${job.id} – ${job.title}`);
     setSelectedJobId(job.id);
     setActiveView("Detail");
     void appendAudit("created job", job.id);
@@ -1914,7 +2055,7 @@ export default function Page() {
                   <button
                     onClick={() => {
                       setShowNotifPanel((prev) => !prev);
-                      setNotifications((current) => current.map((n) => ({ ...n, read: true })));
+                      markAllNotifsRead();
                     }}
                     className="relative inline-flex h-10 w-10 items-center justify-center rounded-2xl bg-white/70 text-k2-muted shadow-sm"
                     aria-label="การแจ้งเตือน"
@@ -1934,7 +2075,7 @@ export default function Page() {
                         <span className="text-sm font-bold">การแจ้งเตือน</span>
                         {notifications.length > 0 && (
                           <button
-                            onClick={() => setNotifications([])}
+                            onClick={clearAllNotifs}
                             className="text-xs font-semibold text-k2-muted hover:text-k2-ink"
                           >
                             ล้างทั้งหมด
