@@ -240,6 +240,7 @@ const roles: Role[] = ["Owner", "Manager", "Admin", "Designer", "Production Staf
 const jobTypes: JobType[] = ["DTG Shirt", "UV Print", "Laser Cut", "Signage", "3D Print", "Other"];
 const priorities: Priority[] = ["Normal", "Urgent", "Very Urgent", "Today"];
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const appTagline = "คุมงานผลิตครบในที่เดียว";
 
 const initialCompanyProfile: CompanyProfile = {
   name: "K2Smart",
@@ -1503,7 +1504,7 @@ export default function Page() {
           <div className="space-y-7">
             <div className="inline-flex items-center gap-2 rounded-full border border-white/70 bg-white/65 px-4 py-2 text-sm font-semibold shadow-sm backdrop-blur">
               <Sparkles className="h-4 w-4 text-violet-500" />
-              คุมงานผลิตครบในที่เดียว
+              {appTagline}
             </div>
             <div className="space-y-5">
               <KLogoLockup size="hero" />
@@ -1677,7 +1678,7 @@ export default function Page() {
               <div className="flex items-center gap-3">
                 <KLogoMark className="h-[5.25rem] w-[5.25rem] shrink-0 lg:hidden" />
                 <div>
-                  <p className="text-sm font-semibold text-k2-muted">พื้นที่ทำงานฝ่ายผลิต</p>
+                  <p className="text-sm font-semibold text-k2-muted">{appTagline}</p>
                   <h2 className="text-2xl font-semibold">{viewLabel[activeView] ?? activeView}</h2>
                 </div>
               </div>
