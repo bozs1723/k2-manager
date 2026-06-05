@@ -1,12 +1,13 @@
 "use client";
 
 import Image from "next/image";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import * as XLSX from "xlsx";
 import {
   AlertTriangle,
   BarChart3,
+  Bell,
   Building2,
   CalendarDays,
   CheckCircle2,
@@ -38,7 +39,7 @@ import {
 import type { LucideIcon } from "lucide-react";
 import { customers as initialCustomers, initialAuditLog, initialJobs, statuses, team as initialTeam } from "@/lib/mock-data";
 import { createSupabaseAuthWorker, isSupabaseConfigured, supabase } from "@/lib/supabase";
-import type { AuditEvent, Customer, Job, JobStatus, JobType, PaymentStatus, Priority, QuoteStatus, Role, TeamMember } from "@/lib/types";
+import type { AppNotification, AuditEvent, Customer, Job, JobStatus, JobType, PaymentStatus, Priority, QuoteStatus, Role, TeamMember } from "@/lib/types";
 
 type ImportedCustomer = Pick<Customer, "name" | "phone" | "lineId" | "email"> & {
   notes: string;
@@ -709,6 +710,9 @@ export default function Page() {
   const [selectedJobId, setSelectedJobId] = useState(initialJobs[0].id);
   const [query, setQuery] = useState("");
   const [draggedJobId, setDraggedJobId] = useState<string | null>(null);
+  const [notifications, setNotifications] = useState<AppNotification[]>([]);
+  const [showNotifPanel, setShowNotifPanel] = useState(false);
+  const notifPanelRef = useRef<HTMLDivElement>(null);
 
   const selectedJob = jobs.find((job) => job.id === selectedJobId) ?? jobs[0] ?? null;
   const currentRolePermissions = useMemo(
@@ -779,6 +783,32 @@ export default function Page() {
       window.localStorage.removeItem("k2-permission-matrix");
     }
   }, []);
+
+  // โหลด / บันทึก notification ตาม user ที่ login อยู่
+  useEffect(() => {
+    try {
+      const stored = window.localStorage.getItem(`k2-notifs-${currentUser.id}`);
+      setNotifications(stored ? (JSON.parse(stored) as AppNotification[]) : []);
+    } catch { setNotifications([]); }
+  }, [currentUser.id]);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(`k2-notifs-${currentUser.id}`, JSON.stringify(notifications));
+    } catch {}
+  }, [notifications, currentUser.id]);
+
+  // ปิด notification panel เมื่อคลิกนอกกล่อง
+  useEffect(() => {
+    if (!showNotifPanel) return;
+    function handleClickOutside(event: MouseEvent) {
+      if (notifPanelRef.current && !notifPanelRef.current.contains(event.target as Node)) {
+        setShowNotifPanel(false);
+      }
+    }
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, [showNotifPanel]);
 
   useEffect(() => {
     if (!isAuthed || !supabase) return;
@@ -970,6 +1000,21 @@ export default function Page() {
     setActiveView("Dashboard");
   }
 
+  function pushNotif(type: AppNotification["type"], job: Pick<Job, "id" | "title">, message: string) {
+    setNotifications((current) => [
+      {
+        id: crypto.randomUUID(),
+        type,
+        jobId: job.id,
+        jobTitle: job.title,
+        message,
+        at: new Date().toLocaleString("th-TH", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" }),
+        read: false
+      },
+      ...current
+    ].slice(0, 50));
+  }
+
   async function moveJob(jobId: string, nextStatus: JobStatus) {
     if (!can("move_status")) {
       setDataError("บทบาทนี้ยังไม่มีสิทธิ์ย้ายสถานะงาน");
@@ -1011,6 +1056,9 @@ export default function Page() {
       });
     }
     void appendAudit(`moved status to ${nextStatus}`, jobId, "jobs", existingJob.dbId);
+    if (existingJob.assignedDesigner === currentUser.name || existingJob.assignedProduction === currentUser.name) {
+      pushNotif("status_moved", existingJob, `งาน ${existingJob.id} ย้ายไป "${statusLabel[nextStatus]}" แล้ว`);
+    }
   }
 
   async function updatePayment(jobId: string, deposit: number) {
@@ -1074,6 +1122,9 @@ export default function Page() {
       }
     }
     void appendAudit("added comment", jobId, "jobs", existingJob.dbId);
+    if (existingJob.assignedDesigner === currentUser.name || existingJob.assignedProduction === currentUser.name) {
+      pushNotif("comment", existingJob, `คอมเมนต์ใน ${existingJob.id}: "${text.slice(0, 40)}${text.length > 40 ? "…" : ""}"`);
+    }
   }
 
   async function createJob(input?: Partial<Job>) {
@@ -1287,6 +1338,9 @@ export default function Page() {
       );
     }
     setJobs((current) => [job, ...current]);
+    if (job.assignedDesigner === currentUser.name || job.assignedProduction === currentUser.name) {
+      pushNotif("assigned", job, `คุณได้รับมอบหมายงาน ${job.id} – ${job.title}`);
+    }
     setSelectedJobId(job.id);
     setActiveView("Detail");
     void appendAudit("created job", job.id);
@@ -1770,6 +1824,63 @@ export default function Page() {
                     className="w-full min-w-0 bg-transparent text-sm outline-none sm:w-72"
                   />
                 </label>
+
+                {/* กระดิ่งแจ้งเตือน */}
+                <div ref={notifPanelRef} className="relative">
+                  <button
+                    onClick={() => {
+                      setShowNotifPanel((prev) => !prev);
+                      setNotifications((current) => current.map((n) => ({ ...n, read: true })));
+                    }}
+                    className="relative inline-flex h-10 w-10 items-center justify-center rounded-2xl bg-white/70 text-k2-muted shadow-sm"
+                    aria-label="การแจ้งเตือน"
+                  >
+                    <Bell className="h-4 w-4" />
+                    {notifications.some((n) => !n.read) && (
+                      <span className="absolute -right-1 -top-1 flex h-5 w-5 items-center justify-center rounded-full bg-rose-500 text-[10px] font-bold text-white">
+                        {Math.min(notifications.filter((n) => !n.read).length, 9)}
+                        {notifications.filter((n) => !n.read).length > 9 ? "+" : ""}
+                      </span>
+                    )}
+                  </button>
+
+                  {showNotifPanel && (
+                    <div className="absolute right-0 top-12 z-50 w-80 overflow-hidden rounded-[1.25rem] border border-white/80 bg-white/97 shadow-2xl backdrop-blur-xl">
+                      <div className="flex items-center justify-between border-b border-white/60 px-4 py-3">
+                        <span className="text-sm font-bold">การแจ้งเตือน</span>
+                        {notifications.length > 0 && (
+                          <button
+                            onClick={() => setNotifications([])}
+                            className="text-xs font-semibold text-k2-muted hover:text-k2-ink"
+                          >
+                            ล้างทั้งหมด
+                          </button>
+                        )}
+                      </div>
+                      <div className="max-h-96 overflow-y-auto">
+                        {notifications.length === 0 ? (
+                          <p className="px-4 py-8 text-center text-sm font-semibold text-k2-muted">ยังไม่มีการแจ้งเตือน</p>
+                        ) : (
+                          notifications.map((notif) => (
+                            <button
+                              key={notif.id}
+                              onClick={() => {
+                                setSelectedJobId(notif.jobId);
+                                setActiveView("Detail");
+                                setShowNotifPanel(false);
+                              }}
+                              className={`flex w-full flex-col gap-1 border-b border-white/40 px-4 py-3 text-left hover:bg-white/60 ${notif.read ? "opacity-55" : "bg-teal-50/60"}`}
+                            >
+                              <p className="text-sm font-semibold leading-snug">{notif.message}</p>
+                              <p className="text-xs text-k2-muted">{notif.at}</p>
+                            </button>
+                          ))
+                        )}
+                      </div>
+                    </div>
+                  )}
+                </div>
+
                 <button
                   onClick={() => setActiveView("Create Job")}
                   disabled={!can("create_job")}

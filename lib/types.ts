@@ -1,3 +1,13 @@
+export type AppNotification = {
+  id: string;
+  type: "assigned" | "status_moved" | "comment";
+  jobId: string;
+  jobTitle: string;
+  message: string;
+  at: string;
+  read: boolean;
+};
+
 export type Role =
   | "Owner"
   | "Manager"
