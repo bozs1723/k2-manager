@@ -53,7 +53,7 @@ create table public.company_settings (
   bank_name text,
   bank_account text,
   bank_account_name text,
-  quote_prefix text not null default 'QT',
+  quote_prefix text not null default 'WO',
   quote_terms text,
   updated_at timestamptz not null default now(),
   created_at timestamptz not null default now()

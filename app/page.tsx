@@ -249,6 +249,7 @@ const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}
 const appTagline = "คุมงานผลิตครบในที่เดียว";
 const internalAuthDomain = "k2smart.local";
 const usernamePattern = /^[a-z0-9][a-z0-9._-]{2,31}$/;
+const legacyQuotePrefix = "Q" + "T";
 
 function normalizeUsername(value: string) {
   return value.trim().toLowerCase().replace(/\s+/g, "-");
@@ -275,8 +276,8 @@ const initialCompanyProfile: CompanyProfile = {
   bankName: "Kasikorn Bank",
   bankAccount: "000-0-00000-0",
   bankAccountName: "บริษัท เคทู ไซน์ มีเดีย จำกัด",
-  quotePrefix: "QT",
-  quoteTerms: "ใบเสนอราคานี้มีอายุ 7 วัน และเริ่มผลิตหลังยืนยันแบบพร้อมชำระมัดจำ"
+  quotePrefix: "WO",
+  quoteTerms: "ใบสั่งงานนี้ใช้ยืนยันรายละเอียดการผลิต และเริ่มผลิตหลังลูกค้ายืนยันแบบพร้อมชำระมัดจำ"
 };
 
 const viewLabel: Record<string, string> = {
@@ -339,10 +340,10 @@ const paymentLabel: Record<PaymentStatus, string> = {
 };
 
 const quoteLabel: Record<QuoteStatus, string> = {
-  draft: "ร่างใบเสนอราคา",
-  sent: "ส่งให้ลูกค้าแล้ว",
-  approved: "อนุมัติแล้ว",
-  expired: "หมดอายุ"
+  draft: "ร่างใบสั่งงาน",
+  sent: "ส่งใบสั่งงานแล้ว",
+  approved: "อนุมัติใบสั่งงานแล้ว",
+  expired: "ยกเลิก / หมดอายุ"
 };
 
 const permissionLabel: Record<string, string> = {
@@ -357,7 +358,7 @@ const permissionLabel: Record<string, string> = {
   create_customer: "เพิ่มลูกค้า",
   edit_customer: "แก้ไขลูกค้า",
   delete_customer: "ลบลูกค้า",
-  export_quote: "ออกใบเสนอราคา",
+  export_quote: "ออกใบสั่งงาน",
   manage_users: "จัดการผู้ใช้",
   manage_permissions: "จัดการสิทธิ์",
   manage_company_settings: "ตั้งค่าบริษัท",
@@ -430,7 +431,7 @@ function getPaymentStatus(price: number, deposit: number): PaymentStatus {
 
 function quoteNumberFor(index: number, prefix: string) {
   const stamp = new Date().toISOString().slice(0, 10).replace(/-/g, "");
-  return `${prefix || "QT"}${stamp}${String(index).padStart(4, "0")}`;
+  return `${prefix || "WO"}${stamp}${String(index).padStart(4, "0")}`;
 }
 
 function nextSequentialNumber(values: string[], prefix: string, fallback = 1028) {
@@ -454,7 +455,7 @@ function jobNumberFor(existingJobs: Job[], offset = 0) {
 }
 
 function quoteNumberFromValues(values: string[], prefix: string, offset = 0) {
-  const safePrefix = prefix || "QT";
+  const safePrefix = prefix || "WO";
   const stamp = new Date().toISOString().slice(0, 10).replace(/-/g, "");
   const next = nextSequentialNumber(values, `${safePrefix}${stamp}`, 1) + offset;
   return quoteNumberFor(next, safePrefix);
@@ -551,8 +552,8 @@ function companyFromRow(row: SupabaseCompanyRow): CompanyProfile {
     bankName: row.bank_name ?? "",
     bankAccount: row.bank_account ?? "",
     bankAccountName: row.bank_account_name ?? "",
-    quotePrefix: row.quote_prefix,
-    quoteTerms: row.quote_terms ?? ""
+    quotePrefix: row.quote_prefix === legacyQuotePrefix ? "WO" : row.quote_prefix,
+    quoteTerms: row.quote_terms?.includes("เสนอราคา") ? initialCompanyProfile.quoteTerms : row.quote_terms ?? ""
   };
 }
 
@@ -2168,7 +2169,7 @@ function JobDetail({
   onMove: (jobId: string, status: JobStatus) => void;
 }) {
   const [comment, setComment] = useState("");
-  const quoteNumber = job.quoteNumber ?? quoteNumberFor(Number(job.id.replace(/\D/g, "").slice(-4)) || 1, companyProfile.quotePrefix);
+  const workOrderNumber = job.quoteNumber ?? quoteNumberFor(Number(job.id.replace(/\D/g, "").slice(-4)) || 1, companyProfile.quotePrefix);
   return (
     <div className="grid gap-4 xl:grid-cols-[1.15fr_0.85fr]">
       <section className="glass rounded-[1.5rem] p-5">
@@ -2310,14 +2311,14 @@ function JobDetail({
       <section className="glass rounded-[1.5rem] p-4 xl:col-span-2 md:p-6">
         <div className="mb-4 flex flex-col gap-2 md:flex-row md:items-end md:justify-between">
           <div>
-            <p className="text-sm font-bold uppercase tracking-wide text-k2-muted">Quotation Preview</p>
-            <h4 className="text-2xl font-black">ตัวอย่างใบเสนอราคาแบบเอกสารจริง</h4>
+            <p className="text-sm font-bold uppercase tracking-wide text-k2-muted">Work Order Preview</p>
+            <h4 className="text-2xl font-black">ตัวอย่างใบสั่งงานแบบเอกสารจริง</h4>
           </div>
           <span className="w-fit rounded-full bg-k2-peach px-3 py-1 text-xs font-bold text-amber-800">
             {quoteLabel[job.quoteStatus ?? "draft"]}
           </span>
         </div>
-        <QuoteDocumentPreview job={job} companyProfile={companyProfile} quoteNumber={quoteNumber} canSeeMoney={canSeeMoney} />
+        <QuoteDocumentPreview job={job} companyProfile={companyProfile} quoteNumber={workOrderNumber} canSeeMoney={canSeeMoney} />
       </section>
     </div>
   );
@@ -2357,13 +2358,13 @@ function QuoteDocumentPreview({
             </div>
           </div>
           <div className="pt-8">
-            <h3 className="mb-7 text-center text-3xl font-semibold">ใบเสนอราคา</h3>
+            <h3 className="mb-7 text-center text-3xl font-semibold">ใบสั่งงาน</h3>
             <div className="grid grid-cols-[110px_1fr] gap-y-2 leading-7">
               <span>เลขที่</span>
               <span>{quoteNumber}</span>
               <span>วันที่</span>
               <span>{job.orderDate}</span>
-              <span>ผู้ขาย</span>
+              <span>ผู้รับงาน</span>
               <span>{staffLabel(job.assignedDesigner)}</span>
             </div>
           </div>
@@ -2393,7 +2394,7 @@ function QuoteDocumentPreview({
               <td className="border border-slate-300 px-3 py-3 text-center">1</td>
               <td className="border border-slate-300 px-3 py-3 text-center text-slate-400">-</td>
               <td className="min-w-64 border border-slate-300 px-3 py-3 text-left">
-                <p className="font-bold">รหัสสินค้า :</p>
+                <p className="font-bold">รายละเอียดงาน :</p>
                 <p>{job.title}</p>
                 <p className="mt-1 text-sm text-slate-600">{job.description}</p>
               </td>
@@ -2441,7 +2442,7 @@ function QuoteDocumentPreview({
         </section>
 
         <section className="grid grid-cols-[1fr_260px_1fr] border-x border-b border-slate-300">
-          <SignatureBox title={`ในนาม ${job.companyName || job.customerName}`} label="ผู้สั่งซื้อสินค้า" />
+          <SignatureBox title={`ในนาม ${job.companyName || job.customerName}`} label="ผู้สั่งงาน" />
           <div className="grid place-items-center border-x border-slate-300 p-6">
             <Image src="/assets/k2sign-media-stamp.png" alt="K2sign media company stamp" width={150} height={150} className="h-32 w-32 object-contain" />
           </div>
@@ -2556,7 +2557,14 @@ function CreateJobView({
     price: 12000,
     deposit: 3000,
     internalNotes: "ยืนยันขนาดไฟล์อาร์ตก่อนเริ่มออกแบบ",
-    fileName: "customer-artwork.pdf"
+    fileName: "customer-artwork.pdf",
+    sourceChannel: "LINE",
+    fileStatus: "รอเช็กไฟล์",
+    workSize: "",
+    material: "",
+    colorSpec: "",
+    productionMethod: "",
+    deliveryMethod: "รับหน้าร้าน"
   });
 
   function setField<Key extends keyof typeof form>(key: Key, value: (typeof form)[Key]) {
@@ -2578,8 +2586,19 @@ function CreateJobView({
     <form
       onSubmit={(event) => {
         event.preventDefault();
+        const workOrderSpec = [
+          `ช่องทางรับงาน: ${form.sourceChannel || "-"}`,
+          `สถานะไฟล์: ${form.fileStatus || "-"}`,
+          `ขนาดงาน: ${form.workSize || "-"}`,
+          `วัสดุ: ${form.material || "-"}`,
+          `สี / สเปกสี: ${form.colorSpec || "-"}`,
+          `วิธีผลิต: ${form.productionMethod || "-"}`,
+          `วิธีรับ/จัดส่ง: ${form.deliveryMethod || "-"}`
+        ].join("\n");
         onCreate({
           ...form,
+          description: `${form.description}\n\nสเปกใบสั่งงาน:\n${workOrderSpec}`,
+          internalNotes: `${form.internalNotes}\n\nข้อมูลฝ่ายผลิต:\n${workOrderSpec}`,
           assignedDesigner: designerOptions.some((member) => member.name === form.assignedDesigner) ? form.assignedDesigner : defaultDesigner,
           assignedProduction: productionOptions.some((member) => member.name === form.assignedProduction) || form.assignedProduction === "Unassigned"
             ? form.assignedProduction
@@ -2713,10 +2732,59 @@ function CreateJobView({
         </div>
 
         <div className="mt-5 rounded-[1.35rem] border border-white/70 bg-white/45 p-4">
+          <div className="mb-4">
+            <h4 className="text-lg font-extrabold">สเปกใบสั่งงาน</h4>
+            <p className="text-sm font-semibold text-k2-muted">ข้อมูลที่ทีมออกแบบ ผลิต QC และแพ็กของต้องใช้ทำงานจริง</p>
+          </div>
+          <div className="grid gap-4 md:grid-cols-2">
+            <label className="space-y-2">
+              <span className="text-sm font-semibold text-k2-muted">ช่องทางรับงาน</span>
+              <select
+                value={form.sourceChannel}
+                onChange={(event) => setField("sourceChannel", event.target.value)}
+                className="w-full rounded-2xl border border-white/80 bg-white/80 px-4 py-3 outline-none"
+              >
+                {["หน้าร้าน", "LINE", "Facebook", "Sales", "ลูกค้าเก่า", "อื่น ๆ"].map((channel) => (
+                  <option key={channel}>{channel}</option>
+                ))}
+              </select>
+            </label>
+            <label className="space-y-2">
+              <span className="text-sm font-semibold text-k2-muted">สถานะไฟล์</span>
+              <select
+                value={form.fileStatus}
+                onChange={(event) => setField("fileStatus", event.target.value)}
+                className="w-full rounded-2xl border border-white/80 bg-white/80 px-4 py-3 outline-none"
+              >
+                {["ยังไม่มีไฟล์", "รอเช็กไฟล์", "รอแก้ไฟล์", "ไฟล์พร้อมออกแบบ", "ไฟล์พร้อมผลิต"].map((status) => (
+                  <option key={status}>{status}</option>
+                ))}
+              </select>
+            </label>
+            <TextField label="ขนาดงาน" value={form.workSize} onChange={(value) => setField("workSize", value)} />
+            <TextField label="วัสดุ" value={form.material} onChange={(value) => setField("material", value)} />
+            <TextField label="สี / สเปกสี" value={form.colorSpec} onChange={(value) => setField("colorSpec", value)} />
+            <TextField label="วิธีผลิต / เครื่องที่ใช้" value={form.productionMethod} onChange={(value) => setField("productionMethod", value)} />
+            <label className="space-y-2 md:col-span-2">
+              <span className="text-sm font-semibold text-k2-muted">วิธีรับ/จัดส่งสินค้า</span>
+              <select
+                value={form.deliveryMethod}
+                onChange={(event) => setField("deliveryMethod", event.target.value)}
+                className="w-full rounded-2xl border border-white/80 bg-white/80 px-4 py-3 outline-none"
+              >
+                {["รับหน้าร้าน", "Messenger", "Grab", "Kerry", "Flash", "ขนส่งอื่น ๆ"].map((method) => (
+                  <option key={method}>{method}</option>
+                ))}
+              </select>
+            </label>
+          </div>
+        </div>
+
+        <div className="mt-5 rounded-[1.35rem] border border-white/70 bg-white/45 p-4">
           <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
             <div>
               <h4 className="text-lg font-extrabold">ข้อมูลบริษัทและบัญชี</h4>
-              <p className="text-sm font-semibold text-k2-muted">ใช้เชื่อมกับใบเสนอราคา ใบเสร็จ และใบกำกับภาษี</p>
+              <p className="text-sm font-semibold text-k2-muted">ใช้เชื่อมกับใบสั่งงาน ใบเสร็จ และใบกำกับภาษี</p>
             </div>
             <label className="inline-flex w-fit items-center gap-2 rounded-full bg-white/70 px-3 py-2 text-sm font-extrabold text-k2-ink">
               <input
@@ -2997,7 +3065,7 @@ function SettingsView({
           <div>
             <p className="text-sm font-semibold text-k2-muted">Accounting profile</p>
             <h3 className="text-2xl font-semibold">ข้อมูลบริษัทเราและเอกสารบัญชี</h3>
-            <p className="mt-2 text-sm font-semibold text-k2-muted">ใช้เป็นข้อมูลผู้ออกใบเสนอราคา ใบเสร็จ และใบกำกับภาษี</p>
+            <p className="mt-2 text-sm font-semibold text-k2-muted">ใช้เป็นข้อมูลผู้ออกใบสั่งงาน ใบเสร็จ และใบกำกับภาษี</p>
           </div>
           <button
             type="button"
@@ -3016,12 +3084,12 @@ function SettingsView({
           <input value={companyDraft.branch} onChange={(event) => setCompanyDraft((current) => ({ ...current, branch: event.target.value }))} placeholder="สาขา" className="rounded-2xl border border-white/80 bg-white/80 px-4 py-3 text-sm font-semibold outline-none" />
           <input value={companyDraft.phone} onChange={(event) => setCompanyDraft((current) => ({ ...current, phone: event.target.value }))} placeholder="เบอร์บริษัท" className="rounded-2xl border border-white/80 bg-white/80 px-4 py-3 text-sm font-semibold outline-none" />
           <input value={companyDraft.email} onChange={(event) => setCompanyDraft((current) => ({ ...current, email: event.target.value }))} placeholder="อีเมลบริษัท" className="rounded-2xl border border-white/80 bg-white/80 px-4 py-3 text-sm font-semibold outline-none" />
-          <input value={companyDraft.quotePrefix} onChange={(event) => setCompanyDraft((current) => ({ ...current, quotePrefix: event.target.value }))} placeholder="Prefix ใบเสนอราคา เช่น QT" className="rounded-2xl border border-white/80 bg-white/80 px-4 py-3 text-sm font-semibold outline-none" />
+          <input value={companyDraft.quotePrefix} onChange={(event) => setCompanyDraft((current) => ({ ...current, quotePrefix: event.target.value }))} placeholder="Prefix ใบสั่งงาน เช่น WO" className="rounded-2xl border border-white/80 bg-white/80 px-4 py-3 text-sm font-semibold outline-none" />
           <input value={companyDraft.bankName} onChange={(event) => setCompanyDraft((current) => ({ ...current, bankName: event.target.value }))} placeholder="ธนาคาร" className="rounded-2xl border border-white/80 bg-white/80 px-4 py-3 text-sm font-semibold outline-none" />
           <input value={companyDraft.bankAccount} onChange={(event) => setCompanyDraft((current) => ({ ...current, bankAccount: event.target.value }))} placeholder="เลขบัญชี" className="rounded-2xl border border-white/80 bg-white/80 px-4 py-3 text-sm font-semibold outline-none" />
           <input value={companyDraft.bankAccountName} onChange={(event) => setCompanyDraft((current) => ({ ...current, bankAccountName: event.target.value }))} placeholder="ชื่อบัญชี" className="rounded-2xl border border-white/80 bg-white/80 px-4 py-3 text-sm font-semibold outline-none" />
           <textarea value={companyDraft.address} onChange={(event) => setCompanyDraft((current) => ({ ...current, address: event.target.value }))} placeholder="ที่อยู่บริษัท" className="min-h-24 rounded-2xl border border-white/80 bg-white/80 px-4 py-3 text-sm font-semibold outline-none md:col-span-2" />
-          <textarea value={companyDraft.quoteTerms} onChange={(event) => setCompanyDraft((current) => ({ ...current, quoteTerms: event.target.value }))} placeholder="เงื่อนไขใบเสนอราคา" className="min-h-24 rounded-2xl border border-white/80 bg-white/80 px-4 py-3 text-sm font-semibold outline-none md:col-span-2" />
+          <textarea value={companyDraft.quoteTerms} onChange={(event) => setCompanyDraft((current) => ({ ...current, quoteTerms: event.target.value }))} placeholder="เงื่อนไขใบสั่งงาน" className="min-h-24 rounded-2xl border border-white/80 bg-white/80 px-4 py-3 text-sm font-semibold outline-none md:col-span-2" />
         </div>
       </section>
       <section className="glass rounded-[1.5rem] p-5">

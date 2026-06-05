@@ -73,7 +73,7 @@ create table if not exists public.company_settings (
   bank_name text,
   bank_account text,
   bank_account_name text,
-  quote_prefix text not null default 'QT',
+  quote_prefix text not null default 'WO',
   quote_terms text,
   updated_at timestamptz not null default now(),
   created_at timestamptz not null default now()
@@ -89,7 +89,7 @@ alter table public.company_settings add column if not exists email text;
 alter table public.company_settings add column if not exists bank_name text;
 alter table public.company_settings add column if not exists bank_account text;
 alter table public.company_settings add column if not exists bank_account_name text;
-alter table public.company_settings add column if not exists quote_prefix text default 'QT';
+alter table public.company_settings add column if not exists quote_prefix text default 'WO';
 alter table public.company_settings add column if not exists quote_terms text;
 alter table public.company_settings add column if not exists updated_at timestamptz not null default now();
 alter table public.company_settings add column if not exists created_at timestamptz not null default now();
@@ -486,6 +486,6 @@ select
   'Kasikorn Bank',
   '000-0-00000-0',
   'บริษัท เคทู ไซน์ มีเดีย จำกัด',
-  'QT',
-  'ใบเสนอราคานี้มีอายุ 7 วัน และเริ่มผลิตหลังยืนยันแบบพร้อมชำระมัดจำ'
+  'WO',
+  'ใบสั่งงานนี้ใช้ยืนยันรายละเอียดการผลิต และเริ่มผลิตหลังลูกค้ายืนยันแบบพร้อมชำระมัดจำ'
 where not exists (select 1 from public.company_settings);
