@@ -423,6 +423,16 @@ function todayISO() {
   return new Date().toISOString().slice(0, 10);
 }
 
+// ระยะเวลาผลิตเริ่มต้น (วัน) ใช้ตั้งกำหนดส่งล่วงหน้าจากวันรับงาน
+const DEFAULT_LEAD_TIME_DAYS = 7;
+
+function addDaysISO(isoDate: string, days: number) {
+  const base = new Date(`${isoDate}T00:00:00`);
+  if (Number.isNaN(base.getTime())) return isoDate;
+  base.setDate(base.getDate() + days);
+  return base.toISOString().slice(0, 10);
+}
+
 function getPaymentStatus(price: number, deposit: number): PaymentStatus {
   if (deposit <= 0) return "unpaid";
   if (deposit >= price) return "paid";
@@ -1741,7 +1751,7 @@ export default function Page() {
         </aside>
 
         <section className="min-w-0 flex-1">
-          <header className="glass sticky top-3 z-30 mb-4 rounded-[1.5rem] p-3">
+          <header className="glass glass-solid sticky top-3 z-30 mb-4 rounded-[1.5rem] p-3">
             <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
               <div className="flex items-center gap-3">
                 <KLogoMark className="h-[5.25rem] w-[5.25rem] shrink-0 lg:hidden" />
@@ -2514,50 +2524,35 @@ function CreateJobView({
   teamMembers: TeamMember[];
   onCreate: (job: Partial<Job>) => void;
 }) {
-  const defaultCustomer = customers[0] ?? {
-    id: "new",
-    name: "",
+  const designerOptions = useMemo(() => teamMembers.filter((member) => ["Designer", "Admin", "Owner"].includes(member.role)), [teamMembers]);
+  const productionOptions = useMemo(() => teamMembers.filter((member) => ["Production Staff", "Admin", "Owner"].includes(member.role)), [teamMembers]);
+  const defaultDesigner = designerOptions[0]?.name ?? "Unassigned";
+  const defaultProduction = productionOptions[0]?.name ?? "Unassigned";
+  // ฟอร์มสร้างงานเริ่มจากค่าว่างเสมอ เพื่อไม่ให้ข้อมูลจากงานก่อนหน้าค้างมาทำให้สร้างออเดอร์ผิด/ซ้ำ
+  const [form, setForm] = useState({
+    customerId: "new",
+    customerName: "",
     phone: "",
     lineId: "",
-    email: "",
     companyName: "",
     taxId: "",
     branch: "สำนักงานใหญ่",
     billingAddress: "",
     accountingEmail: "",
     requiresInvoice: false,
-    totalOrders: 0,
-    lifetimeValue: 0,
-    lastOrderDate: "-"
-  };
-  const designerOptions = useMemo(() => teamMembers.filter((member) => ["Designer", "Admin", "Owner"].includes(member.role)), [teamMembers]);
-  const productionOptions = useMemo(() => teamMembers.filter((member) => ["Production Staff", "Admin", "Owner"].includes(member.role)), [teamMembers]);
-  const defaultDesigner = designerOptions[0]?.name ?? "Unassigned";
-  const defaultProduction = productionOptions[0]?.name ?? "Unassigned";
-  const [form, setForm] = useState({
-    customerId: defaultCustomer.id === "new" ? "new" : defaultCustomer.id,
-    customerName: defaultCustomer.name,
-    phone: defaultCustomer.phone,
-    lineId: defaultCustomer.lineId,
-    companyName: defaultCustomer.companyName ?? "",
-    taxId: defaultCustomer.taxId ?? "",
-    branch: defaultCustomer.branch ?? "สำนักงานใหญ่",
-    billingAddress: defaultCustomer.billingAddress ?? "",
-    accountingEmail: defaultCustomer.accountingEmail ?? defaultCustomer.email,
-    requiresInvoice: defaultCustomer.requiresInvoice ?? false,
-    title: "งานสินค้าใหม่",
+    title: "",
     type: "DTG Shirt" as JobType,
-    description: "รายละเอียดงานพร้อมผลิต สีวัสดุ ตำแหน่งพิมพ์ จำนวน และสิ่งที่ลูกค้าคาดหวัง",
-    quantity: 24,
+    description: "",
+    quantity: 1,
     orderDate: todayISO(),
-    dueDate: todayISO(),
+    dueDate: addDaysISO(todayISO(), DEFAULT_LEAD_TIME_DAYS),
     priority: "Normal" as Priority,
     assignedDesigner: defaultDesigner,
     assignedProduction: defaultProduction,
-    price: 12000,
-    deposit: 3000,
-    internalNotes: "ยืนยันขนาดไฟล์อาร์ตก่อนเริ่มออกแบบ",
-    fileName: "customer-artwork.pdf",
+    price: 0,
+    deposit: 0,
+    internalNotes: "",
+    fileName: "",
     sourceChannel: "LINE",
     fileStatus: "รอเช็กไฟล์",
     workSize: "",
@@ -2699,7 +2694,22 @@ function CreateJobView({
             </select>
           </label>
           <NumberField label="จำนวน" value={form.quantity} onChange={(value) => setField("quantity", value)} />
-          <TextField label="วันที่รับงาน" type="date" value={form.orderDate} onChange={(value) => setField("orderDate", value)} />
+          <TextField
+            label="วันที่รับงาน"
+            type="date"
+            value={form.orderDate}
+            onChange={(value) =>
+              setForm((current) => ({
+                ...current,
+                orderDate: value,
+                // ขยับกำหนดส่งตามวันรับงาน + ระยะเวลาผลิต เว้นแต่ผู้ใช้ตั้งกำหนดส่งเองไว้แล้ว
+                dueDate:
+                  current.dueDate === addDaysISO(current.orderDate, DEFAULT_LEAD_TIME_DAYS)
+                    ? addDaysISO(value, DEFAULT_LEAD_TIME_DAYS)
+                    : current.dueDate
+              }))
+            }
+          />
           <TextField label="กำหนดส่ง" type="date" value={form.dueDate} onChange={(value) => setField("dueDate", value)} />
           <label className="space-y-2">
             <span className="text-sm font-semibold text-k2-muted">ความเร่งด่วน</span>
@@ -2841,12 +2851,6 @@ function CreateJobView({
           <button className="mt-5 w-full rounded-2xl bg-k2-ink px-5 py-4 font-semibold text-white shadow-lg shadow-slate-900/15">
             สร้างงาน
           </button>
-        </section>
-        <section className="glass rounded-[1.5rem] p-5">
-          <h4 className="text-xl font-semibold">หลักของ MVP</h4>
-          <p className="mt-3 leading-7 text-k2-muted">
-            เวอร์ชันแรกควรเน้นรับงานให้เสถียร ลากสถานะได้ มอบหมายคนรับผิดชอบ เห็นยอดชำระ และมีประวัติการแก้ไขครบ
-          </p>
         </section>
       </aside>
     </form>
@@ -3078,18 +3082,54 @@ function SettingsView({
           </button>
         </div>
         <div className="mt-5 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-          <input value={companyDraft.name} onChange={(event) => setCompanyDraft((current) => ({ ...current, name: event.target.value }))} placeholder="ชื่อแบรนด์" className="rounded-2xl border border-white/80 bg-white/80 px-4 py-3 text-sm font-semibold outline-none" />
-          <input value={companyDraft.legalName} onChange={(event) => setCompanyDraft((current) => ({ ...current, legalName: event.target.value }))} placeholder="ชื่อบริษัทตามกฎหมาย" className="rounded-2xl border border-white/80 bg-white/80 px-4 py-3 text-sm font-semibold outline-none" />
-          <input value={companyDraft.taxId} onChange={(event) => setCompanyDraft((current) => ({ ...current, taxId: event.target.value }))} placeholder="เลขผู้เสียภาษีบริษัทเรา" className="rounded-2xl border border-white/80 bg-white/80 px-4 py-3 text-sm font-semibold outline-none" />
-          <input value={companyDraft.branch} onChange={(event) => setCompanyDraft((current) => ({ ...current, branch: event.target.value }))} placeholder="สาขา" className="rounded-2xl border border-white/80 bg-white/80 px-4 py-3 text-sm font-semibold outline-none" />
-          <input value={companyDraft.phone} onChange={(event) => setCompanyDraft((current) => ({ ...current, phone: event.target.value }))} placeholder="เบอร์บริษัท" className="rounded-2xl border border-white/80 bg-white/80 px-4 py-3 text-sm font-semibold outline-none" />
-          <input value={companyDraft.email} onChange={(event) => setCompanyDraft((current) => ({ ...current, email: event.target.value }))} placeholder="อีเมลบริษัท" className="rounded-2xl border border-white/80 bg-white/80 px-4 py-3 text-sm font-semibold outline-none" />
-          <input value={companyDraft.quotePrefix} onChange={(event) => setCompanyDraft((current) => ({ ...current, quotePrefix: event.target.value }))} placeholder="Prefix ใบสั่งงาน เช่น WO" className="rounded-2xl border border-white/80 bg-white/80 px-4 py-3 text-sm font-semibold outline-none" />
-          <input value={companyDraft.bankName} onChange={(event) => setCompanyDraft((current) => ({ ...current, bankName: event.target.value }))} placeholder="ธนาคาร" className="rounded-2xl border border-white/80 bg-white/80 px-4 py-3 text-sm font-semibold outline-none" />
-          <input value={companyDraft.bankAccount} onChange={(event) => setCompanyDraft((current) => ({ ...current, bankAccount: event.target.value }))} placeholder="เลขบัญชี" className="rounded-2xl border border-white/80 bg-white/80 px-4 py-3 text-sm font-semibold outline-none" />
-          <input value={companyDraft.bankAccountName} onChange={(event) => setCompanyDraft((current) => ({ ...current, bankAccountName: event.target.value }))} placeholder="ชื่อบัญชี" className="rounded-2xl border border-white/80 bg-white/80 px-4 py-3 text-sm font-semibold outline-none" />
-          <textarea value={companyDraft.address} onChange={(event) => setCompanyDraft((current) => ({ ...current, address: event.target.value }))} placeholder="ที่อยู่บริษัท" className="min-h-24 rounded-2xl border border-white/80 bg-white/80 px-4 py-3 text-sm font-semibold outline-none md:col-span-2" />
-          <textarea value={companyDraft.quoteTerms} onChange={(event) => setCompanyDraft((current) => ({ ...current, quoteTerms: event.target.value }))} placeholder="เงื่อนไขใบสั่งงาน" className="min-h-24 rounded-2xl border border-white/80 bg-white/80 px-4 py-3 text-sm font-semibold outline-none md:col-span-2" />
+          <label className="space-y-2">
+            <span className="text-sm font-semibold text-k2-muted">ชื่อแบรนด์</span>
+            <input value={companyDraft.name} onChange={(event) => setCompanyDraft((current) => ({ ...current, name: event.target.value }))} placeholder="ชื่อแบรนด์" className="w-full rounded-2xl border border-white/80 bg-white/80 px-4 py-3 text-sm font-semibold outline-none" />
+          </label>
+          <label className="space-y-2">
+            <span className="text-sm font-semibold text-k2-muted">ชื่อบริษัทตามกฎหมาย</span>
+            <input value={companyDraft.legalName} onChange={(event) => setCompanyDraft((current) => ({ ...current, legalName: event.target.value }))} placeholder="ชื่อบริษัทตามกฎหมาย" className="w-full rounded-2xl border border-white/80 bg-white/80 px-4 py-3 text-sm font-semibold outline-none" />
+          </label>
+          <label className="space-y-2">
+            <span className="text-sm font-semibold text-k2-muted">เลขผู้เสียภาษี (บริษัทเรา)</span>
+            <input value={companyDraft.taxId} onChange={(event) => setCompanyDraft((current) => ({ ...current, taxId: event.target.value }))} placeholder="เลขผู้เสียภาษีบริษัทเรา" className="w-full rounded-2xl border border-white/80 bg-white/80 px-4 py-3 text-sm font-semibold outline-none" />
+          </label>
+          <label className="space-y-2">
+            <span className="text-sm font-semibold text-k2-muted">สาขา</span>
+            <input value={companyDraft.branch} onChange={(event) => setCompanyDraft((current) => ({ ...current, branch: event.target.value }))} placeholder="สาขา" className="w-full rounded-2xl border border-white/80 bg-white/80 px-4 py-3 text-sm font-semibold outline-none" />
+          </label>
+          <label className="space-y-2">
+            <span className="text-sm font-semibold text-k2-muted">เบอร์บริษัท</span>
+            <input value={companyDraft.phone} onChange={(event) => setCompanyDraft((current) => ({ ...current, phone: event.target.value }))} placeholder="เบอร์บริษัท" className="w-full rounded-2xl border border-white/80 bg-white/80 px-4 py-3 text-sm font-semibold outline-none" />
+          </label>
+          <label className="space-y-2">
+            <span className="text-sm font-semibold text-k2-muted">อีเมลบริษัท</span>
+            <input value={companyDraft.email} onChange={(event) => setCompanyDraft((current) => ({ ...current, email: event.target.value }))} placeholder="อีเมลบริษัท" className="w-full rounded-2xl border border-white/80 bg-white/80 px-4 py-3 text-sm font-semibold outline-none" />
+          </label>
+          <label className="space-y-2">
+            <span className="text-sm font-semibold text-k2-muted">Prefix ใบสั่งงาน</span>
+            <input value={companyDraft.quotePrefix} onChange={(event) => setCompanyDraft((current) => ({ ...current, quotePrefix: event.target.value }))} placeholder="Prefix ใบสั่งงาน เช่น WO" className="w-full rounded-2xl border border-white/80 bg-white/80 px-4 py-3 text-sm font-semibold outline-none" />
+          </label>
+          <label className="space-y-2">
+            <span className="text-sm font-semibold text-k2-muted">ธนาคาร</span>
+            <input value={companyDraft.bankName} onChange={(event) => setCompanyDraft((current) => ({ ...current, bankName: event.target.value }))} placeholder="ธนาคาร" className="w-full rounded-2xl border border-white/80 bg-white/80 px-4 py-3 text-sm font-semibold outline-none" />
+          </label>
+          <label className="space-y-2">
+            <span className="text-sm font-semibold text-k2-muted">เลขบัญชี</span>
+            <input value={companyDraft.bankAccount} onChange={(event) => setCompanyDraft((current) => ({ ...current, bankAccount: event.target.value }))} placeholder="เลขบัญชี" className="w-full rounded-2xl border border-white/80 bg-white/80 px-4 py-3 text-sm font-semibold outline-none" />
+          </label>
+          <label className="space-y-2">
+            <span className="text-sm font-semibold text-k2-muted">ชื่อบัญชี</span>
+            <input value={companyDraft.bankAccountName} onChange={(event) => setCompanyDraft((current) => ({ ...current, bankAccountName: event.target.value }))} placeholder="ชื่อบัญชี" className="w-full rounded-2xl border border-white/80 bg-white/80 px-4 py-3 text-sm font-semibold outline-none" />
+          </label>
+          <label className="space-y-2 md:col-span-2">
+            <span className="text-sm font-semibold text-k2-muted">ที่อยู่บริษัท</span>
+            <textarea value={companyDraft.address} onChange={(event) => setCompanyDraft((current) => ({ ...current, address: event.target.value }))} placeholder="ที่อยู่บริษัท" className="min-h-24 w-full rounded-2xl border border-white/80 bg-white/80 px-4 py-3 text-sm font-semibold outline-none" />
+          </label>
+          <label className="space-y-2 md:col-span-2">
+            <span className="text-sm font-semibold text-k2-muted">เงื่อนไขใบสั่งงาน</span>
+            <textarea value={companyDraft.quoteTerms} onChange={(event) => setCompanyDraft((current) => ({ ...current, quoteTerms: event.target.value }))} placeholder="เงื่อนไขใบสั่งงาน" className="min-h-24 w-full rounded-2xl border border-white/80 bg-white/80 px-4 py-3 text-sm font-semibold outline-none" />
+          </label>
         </div>
       </section>
       <section className="glass rounded-[1.5rem] p-5">

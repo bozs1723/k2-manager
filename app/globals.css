@@ -154,6 +154,12 @@ button:focus-visible {
   backdrop-filter: blur(26px);
 }
 
+/* แถบหัวที่ sticky ต้องทึบเกือบเต็มเพื่อไม่ให้การ์ดในบอร์ดด้านล่างทะลุขึ้นมาเวลาเลื่อน */
+.glass-solid {
+  background: rgba(255, 255, 255, 0.97);
+  backdrop-filter: blur(26px) saturate(1.2);
+}
+
 .bg-k2-ink {
   background: linear-gradient(135deg, #4fc2c9 0%, #b3dfde 52%, #18aeb6 100%) !important;
 }
