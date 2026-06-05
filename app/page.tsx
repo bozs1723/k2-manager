@@ -1778,6 +1778,26 @@ export default function Page() {
     void appendAudit("removed customer", customer.name, "customers", customerId);
   }
 
+  async function removeJob(jobId: string) {
+    if (!can("delete_job")) {
+      setDataError("บทบาทนี้ยังไม่มีสิทธิ์ลบงาน");
+      return;
+    }
+    const existingJob = jobs.find((job) => job.id === jobId);
+    if (!existingJob) return;
+    if (supabase && existingJob.dbId && uuidPattern.test(currentUser.id)) {
+      const { error } = await supabase.from("jobs").delete().eq("id", existingJob.dbId);
+      if (error) {
+        setDataError(error.message);
+        return;
+      }
+    }
+    setJobs((current) => current.filter((job) => job.id !== jobId));
+    setSelectedJobId((current) => (current === jobId ? "" : current));
+    setActiveView("Dashboard");
+    void appendAudit("removed job", jobId, "jobs", existingJob.dbId);
+  }
+
   async function saveCompanyProfile(profile: CompanyProfile) {
     if (!can("manage_company_settings")) {
       setDataError("บทบาทนี้ยังไม่มีสิทธิ์ตั้งค่าบริษัท");
@@ -2244,7 +2264,7 @@ export default function Page() {
             {activeView === "Detail" && (
               <motion.div key="detail" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}>
                 {selectedJob ? (
-                  <JobDetail job={selectedJob} companyProfile={companyProfile} canSeeMoney={canSeeMoney} onPayment={updatePayment} onComment={addComment} onMove={moveJob} />
+                  <JobDetail job={selectedJob} companyProfile={companyProfile} canSeeMoney={canSeeMoney} canDeleteJob={can("delete_job")} onPayment={updatePayment} onComment={addComment} onMove={moveJob} onDelete={removeJob} />
                 ) : (
                   <EmptyState title="ยังไม่มีงานในระบบ" text="เริ่มจากสร้างลูกค้าและสร้างงานแรกได้เลย" action={() => setActiveView("Create Job")} />
                 )}
@@ -2564,16 +2584,20 @@ function JobDetail({
   job,
   companyProfile,
   canSeeMoney,
+  canDeleteJob,
   onPayment,
   onComment,
-  onMove
+  onMove,
+  onDelete
 }: {
   job: Job;
   companyProfile: CompanyProfile;
   canSeeMoney: boolean;
+  canDeleteJob: boolean;
   onPayment: (jobId: string, deposit: number) => void;
   onComment: (jobId: string, text: string) => void;
   onMove: (jobId: string, status: JobStatus) => void;
+  onDelete: (jobId: string) => void;
 }) {
   const [comment, setComment] = useState("");
   const workOrderNumber = job.quoteNumber ?? quoteNumberFor(Number(job.id.replace(/\D/g, "").slice(-4)) || 1, companyProfile.quotePrefix);
@@ -2601,15 +2625,29 @@ function JobDetail({
             <h3 className="text-3xl font-semibold">{job.title}</h3>
             <p className="mt-2 text-k2-muted">{job.id} - {jobTypeLabel[job.type]} - {job.quantity} ชิ้น</p>
           </div>
-          <select
-            value={job.status}
-            onChange={(event) => onMove(job.id, event.target.value as JobStatus)}
-            className="rounded-2xl border border-white/80 bg-white/80 px-4 py-3 text-sm font-semibold outline-none"
-          >
-            {statuses.map((status) => (
-              <option key={status} value={status}>{statusLabel[status]}</option>
-            ))}
-          </select>
+          <div className="flex items-center gap-2">
+            <select
+              value={job.status}
+              onChange={(event) => onMove(job.id, event.target.value as JobStatus)}
+              className="rounded-2xl border border-white/80 bg-white/80 px-4 py-3 text-sm font-semibold outline-none"
+            >
+              {statuses.map((status) => (
+                <option key={status} value={status}>{statusLabel[status]}</option>
+              ))}
+            </select>
+            {canDeleteJob ? (
+              <button
+                type="button"
+                onClick={() => {
+                  if (window.confirm(`ลบงาน ${job.id} – "${job.title}" ออกจากระบบ?\nการลบนี้ย้อนกลับไม่ได้`)) onDelete(job.id);
+                }}
+                className="grid h-12 w-12 shrink-0 place-items-center rounded-2xl bg-rose-50 text-rose-600"
+                title="ลบงานนี้"
+              >
+                <Trash2 className="h-4 w-4" />
+              </button>
+            ) : null}
+          </div>
         </div>
         <p className="mt-5 rounded-3xl bg-white/60 p-5 leading-8 text-k2-muted">{job.description}</p>
 
