@@ -1503,7 +1503,7 @@ export default function Page() {
           <div className="space-y-7">
             <div className="inline-flex items-center gap-2 rounded-full border border-white/70 bg-white/65 px-4 py-2 text-sm font-semibold shadow-sm backdrop-blur">
               <Sparkles className="h-4 w-4 text-violet-500" />
-              ระบบคิวงานพร้อมต่อ Supabase
+              คุมงานผลิตครบในที่เดียว
             </div>
             <div className="space-y-5">
               <KLogoLockup size="hero" />
