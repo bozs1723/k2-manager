@@ -2203,6 +2203,7 @@ export default function Page() {
                 <CustomersView
                   customers={customerRecords}
                   jobs={jobs}
+                  canDelete={can("delete_customer")}
                   onAddCustomer={addCustomer}
                   onUpdateCustomer={updateCustomer}
                   onRemoveCustomer={removeCustomer}
@@ -3082,9 +3083,30 @@ function CreateJobView({
   });
 
   const [formError, setFormError] = useState("");
+  const [lookupMsg, setLookupMsg] = useState("");
 
   function setField<Key extends keyof typeof form>(key: Key, value: (typeof form)[Key]) {
     setForm((current) => ({ ...current, [key]: value }));
+  }
+
+  // ค้นลูกค้าจากเบอร์โทรที่กรอก แล้วดึงข้อมูลทั้งหมดมาเติมในฟอร์ม
+  function lookupByPhone() {
+    const digits = form.phone.replace(/\D/g, "");
+    if (digits.length < 3) {
+      setLookupMsg("กรอกเบอร์อย่างน้อย 3 ตัวก่อนค้นหา");
+      return;
+    }
+    const found = customers.filter((customer) => customer.phone.replace(/\D/g, "").includes(digits));
+    if (found.length === 0) {
+      setLookupMsg("ไม่พบลูกค้าจากเบอร์นี้ — กรอกชื่อเพื่อสร้างใหม่ได้เลย");
+      return;
+    }
+    pickCustomer(found[0]);
+    setLookupMsg(
+      found.length > 1
+        ? `พบ ${found.length} ราย ดึงรายแรกมาให้ (${found[0].name}) ถ้าไม่ตรงใช้ช่องค้นหาด้านบน`
+        : `ดึงข้อมูล "${found[0].name}" มาเรียบร้อย`
+    );
   }
 
   function pickNewCustomer() {
@@ -3203,7 +3225,29 @@ function CreateJobView({
               ))}
             </select>
           </label>
-          <TextField label="เบอร์โทร" value={form.phone} onChange={(value) => setField("phone", value)} />
+          <label className="space-y-2">
+            <span className="text-sm font-semibold text-k2-muted">เบอร์โทร</span>
+            <div className="flex gap-2">
+              <input
+                value={form.phone}
+                onChange={(event) => {
+                  setField("phone", event.target.value);
+                  if (lookupMsg) setLookupMsg("");
+                }}
+                inputMode="tel"
+                className="w-full rounded-2xl border border-white/80 bg-white/80 px-4 py-3 outline-none"
+              />
+              <button
+                type="button"
+                onClick={lookupByPhone}
+                className="inline-flex shrink-0 items-center gap-1 rounded-2xl bg-k2-mint px-3 py-3 text-sm font-bold text-k2-ink"
+                title="ค้นลูกค้าจากเบอร์นี้แล้วดึงข้อมูลมาเติม"
+              >
+                <Search className="h-4 w-4" /> ดึงข้อมูล
+              </button>
+            </div>
+            {lookupMsg ? <span className="block text-xs font-semibold text-k2-muted">{lookupMsg}</span> : null}
+          </label>
           <TextField label="LINE ID" value={form.lineId} onChange={(value) => setField("lineId", value)} />
           <TextField label="ชื่องาน" value={form.title} onChange={(value) => setField("title", value)} />
           <label className="space-y-2">
@@ -3974,12 +4018,14 @@ function CalendarView({ jobs, onSelect }: { jobs: Job[]; onSelect: (id: string) 
 function CustomersView({
   customers,
   jobs,
+  canDelete,
   onAddCustomer,
   onUpdateCustomer,
   onRemoveCustomer
 }: {
   customers: Customer[];
   jobs: Job[];
+  canDelete: boolean;
   onAddCustomer: (customer: Omit<Customer, "id" | "totalOrders" | "lifetimeValue" | "lastOrderDate">) => void;
   onUpdateCustomer: (customerId: string, updates: Pick<Customer, "name" | "phone" | "lineId" | "email" | "companyName" | "taxId" | "branch" | "billingAddress" | "accountingEmail" | "requiresInvoice">) => void;
   onRemoveCustomer: (customerId: string) => void;
@@ -4382,15 +4428,19 @@ function CustomersView({
                     <Pencil className="h-4 w-4" />
                   </button>
                 )}
-                <button
-                  type="button"
-                  onClick={() => onRemoveCustomer(customer.id)}
-                  disabled={customerJobs.length > 0}
-                  className="grid h-11 w-11 place-items-center rounded-2xl bg-rose-50 text-rose-600 disabled:opacity-35"
-                  title={customerJobs.length > 0 ? "ลบไม่ได้เพราะมีประวัติงาน" : "ลบลูกค้า"}
-                >
-                  <Trash2 className="h-4 w-4" />
-                </button>
+                {canDelete ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (window.confirm(`ลบลูกค้า "${customer.name}" ออกจากระบบ?`)) onRemoveCustomer(customer.id);
+                    }}
+                    disabled={customerJobs.length > 0}
+                    className="grid h-11 w-11 place-items-center rounded-2xl bg-rose-50 text-rose-600 disabled:opacity-35"
+                    title={customerJobs.length > 0 ? "ลบไม่ได้เพราะมีประวัติงาน" : "ลบลูกค้า"}
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </button>
+                ) : null}
               </div>
             </div>
             <div className="mt-5 grid grid-cols-3 gap-3">
