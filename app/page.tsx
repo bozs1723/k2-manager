@@ -275,6 +275,22 @@ function authEmailFromLogin(value: string) {
   return login.includes("@") ? login : `${normalizeUsername(login)}@${internalAuthDomain}`;
 }
 
+const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+// แปลงค่าที่กรอก (อีเมลจริง หรือ username) ให้เป็นอีเมลสำหรับ Supabase Auth + username สำหรับโปรไฟล์
+function resolveLoginIdentity(value: string): { authEmail: string; username: string } {
+  const login = value.trim().toLowerCase();
+  if (login.includes("@")) {
+    if (!emailPattern.test(login)) throw new Error("รูปแบบอีเมลไม่ถูกต้อง");
+    return { authEmail: login, username: normalizeUsername(login.split("@")[0]) };
+  }
+  const username = normalizeUsername(login);
+  if (!usernamePattern.test(username)) {
+    throw new Error("กรอก Username (3-32 ตัว a-z, 0-9, จุด, ขีดกลาง, _) หรืออีเมลจริง");
+  }
+  return { authEmail: `${username}@${internalAuthDomain}`, username };
+}
+
 function usernameFromEmail(email?: string | null) {
   if (!email) return "";
   return email.endsWith(`@${internalAuthDomain}`) ? email.split("@")[0] : "";
@@ -1082,11 +1098,7 @@ export default function Page() {
     setAuthError("");
     setAuthLoading(true);
     try {
-      const username = normalizeUsername(authForm.username);
-      if (!usernamePattern.test(username)) {
-        throw new Error("Username ต้องมี 3-32 ตัว ใช้ a-z, 0-9, จุด, ขีดกลาง หรือ _ เท่านั้น");
-      }
-      const authEmail = authEmailFromLogin(username);
+      const { authEmail, username } = resolveLoginIdentity(authForm.username);
       if (authMode === "signUp") {
         const { data, error } = await supabase.auth.signUp({
           email: authEmail,
@@ -1915,8 +1927,8 @@ export default function Page() {
                   ) : null}
                   <input
                     value={authForm.username}
-                    onChange={(event) => setAuthForm((current) => ({ ...current, username: normalizeUsername(event.target.value) }))}
-                    placeholder="Username เช่น beam หรือ art01"
+                    onChange={(event) => setAuthForm((current) => ({ ...current, username: event.target.value.toLowerCase() }))}
+                    placeholder="Username หรืออีเมล เช่น beam หรือ you@email.com"
                     type="text"
                     autoCapitalize="none"
                     autoComplete="username"
