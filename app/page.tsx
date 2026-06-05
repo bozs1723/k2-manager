@@ -37,7 +37,7 @@ import {
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { customers as initialCustomers, initialAuditLog, initialJobs, statuses, team as initialTeam } from "@/lib/mock-data";
-import { isSupabaseConfigured, supabase } from "@/lib/supabase";
+import { createSupabaseAuthWorker, isSupabaseConfigured, supabase } from "@/lib/supabase";
 import type { AuditEvent, Customer, Job, JobStatus, JobType, PaymentStatus, Priority, QuoteStatus, Role, TeamMember } from "@/lib/types";
 
 type ImportedCustomer = Pick<Customer, "name" | "phone" | "lineId" | "email"> & {
@@ -86,6 +86,8 @@ type PermissionKey =
 
 type SupabaseProfileRow = {
   id: string;
+  email: string | null;
+  username?: string | null;
   full_name: string | null;
   role: Role | null;
   avatar_url?: string | null;
@@ -160,6 +162,10 @@ type SupabaseCompanyRow = {
 type SupabaseRolePermissionRow = {
   role: Role;
   permissions: PermissionKey[] | null;
+};
+
+type NewTeamMemberInput = Omit<TeamMember, "id" | "avatar"> & {
+  password?: string;
 };
 
 const money = new Intl.NumberFormat("th-TH", {
@@ -241,6 +247,22 @@ const jobTypes: JobType[] = ["DTG Shirt", "UV Print", "Laser Cut", "Signage", "3
 const priorities: Priority[] = ["Normal", "Urgent", "Very Urgent", "Today"];
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const appTagline = "คุมงานผลิตครบในที่เดียว";
+const internalAuthDomain = "k2smart.local";
+const usernamePattern = /^[a-z0-9][a-z0-9._-]{2,31}$/;
+
+function normalizeUsername(value: string) {
+  return value.trim().toLowerCase().replace(/\s+/g, "-");
+}
+
+function authEmailFromLogin(value: string) {
+  const login = value.trim().toLowerCase();
+  return login.includes("@") ? login : `${normalizeUsername(login)}@${internalAuthDomain}`;
+}
+
+function usernameFromEmail(email?: string | null) {
+  if (!email) return "";
+  return email.endsWith(`@${internalAuthDomain}`) ? email.split("@")[0] : "";
+}
 
 const initialCompanyProfile: CompanyProfile = {
   name: "K2Smart",
@@ -455,14 +477,15 @@ function initialsFromName(name: string) {
   );
 }
 
-function profileToMember(profile: { id: string; full_name: string | null; role: Role | null; avatar_url?: string | null }): TeamMember {
+function profileToMember(profile: { id: string; email?: string | null; username?: string | null; full_name: string | null; role: Role | null; avatar_url?: string | null }): TeamMember {
   const name = profile.full_name || "K2 User";
   return {
     id: profile.id,
     name,
     role: profile.role ?? "Sales Staff",
     avatar: initialsFromName(name),
-    avatarUrl: profile.avatar_url ?? undefined
+    avatarUrl: profile.avatar_url ?? undefined,
+    username: profile.username || usernameFromEmail(profile.email)
   };
 }
 
@@ -664,7 +687,7 @@ export default function Page() {
   const [customerRecords, setCustomerRecords] = useState<Customer[]>(initialCustomers);
   const [isAuthed, setIsAuthed] = useState(false);
   const [authMode, setAuthMode] = useState<"signIn" | "signUp">("signIn");
-  const [authForm, setAuthForm] = useState({ email: "", password: "", fullName: "", role: "Sales Staff" as Role });
+  const [authForm, setAuthForm] = useState({ username: "", password: "", fullName: "", role: "Sales Staff" as Role });
   const [authError, setAuthError] = useState("");
   const [authLoading, setAuthLoading] = useState(false);
   const [dataLoading, setDataLoading] = useState(false);
@@ -708,7 +731,7 @@ export default function Page() {
     async function loadProfile(userId: string) {
       const { data, error } = await supabase!
         .from("profiles")
-        .select("id, full_name, role, avatar_url")
+        .select("id, email, full_name, role, avatar_url")
         .eq("id", userId)
         .single();
       if (!isMounted || error || !data) return;
@@ -773,7 +796,7 @@ export default function Page() {
         auditResult,
         rolePermissionsResult
       ] = await Promise.all([
-        supabase.from("profiles").select("id, full_name, role, avatar_url, is_active").eq("is_active", true).order("created_at", { ascending: true }),
+        supabase.from("profiles").select("id, email, full_name, role, avatar_url, is_active").eq("is_active", true).order("created_at", { ascending: true }),
         supabase.from("company_settings").select("*").order("created_at", { ascending: true }).limit(1),
         supabase.from("customers").select("*").order("created_at", { ascending: false }),
         supabase.from("jobs").select("*").order("created_at", { ascending: false }),
@@ -880,35 +903,41 @@ export default function Page() {
     setAuthError("");
     setAuthLoading(true);
     try {
+      const username = normalizeUsername(authForm.username);
+      if (!usernamePattern.test(username)) {
+        throw new Error("Username ต้องมี 3-32 ตัว ใช้ a-z, 0-9, จุด, ขีดกลาง หรือ _ เท่านั้น");
+      }
+      const authEmail = authEmailFromLogin(username);
       if (authMode === "signUp") {
         const { data, error } = await supabase.auth.signUp({
-          email: authForm.email,
+          email: authEmail,
           password: authForm.password,
           options: {
             data: {
               full_name: authForm.fullName,
-              role: authForm.role
+              role: authForm.role,
+              username
             }
           }
         });
         if (error) throw error;
         if (data.user && data.session) {
-          const member = profileToMember({ id: data.user.id, full_name: authForm.fullName, role: authForm.role });
+          const member = profileToMember({ id: data.user.id, email: authEmail, username, full_name: authForm.fullName, role: authForm.role });
           setCurrentUser(member);
           setTeamMembers((current) => [member, ...current]);
           setIsAuthed(true);
         } else {
-          setAuthError("สมัครแล้ว กรุณายืนยันอีเมลก่อนเข้าสู่ระบบ");
+          setAuthError("สร้างผู้ใช้แล้ว หากระบบเปิดยืนยันอีเมล กรุณาปิด Confirm email ใน Supabase Auth Settings สำหรับการใช้ username ภายใน");
         }
       } else {
         const { data, error } = await supabase.auth.signInWithPassword({
-          email: authForm.email,
+          email: authEmail,
           password: authForm.password
         });
         if (error) throw error;
         const { data: profile, error: profileError } = await supabase
           .from("profiles")
-          .select("id, full_name, role, avatar_url")
+          .select("id, email, full_name, role, avatar_url")
           .eq("id", data.user.id)
           .single();
         if (profileError) throw profileError;
@@ -1252,9 +1281,22 @@ export default function Page() {
     void appendAudit("created job", job.id);
   }
 
-  async function addTeamMember(member: Omit<TeamMember, "id" | "avatar">) {
+  async function addTeamMember(member: NewTeamMemberInput) {
     if (!can("manage_users")) {
       setDataError("บทบาทนี้ยังไม่มีสิทธิ์จัดการผู้ใช้");
+      return;
+    }
+    const username = normalizeUsername(member.username ?? "");
+    if (!usernamePattern.test(username)) {
+      setDataError("Username ต้องมี 3-32 ตัว ใช้ a-z, 0-9, จุด, ขีดกลาง หรือ _ เท่านั้น");
+      return;
+    }
+    if (teamMembers.some((item) => item.username === username)) {
+      setDataError("Username นี้ถูกใช้แล้ว");
+      return;
+    }
+    if (supabase && isSupabaseConfigured && (!member.password || member.password.length < 6)) {
+      setDataError("รหัสผ่านพนักงานต้องมีอย่างน้อย 6 ตัว");
       return;
     }
     const initials = member.name
@@ -1265,10 +1307,32 @@ export default function Page() {
       .join("") || "K2";
     const nextMember = { ...member, id: crypto.randomUUID(), avatar: initials };
     if (supabase && isSupabaseConfigured) {
+      const authWorker = createSupabaseAuthWorker();
+      if (!authWorker) {
+        setDataError("ยังไม่ได้ตั้งค่า Supabase Auth");
+        return;
+      }
+      const authEmail = authEmailFromLogin(username);
+      const { data: authData, error: authError } = await authWorker.auth.signUp({
+        email: authEmail,
+        password: member.password!,
+        options: {
+          data: {
+            full_name: member.name,
+            role: member.role,
+            username
+          }
+        }
+      });
+      if (authError) {
+        setDataError(authError.message);
+        return;
+      }
+      const profileId = authData.user?.id ?? nextMember.id;
       const { data, error } = await supabase
         .from("profiles")
-        .insert({ id: nextMember.id, full_name: member.name, role: member.role, avatar_url: member.avatarUrl ?? null, is_active: true })
-        .select("id, full_name, role, avatar_url")
+        .upsert({ id: profileId, email: authEmail, full_name: member.name, role: member.role, avatar_url: member.avatarUrl ?? null, is_active: true }, { onConflict: "id" })
+        .select("id, email, full_name, role, avatar_url")
         .single();
       if (error) {
         setDataError(error.message);
@@ -1579,10 +1643,12 @@ export default function Page() {
                     </>
                   ) : null}
                   <input
-                    value={authForm.email}
-                    onChange={(event) => setAuthForm((current) => ({ ...current, email: event.target.value }))}
-                    placeholder="อีเมล"
-                    type="email"
+                    value={authForm.username}
+                    onChange={(event) => setAuthForm((current) => ({ ...current, username: normalizeUsername(event.target.value) }))}
+                    placeholder="Username เช่น beam หรือ art01"
+                    type="text"
+                    autoCapitalize="none"
+                    autoComplete="username"
                     className="rounded-2xl border border-white/80 bg-white/80 px-4 py-3 text-sm font-semibold outline-none"
                   />
                   <input
@@ -1590,17 +1656,18 @@ export default function Page() {
                     onChange={(event) => setAuthForm((current) => ({ ...current, password: event.target.value }))}
                     placeholder="รหัสผ่าน"
                     type="password"
+                    autoComplete={authMode === "signUp" ? "new-password" : "current-password"}
                     className="rounded-2xl border border-white/80 bg-white/80 px-4 py-3 text-sm font-semibold outline-none"
                   />
                   {authError ? <p className="rounded-2xl bg-amber-50 px-4 py-3 text-sm font-bold text-amber-700">{authError}</p> : null}
                   <button
                     type="button"
                     onClick={submitSupabaseAuth}
-                    disabled={authLoading || !authForm.email || !authForm.password || (authMode === "signUp" && !authForm.fullName)}
+                    disabled={authLoading || !authForm.username || !authForm.password || (authMode === "signUp" && !authForm.fullName)}
                     className="flex w-full items-center justify-center gap-2 rounded-2xl bg-k2-ink px-5 py-4 font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     <ShieldCheck className="h-5 w-5" />
-                    {authLoading ? "กำลังตรวจสอบ..." : authMode === "signUp" ? "สร้างผู้ใช้และเข้าสู่ระบบ" : "เข้าสู่ระบบ"}
+                    {authLoading ? "กำลังตรวจสอบ..." : authMode === "signUp" ? "สร้าง Username และเข้าสู่ระบบ" : "เข้าสู่ระบบ"}
                   </button>
                 </div>
               </div>
@@ -2868,7 +2935,7 @@ function SettingsView({
   teamMembers: TeamMember[];
   companyProfile: CompanyProfile;
   onUpdateCompany: (profile: CompanyProfile) => void;
-  onAddMember: (member: Omit<TeamMember, "id" | "avatar">) => void;
+  onAddMember: (member: NewTeamMemberInput) => void;
   onUpdateMember: (memberId: string, updates: Pick<TeamMember, "name" | "role">) => void;
   onUpdateMemberAvatar: (memberId: string, avatarUrl: string) => void;
   onRemoveMember: (memberId: string) => void;
@@ -2880,7 +2947,7 @@ function SettingsView({
   const canManageTeam = currentPermissions.includes("manage_users");
   const canManagePermissions = currentPermissions.includes("manage_permissions");
   const canManageCompany = currentPermissions.includes("manage_company_settings");
-  const [newMember, setNewMember] = useState({ name: "", role: "Designer" as Role });
+  const [newMember, setNewMember] = useState({ name: "", username: "", password: "", role: "Designer" as Role });
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingMember, setEditingMember] = useState({ name: "", role: "Designer" as Role });
   const [companyDraft, setCompanyDraft] = useState(companyProfile);
@@ -2896,9 +2963,10 @@ function SettingsView({
   }
 
   function submitNewMember() {
-    if (!newMember.name.trim() || !canManageTeam) return;
-    onAddMember({ name: newMember.name.trim(), role: newMember.role });
-    setNewMember({ name: "", role: "Designer" });
+    const username = normalizeUsername(newMember.username);
+    if (!newMember.name.trim() || !username || !canManageTeam) return;
+    onAddMember({ name: newMember.name.trim(), username, password: newMember.password, role: newMember.role });
+    setNewMember({ name: "", username: "", password: "", role: "Designer" });
   }
 
   function submitEdit(memberId: string) {
@@ -2967,12 +3035,30 @@ function SettingsView({
           </span>
         </div>
 
-        <div className="mt-5 grid gap-3 rounded-[1.35rem] border border-white/70 bg-white/45 p-3 md:grid-cols-[1fr_220px_auto]">
+        <div className="mt-5 grid gap-3 rounded-[1.35rem] border border-white/70 bg-white/45 p-3 md:grid-cols-2 xl:grid-cols-[1fr_180px_180px_180px_auto]">
           <input
             value={newMember.name}
             onChange={(event) => setNewMember((current) => ({ ...current, name: event.target.value }))}
             placeholder="ชื่อสมาชิก เช่น New Designer"
             disabled={!canManageTeam}
+            className="rounded-2xl border border-white/80 bg-white/80 px-4 py-3 text-sm font-semibold outline-none disabled:opacity-60"
+          />
+          <input
+            value={newMember.username}
+            onChange={(event) => setNewMember((current) => ({ ...current, username: normalizeUsername(event.target.value) }))}
+            placeholder="username เช่น beam"
+            disabled={!canManageTeam}
+            autoCapitalize="none"
+            autoComplete="off"
+            className="rounded-2xl border border-white/80 bg-white/80 px-4 py-3 text-sm font-semibold outline-none disabled:opacity-60"
+          />
+          <input
+            value={newMember.password}
+            onChange={(event) => setNewMember((current) => ({ ...current, password: event.target.value }))}
+            placeholder="รหัสผ่านเริ่มต้น"
+            disabled={!canManageTeam}
+            type="password"
+            autoComplete="new-password"
             className="rounded-2xl border border-white/80 bg-white/80 px-4 py-3 text-sm font-semibold outline-none disabled:opacity-60"
           />
           <select
@@ -2988,13 +3074,16 @@ function SettingsView({
           <button
             type="button"
             onClick={submitNewMember}
-            disabled={!canManageTeam || !newMember.name.trim()}
+            disabled={!canManageTeam || !newMember.name.trim() || !newMember.username.trim()}
             className="inline-flex items-center justify-center gap-2 rounded-2xl bg-k2-ink px-4 py-3 text-sm font-extrabold text-white shadow-lg shadow-slate-900/15 disabled:cursor-not-allowed disabled:opacity-50"
           >
             <UserPlus className="h-4 w-4" />
             เพิ่ม
           </button>
         </div>
+        <p className="mt-2 text-xs font-bold text-k2-muted">
+          พนักงานใช้ Username เข้าระบบได้เลย ระบบจะสร้างอีเมลภายในหลังบ้านเป็น username@k2smart.local
+        </p>
         {avatarError ? <p className="mt-3 rounded-2xl bg-amber-50 px-4 py-3 text-sm font-bold text-amber-700">{avatarError}</p> : null}
 
         <div className="mt-4 space-y-3">
@@ -3054,6 +3143,7 @@ function SettingsView({
                   ) : (
                     <div>
                       <p className="font-extrabold">{member.name}</p>
+                      {member.username ? <p className="mt-1 text-xs font-extrabold text-teal-600">@{member.username}</p> : null}
                       <p className="mt-1 text-sm font-semibold text-k2-muted">{roleLabel[member.role]}</p>
                     </div>
                   )}

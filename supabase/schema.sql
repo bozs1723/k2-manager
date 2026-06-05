@@ -62,6 +62,7 @@ create table public.company_settings (
 create table public.profiles (
   id uuid primary key default gen_random_uuid(),
   email text unique,
+  username text unique,
   full_name text not null,
   role public.app_role not null default 'Sales Staff',
   avatar_url text,
@@ -210,15 +211,17 @@ security definer
 set search_path = public
 as $$
 begin
-  insert into public.profiles (id, email, full_name, role)
+  insert into public.profiles (id, email, username, full_name, role)
   values (
     new.id,
     new.email,
+    coalesce(new.raw_user_meta_data->>'username', nullif(split_part(new.email, '@', 1), '')),
     coalesce(new.raw_user_meta_data->>'full_name', split_part(new.email, '@', 1), 'K2 User'),
     coalesce((new.raw_user_meta_data->>'role')::public.app_role, 'Sales Staff'::public.app_role)
   )
   on conflict (id) do update
     set email = excluded.email,
+        username = excluded.username,
         full_name = excluded.full_name,
         role = excluded.role,
         updated_at = now();

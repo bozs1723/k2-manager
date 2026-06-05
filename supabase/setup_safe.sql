@@ -97,6 +97,7 @@ alter table public.company_settings add column if not exists created_at timestam
 create table if not exists public.profiles (
   id uuid primary key default gen_random_uuid(),
   email text unique,
+  username text unique,
   full_name text not null,
   role public.app_role not null default 'Sales Staff',
   avatar_url text,
@@ -108,12 +109,14 @@ create table if not exists public.profiles (
 alter table public.profiles drop constraint if exists profiles_id_fkey;
 alter table public.profiles alter column id set default gen_random_uuid();
 alter table public.profiles add column if not exists email text;
+alter table public.profiles add column if not exists username text;
 alter table public.profiles add column if not exists full_name text;
 alter table public.profiles add column if not exists role public.app_role not null default 'Sales Staff';
 alter table public.profiles add column if not exists avatar_url text;
 alter table public.profiles add column if not exists is_active boolean not null default true;
 alter table public.profiles add column if not exists updated_at timestamptz not null default now();
 alter table public.profiles add column if not exists created_at timestamptz not null default now();
+create unique index if not exists profiles_username_key on public.profiles (username) where username is not null;
 
 create table if not exists public.role_permissions (
   role public.app_role primary key,
@@ -293,15 +296,17 @@ security definer
 set search_path = public
 as $$
 begin
-  insert into public.profiles (id, email, full_name, role)
+  insert into public.profiles (id, email, username, full_name, role)
   values (
     new.id,
     new.email,
+    coalesce(new.raw_user_meta_data->>'username', nullif(split_part(new.email, '@', 1), '')),
     coalesce(new.raw_user_meta_data->>'full_name', split_part(new.email, '@', 1), 'K2 User'),
     coalesce((new.raw_user_meta_data->>'role')::public.app_role, 'Sales Staff'::public.app_role)
   )
   on conflict (id) do update
     set email = excluded.email,
+        username = excluded.username,
         full_name = excluded.full_name,
         role = excluded.role,
         is_active = true,

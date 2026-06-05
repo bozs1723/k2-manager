@@ -31,6 +31,7 @@ export type TeamMember = {
   role: Role;
   avatar: string;
   avatarUrl?: string;
+  username?: string;
 };
 
 export type Customer = {
