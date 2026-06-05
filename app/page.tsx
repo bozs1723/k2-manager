@@ -34,7 +34,8 @@ import {
   UserPlus,
   UserRound,
   UsersRound,
-  WalletCards
+  WalletCards,
+  Zap
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { customers as initialCustomers, initialAuditLog, initialJobs, statuses, team as initialTeam } from "@/lib/mock-data";
@@ -434,6 +435,26 @@ function addDaysISO(isoDate: string, days: number) {
   return base.toISOString().slice(0, 10);
 }
 
+// สถานะที่ถือว่างานจบแล้ว ไม่ต้องเตือน/แสดงสีเร่งด่วน
+const FINISHED_STATUSES: JobStatus[] = ["Delivered / Picked Up", "Completed", "Cancelled"];
+
+type DueUrgency = { days: number; label: string; tone: string; dot: string };
+
+// คำนวณความเร่งด่วนจากจำนวนวันที่เหลือถึงกำหนดส่ง เพื่อแสดงสีและเตือนกันพลาด
+function dueUrgency(dueDate: string, status: JobStatus): DueUrgency | null {
+  if (FINISHED_STATUSES.includes(status)) return null;
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const due = new Date(`${dueDate}T00:00:00`);
+  if (Number.isNaN(due.getTime())) return null;
+  const days = Math.round((due.getTime() - today.getTime()) / 86_400_000);
+  if (days < 0) return { days, label: `เลยกำหนด ${Math.abs(days)} วัน`, tone: "bg-rose-100 text-rose-700", dot: "bg-rose-500" };
+  if (days <= 1) return { days, label: days === 0 ? "ครบกำหนดวันนี้" : "ครบกำหนดพรุ่งนี้", tone: "bg-orange-100 text-orange-700", dot: "bg-orange-500" };
+  if (days <= 3) return { days, label: `เหลือ ${days} วัน`, tone: "bg-amber-100 text-amber-800", dot: "bg-amber-500" };
+  if (days <= 7) return { days, label: `เหลือ ${days} วัน`, tone: "bg-sky-100 text-sky-700", dot: "bg-sky-500" };
+  return { days, label: `เหลือ ${days} วัน`, tone: "bg-emerald-100 text-emerald-700", dot: "bg-emerald-500" };
+}
+
 function getPaymentStatus(price: number, deposit: number): PaymentStatus {
   if (deposit <= 0) return "unpaid";
   if (deposit >= price) return "paid";
@@ -713,6 +734,7 @@ export default function Page() {
   const [notifications, setNotifications] = useState<AppNotification[]>([]);
   const [showNotifPanel, setShowNotifPanel] = useState(false);
   const notifPanelRef = useRef<HTMLDivElement>(null);
+  const [expressOrdersEnabled, setExpressOrdersEnabled] = useState(false);
 
   const selectedJob = jobs.find((job) => job.id === selectedJobId) ?? jobs[0] ?? null;
   const currentRolePermissions = useMemo(
@@ -798,6 +820,21 @@ export default function Page() {
     } catch {}
   }, [notifications, currentUser.id]);
 
+  // โหลด / บันทึก สถานะเปิดรับงานด่วน (ตั้งโดยผู้จัดการ/เจ้าของ ใช้ร่วมทั้งร้าน)
+  useEffect(() => {
+    setExpressOrdersEnabled(window.localStorage.getItem("k2-express-enabled") === "1");
+  }, []);
+
+  function toggleExpressOrders() {
+    setExpressOrdersEnabled((prev) => {
+      const next = !prev;
+      try { window.localStorage.setItem("k2-express-enabled", next ? "1" : "0"); } catch {}
+      return next;
+    });
+  }
+
+  const canManageExpress = currentUser.role === "Owner" || currentUser.role === "Manager";
+
   // ปิด notification panel เมื่อคลิกนอกกล่อง
   useEffect(() => {
     if (!showNotifPanel) return;
@@ -809,6 +846,33 @@ export default function Page() {
     document.addEventListener("mousedown", handleClickOutside);
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, [showNotifPanel]);
+
+  // เตือนงานของตัวเองที่ใกล้ถึงกำหนดส่ง (ภายใน 2 วัน หรือเลยกำหนด) วันละครั้งต่อหนึ่งงาน
+  useEffect(() => {
+    const stampKey = `k2-due-notified-${currentUser.id}`;
+    let notified: string[] = [];
+    try { notified = JSON.parse(window.localStorage.getItem(stampKey) ?? "[]"); } catch {}
+    const today = todayISO();
+    const fresh: string[] = [];
+    jobs.forEach((job) => {
+      if (job.assignedDesigner !== currentUser.name && job.assignedProduction !== currentUser.name) return;
+      const urgency = dueUrgency(job.dueDate, job.status);
+      if (!urgency || urgency.days > 2) return;
+      const key = `${job.id}|${job.dueDate}|${today}`;
+      if (notified.includes(key)) return;
+      fresh.push(key);
+      const detail = urgency.days < 0
+        ? `เลยกำหนดส่ง ${Math.abs(urgency.days)} วันแล้ว`
+        : urgency.days === 0
+          ? "ครบกำหนดส่งวันนี้"
+          : `อีก ${urgency.days} วันถึงกำหนดส่ง`;
+      pushNotif("due_soon", job, `⏰ งาน ${job.id} – ${detail}`);
+    });
+    if (fresh.length) {
+      try { window.localStorage.setItem(stampKey, JSON.stringify([...notified, ...fresh].slice(-200))); } catch {}
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [jobs, currentUser.id, currentUser.name]);
 
   useEffect(() => {
     if (!isAuthed || !supabase) return;
@@ -1301,6 +1365,7 @@ export default function Page() {
       orderDate: input?.orderDate ?? todayISO(),
       dueDate: input?.dueDate ?? todayISO(),
       priority: input?.priority ?? "Urgent",
+      isExpress: input?.isExpress ?? false,
       status: "New Order",
       assignedDesigner: input?.assignedDesigner ?? "Beam S.",
       assignedProduction: input?.assignedProduction ?? "Unassigned",
@@ -1825,6 +1890,25 @@ export default function Page() {
                   />
                 </label>
 
+                {/* สวิตช์เปิดรับงานด่วน — เฉพาะผู้จัดการ/เจ้าของ */}
+                {canManageExpress ? (
+                  <button
+                    onClick={toggleExpressOrders}
+                    className={`inline-flex items-center justify-center gap-2 rounded-2xl px-4 py-2.5 text-sm font-semibold shadow-sm transition ${
+                      expressOrdersEnabled ? "bg-rose-500 text-white shadow-rose-500/25" : "bg-white/70 text-k2-muted"
+                    }`}
+                    title={expressOrdersEnabled ? "ปิดรับงานด่วน" : "เปิดรับงานด่วน"}
+                  >
+                    <Zap className="h-4 w-4" />
+                    {expressOrdersEnabled ? "รับงานด่วน: เปิด" : "รับงานด่วน: ปิด"}
+                  </button>
+                ) : expressOrdersEnabled ? (
+                  <span className="inline-flex items-center gap-1.5 rounded-2xl bg-rose-100 px-3 py-2.5 text-sm font-bold text-rose-700">
+                    <Zap className="h-4 w-4" />
+                    รับงานด่วน
+                  </span>
+                ) : null}
+
                 {/* กระดิ่งแจ้งเตือน */}
                 <div ref={notifPanelRef} className="relative">
                   <button
@@ -1957,7 +2041,7 @@ export default function Page() {
             )}
             {activeView === "Create Job" && (
               <motion.div key="create" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}>
-                <CreateJobView customers={customerRecords} teamMembers={teamMembers} onCreate={createJob} />
+                <CreateJobView customers={customerRecords} teamMembers={teamMembers} expressEnabled={expressOrdersEnabled} onCreate={createJob} />
               </motion.div>
             )}
             {activeView === "Customers" && (
@@ -2183,18 +2267,30 @@ function Dashboard({
 }
 
 function JobRow({ job, canSeeMoney, onSelect }: { job: Job; canSeeMoney: boolean; onSelect: (id: string) => void }) {
+  const urgency = dueUrgency(job.dueDate, job.status);
   return (
     <button onClick={() => onSelect(job.id)} className="grid w-full gap-3 rounded-2xl bg-white/60 p-4 text-left transition hover:bg-white lg:grid-cols-[1.2fr_0.8fr_0.6fr_auto] lg:items-center">
       <div>
         <div className="mb-2 flex flex-wrap items-center gap-2">
-          <span className="font-bold">{job.id}</span>
+          <span className="flex items-center gap-1.5 font-bold">
+            {job.isExpress ? <Zap className="h-3.5 w-3.5 text-rose-500" /> : null}
+            {job.id}
+          </span>
           <span className={`rounded-full px-2.5 py-1 text-xs font-bold ${priorityClass[job.priority]}`}>{priorityLabel[job.priority]}</span>
         </div>
         <p className="font-semibold">{job.title}</p>
         <p className="text-sm text-k2-muted">{job.customerName}</p>
       </div>
       <span className={`w-fit rounded-full px-3 py-1 text-xs font-bold ${statusTint[job.status]}`}>{statusLabel[job.status]}</span>
-      <div className="text-sm text-k2-muted">กำหนดส่ง {job.dueDate}</div>
+      <div className="flex flex-col gap-1 text-sm text-k2-muted">
+        <span>กำหนดส่ง {job.dueDate}</span>
+        {urgency ? (
+          <span className={`flex w-fit items-center gap-1 rounded-full px-2 py-0.5 text-xs font-bold ${urgency.tone}`}>
+            <span className={`h-1.5 w-1.5 rounded-full ${urgency.dot}`} />
+            {urgency.label}
+          </span>
+        ) : null}
+      </div>
       <div className="font-semibold">{canSeeMoney ? money.format(job.remainingBalance) : "ซ่อนข้อมูล"}</div>
     </button>
   );
@@ -2243,11 +2339,15 @@ function Board({
               </p>
             </div>
             <div className="space-y-3">
-              {columnJobs.map((job) => (
+              {columnJobs.map((job) => {
+                const urgency = dueUrgency(job.dueDate, job.status);
+                return (
                 <motion.div
                   layout
                   key={job.id}
-                  className="overflow-hidden rounded-[1.25rem] border border-white/80 bg-white/75 shadow-sm transition hover:bg-white"
+                  className={`overflow-hidden rounded-[1.25rem] border bg-white/75 shadow-sm transition hover:bg-white ${
+                    urgency && urgency.days <= 1 ? "border-l-4 border-l-rose-400 border-white/80" : "border-white/80"
+                  }`}
                 >
                   {/* แตะเพื่อดูรายละเอียด / ลากเพื่อย้ายขั้นตอน (desktop) */}
                   <button
@@ -2257,14 +2357,24 @@ function Board({
                     className="w-full p-4 text-left"
                   >
                     <div className="mb-3 flex items-center justify-between gap-2">
-                      <span className="text-sm font-bold">{job.id}</span>
+                      <span className="flex items-center gap-1.5 text-sm font-bold">
+                        {job.isExpress ? <Zap className="h-3.5 w-3.5 text-rose-500" /> : null}
+                        {job.id}
+                      </span>
                       <span className={`rounded-full px-2 py-1 text-[11px] font-bold ${priorityClass[job.priority]}`}>{priorityLabel[job.priority]}</span>
                     </div>
                     <p className="font-semibold leading-5">{job.title}</p>
                     <p className="mt-1 text-sm text-k2-muted">{job.customerName}</p>
-                    <div className="mt-4 flex items-center justify-between text-xs font-semibold text-k2-muted">
+                    <div className="mt-4 flex items-center justify-between gap-2 text-xs font-semibold text-k2-muted">
                       <span>{jobTypeLabel[job.type]}</span>
-                      <span>{job.dueDate}</span>
+                      {urgency ? (
+                        <span className={`flex items-center gap-1 rounded-full px-2 py-1 ${urgency.tone}`}>
+                          <span className={`h-1.5 w-1.5 rounded-full ${urgency.dot}`} />
+                          {urgency.label}
+                        </span>
+                      ) : (
+                        <span>{job.dueDate}</span>
+                      )}
                     </div>
                   </button>
                   {/* เลือกขั้นตอนใหม่ — ใช้งานได้ทั้ง mobile touch และ desktop */}
@@ -2280,7 +2390,8 @@ function Board({
                     </select>
                   </div>
                 </motion.div>
-              ))}
+                );
+              })}
               {columnJobs.length === 0 ? (
                 <div className="rounded-[1.25rem] border border-dashed border-white/90 bg-white/35 px-4 py-6 text-center text-sm font-semibold text-k2-muted">
                   ยังไม่มีงานในขั้นตอนนี้
@@ -2311,6 +2422,7 @@ function JobDetail({
 }) {
   const [comment, setComment] = useState("");
   const workOrderNumber = job.quoteNumber ?? quoteNumberFor(Number(job.id.replace(/\D/g, "").slice(-4)) || 1, companyProfile.quotePrefix);
+  const dueInfo = dueUrgency(job.dueDate, job.status);
   return (
     <div className="grid gap-4 xl:grid-cols-[1.15fr_0.85fr]">
       <section className="glass rounded-[1.5rem] p-5">
@@ -2319,6 +2431,17 @@ function JobDetail({
             <div className="mb-3 flex flex-wrap gap-2">
               <span className={`rounded-full px-3 py-1 text-xs font-bold ${statusTint[job.status]}`}>{statusLabel[job.status]}</span>
               <span className={`rounded-full px-3 py-1 text-xs font-bold ${priorityClass[job.priority]}`}>{priorityLabel[job.priority]}</span>
+              {job.isExpress ? (
+                <span className="flex items-center gap-1 rounded-full bg-rose-500 px-3 py-1 text-xs font-bold text-white">
+                  <Zap className="h-3 w-3" /> งานด่วน
+                </span>
+              ) : null}
+              {dueInfo ? (
+                <span className={`flex items-center gap-1 rounded-full px-3 py-1 text-xs font-bold ${dueInfo.tone}`}>
+                  <span className={`h-1.5 w-1.5 rounded-full ${dueInfo.dot}`} />
+                  {dueInfo.label}
+                </span>
+              ) : null}
             </div>
             <h3 className="text-3xl font-semibold">{job.title}</h3>
             <p className="mt-2 text-k2-muted">{job.id} - {jobTypeLabel[job.type]} - {job.quantity} ชิ้น</p>
@@ -2343,7 +2466,7 @@ function JobDetail({
           <Info label="เลขผู้เสียภาษี" value={job.taxId || "ยังไม่ระบุ"} icon={ReceiptText} />
           <Info label="อีเมลบัญชี" value={job.accountingEmail || "ยังไม่ระบุ"} icon={WalletCards} />
           <Info label="วันที่รับงาน" value={job.orderDate} icon={CalendarDays} />
-          <Info label="กำหนดส่ง" value={job.dueDate} icon={Clock3} />
+          <Info label={job.isExpress ? "วันที่นัดส่งงาน (ด่วน)" : "กำหนดส่ง"} value={dueInfo ? `${job.dueDate} · ${dueInfo.label}` : job.dueDate} icon={Clock3} />
           <Info label="ผู้รับผิดชอบออกแบบ" value={staffLabel(job.assignedDesigner)} icon={Sparkles} />
           <Info label="ผู้รับผิดชอบผลิต" value={staffLabel(job.assignedProduction)} icon={Factory} />
           <Info label="โน้ตภายใน" value={job.internalNotes} icon={ClipboardList} />
@@ -2649,10 +2772,12 @@ function MoneyLine({ label, value, visible }: { label: string; value: number; vi
 function CreateJobView({
   customers,
   teamMembers,
+  expressEnabled,
   onCreate
 }: {
   customers: Customer[];
   teamMembers: TeamMember[];
+  expressEnabled: boolean;
   onCreate: (job: Partial<Job>) => void;
 }) {
   const designerOptions = useMemo(() => teamMembers.filter((member) => ["Designer", "Admin", "Owner"].includes(member.role)), [teamMembers]);
@@ -2677,6 +2802,7 @@ function CreateJobView({
     quantity: 1,
     orderDate: todayISO(),
     dueDate: addDaysISO(todayISO(), DEFAULT_LEAD_TIME_DAYS),
+    isExpress: false,
     priority: "Normal" as Priority,
     assignedDesigner: defaultDesigner,
     assignedProduction: defaultProduction,
@@ -2825,6 +2951,40 @@ function CreateJobView({
             </select>
           </label>
           <NumberField label="จำนวน" value={form.quantity} onChange={(value) => setField("quantity", value)} />
+          {/* โหมดงานด่วน — เปิดได้เมื่อผู้จัดการ/เจ้าของเปิดรับงานด่วนเท่านั้น */}
+          <label
+            className={`flex items-center justify-between gap-3 rounded-2xl border px-4 py-3 md:col-span-2 ${
+              form.isExpress ? "border-rose-300 bg-rose-50" : "border-white/80 bg-white/80"
+            } ${!expressEnabled ? "opacity-60" : ""}`}
+          >
+            <span className="flex items-center gap-2 text-sm font-extrabold text-k2-ink">
+              <Zap className={`h-4 w-4 ${form.isExpress ? "text-rose-500" : "text-k2-muted"}`} />
+              งานด่วน
+              {!expressEnabled ? (
+                <span className="text-xs font-semibold text-k2-muted">(ผู้จัดการ/เจ้าของยังไม่เปิดรับงานด่วน)</span>
+              ) : (
+                <span className="text-xs font-semibold text-k2-muted">ระบุวันนัดส่งเองได้</span>
+              )}
+            </span>
+            <input
+              type="checkbox"
+              checked={form.isExpress}
+              disabled={!expressEnabled}
+              onChange={(event) =>
+                setForm((current) => {
+                  const isExpress = event.target.checked;
+                  return {
+                    ...current,
+                    isExpress,
+                    // เปิดด่วน: นัดส่งเริ่มที่วันนี้ + ดันความเร่งด่วน / ปิดด่วน: กลับไปใช้ lead time 7 วัน
+                    dueDate: isExpress ? current.orderDate : addDaysISO(current.orderDate, DEFAULT_LEAD_TIME_DAYS),
+                    priority: isExpress ? "Very Urgent" : current.priority
+                  };
+                })
+              }
+              className="h-5 w-5 accent-rose-500 disabled:cursor-not-allowed"
+            />
+          </label>
           <TextField
             label="วันที่รับงาน"
             type="date"
@@ -2833,15 +2993,20 @@ function CreateJobView({
               setForm((current) => ({
                 ...current,
                 orderDate: value,
-                // ขยับกำหนดส่งตามวันรับงาน + ระยะเวลาผลิต เว้นแต่ผู้ใช้ตั้งกำหนดส่งเองไว้แล้ว
+                // งานปกติ: ขยับกำหนดส่งตามวันรับงาน + lead time (เว้นแต่ตั้งเอง) / งานด่วน: ไม่แตะวันนัดส่ง
                 dueDate:
-                  current.dueDate === addDaysISO(current.orderDate, DEFAULT_LEAD_TIME_DAYS)
+                  !current.isExpress && current.dueDate === addDaysISO(current.orderDate, DEFAULT_LEAD_TIME_DAYS)
                     ? addDaysISO(value, DEFAULT_LEAD_TIME_DAYS)
                     : current.dueDate
               }))
             }
           />
-          <TextField label="กำหนดส่ง" type="date" value={form.dueDate} onChange={(value) => setField("dueDate", value)} />
+          <TextField
+            label={form.isExpress ? "วันที่นัดส่งงาน (ด่วน)" : "กำหนดส่ง"}
+            type="date"
+            value={form.dueDate}
+            onChange={(value) => setField("dueDate", value)}
+          />
           <label className="space-y-2">
             <span className="text-sm font-semibold text-k2-muted">ความเร่งด่วน</span>
             <select

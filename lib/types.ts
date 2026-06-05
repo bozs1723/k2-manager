@@ -1,6 +1,6 @@
 export type AppNotification = {
   id: string;
-  type: "assigned" | "status_moved" | "comment";
+  type: "assigned" | "status_moved" | "comment" | "due_soon";
   jobId: string;
   jobTitle: string;
   message: string;
@@ -116,6 +116,7 @@ export type Job = {
   orderDate: string;
   dueDate: string;
   priority: Priority;
+  isExpress?: boolean;
   status: JobStatus;
   assignedDesigner: string;
   assignedProduction: string;
