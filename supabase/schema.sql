@@ -440,3 +440,19 @@ begin
     alter publication supabase_realtime add table public.shop_state;
   end if;
 end $$;
+
+-- เปิด Realtime ให้ลูกค้า/งาน ซิงก์ข้ามเครื่องแบบสด (ดู migration 20260606000000)
+do $$
+declare
+  rt_table text;
+begin
+  foreach rt_table in array array['customers', 'jobs', 'job_comments', 'job_status_history']
+  loop
+    if not exists (
+      select 1 from pg_publication_tables
+      where pubname = 'supabase_realtime' and schemaname = 'public' and tablename = rt_table
+    ) then
+      execute format('alter publication supabase_realtime add table public.%I', rt_table);
+    end if;
+  end loop;
+end $$;

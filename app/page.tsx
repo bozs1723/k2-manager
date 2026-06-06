@@ -887,10 +887,18 @@ export default function Page() {
 
   const canManageExpress = currentUser.role === "Owner" || currentUser.role === "Manager";
 
-  // Realtime: รับแจ้งเตือนใหม่ของตัวเอง + ติดตามสวิตช์งานด่วนแบบสด (เฉพาะโหมด Supabase)
+  // Realtime: รับแจ้งเตือน + สวิตช์งานด่วน + ซิงก์ลูกค้า/งานจากเซิร์ฟเวอร์กลาง (เฉพาะโหมด Supabase)
   useEffect(() => {
     if (!supabase || !isSupabaseConfigured || !uuidPattern.test(currentUser.id)) return;
     const client = supabase;
+    // รวมการเปลี่ยนแปลงหลายรายการแล้วค่อยรีโหลดทีเดียวแบบเงียบ ๆ (ไม่ดีดงานที่กำลังดู/ไม่รีเซ็ตฟอร์ม)
+    let syncTimer: ReturnType<typeof setTimeout> | null = null;
+    function scheduleSync() {
+      if (syncTimer) clearTimeout(syncTimer);
+      syncTimer = setTimeout(() => {
+        void refreshWorkspaceData({ silent: true });
+      }, 400);
+    }
     const channel = client
       .channel(`k2-rt-${currentUser.id}`)
       .on(
@@ -909,10 +917,16 @@ export default function Page() {
           if (typeof row?.express_orders_enabled === "boolean") setExpressOrdersEnabled(row.express_orders_enabled);
         }
       )
+      .on("postgres_changes", { event: "*", schema: "public", table: "customers" }, scheduleSync)
+      .on("postgres_changes", { event: "*", schema: "public", table: "jobs" }, scheduleSync)
+      .on("postgres_changes", { event: "*", schema: "public", table: "job_comments" }, scheduleSync)
+      .on("postgres_changes", { event: "*", schema: "public", table: "job_status_history" }, scheduleSync)
       .subscribe();
     return () => {
+      if (syncTimer) clearTimeout(syncTimer);
       void client.removeChannel(channel);
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentUser.id]);
 
   // ปิด notification panel เมื่อคลิกนอกกล่อง
@@ -965,9 +979,10 @@ export default function Page() {
     setActiveView(navigationItems[0]?.label ?? "Dashboard");
   }, [activeView, isAuthed, navigationItems]);
 
-  async function refreshWorkspaceData() {
+  async function refreshWorkspaceData(options?: { silent?: boolean }) {
     if (!supabase) return;
-    setDataLoading(true);
+    const silent = options?.silent ?? false;
+    if (!silent) setDataLoading(true);
     setDataError("");
     try {
       const [
@@ -1036,11 +1051,12 @@ export default function Page() {
       if (!notificationsResult.error) {
         setNotifications(((notificationsResult.data ?? []) as SupabaseNotificationRow[]).map(notifFromRow));
       }
-      setSelectedJobId(nextJobs[0]?.id ?? "");
+      // คงงานที่กำลังเปิดดูไว้ ไม่ดีดออกเวลามีข้อมูลซิงก์เข้ามา
+      setSelectedJobId((current) => (current && nextJobs.some((job) => job.id === current) ? current : nextJobs[0]?.id ?? ""));
     } catch (error) {
       setDataError(errorMessage(error, "โหลดข้อมูลจาก Supabase ไม่สำเร็จ"));
     } finally {
-      setDataLoading(false);
+      if (!silent) setDataLoading(false);
     }
   }
 
