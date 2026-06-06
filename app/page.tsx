@@ -1,15 +1,17 @@
 "use client";
 
 import Image from "next/image";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import * as XLSX from "xlsx";
 import {
   AlertTriangle,
   BarChart3,
+  Bell,
   Building2,
   CalendarDays,
   CheckCircle2,
+  ChevronDown,
   ChevronRight,
   ClipboardList,
   ClipboardPlus,
@@ -33,12 +35,13 @@ import {
   UserPlus,
   UserRound,
   UsersRound,
-  WalletCards
+  WalletCards,
+  Zap
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { customers as initialCustomers, initialAuditLog, initialJobs, statuses, team as initialTeam } from "@/lib/mock-data";
 import { createSupabaseAuthWorker, isSupabaseConfigured, supabase } from "@/lib/supabase";
-import type { AuditEvent, Customer, Job, JobStatus, JobType, PaymentStatus, Priority, QuoteStatus, Role, TeamMember } from "@/lib/types";
+import type { AppNotification, AuditEvent, Customer, Job, JobStatus, JobType, PaymentStatus, Priority, QuoteStatus, Role, TeamMember } from "@/lib/types";
 
 type ImportedCustomer = Pick<Customer, "name" | "phone" | "lineId" | "email"> & {
   notes: string;
@@ -133,6 +136,7 @@ type SupabaseJobRow = {
   due_date: string;
   priority: Priority;
   status: JobStatus;
+  is_express?: boolean | null;
   assigned_designer: string | null;
   assigned_production: string | null;
   price: number | string;
@@ -140,6 +144,18 @@ type SupabaseJobRow = {
   remaining_balance: number | string;
   payment_status: PaymentStatus;
   internal_notes: string | null;
+  created_at: string;
+};
+
+type SupabaseNotificationRow = {
+  id: string;
+  recipient_id: string;
+  type: AppNotification["type"];
+  job_id: string | null;
+  job_number: string | null;
+  job_title: string | null;
+  message: string;
+  is_read: boolean;
   created_at: string;
 };
 
@@ -258,6 +274,22 @@ function normalizeUsername(value: string) {
 function authEmailFromLogin(value: string) {
   const login = value.trim().toLowerCase();
   return login.includes("@") ? login : `${normalizeUsername(login)}@${internalAuthDomain}`;
+}
+
+const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+// แปลงค่าที่กรอก (อีเมลจริง หรือ username) ให้เป็นอีเมลสำหรับ Supabase Auth + username สำหรับโปรไฟล์
+function resolveLoginIdentity(value: string): { authEmail: string; username: string } {
+  const login = value.trim().toLowerCase();
+  if (login.includes("@")) {
+    if (!emailPattern.test(login)) throw new Error("รูปแบบอีเมลไม่ถูกต้อง");
+    return { authEmail: login, username: normalizeUsername(login.split("@")[0]) };
+  }
+  const username = normalizeUsername(login);
+  if (!usernamePattern.test(username)) {
+    throw new Error("กรอก Username (3-32 ตัว a-z, 0-9, จุด, ขีดกลาง, _) หรืออีเมลจริง");
+  }
+  return { authEmail: `${username}@${internalAuthDomain}`, username };
 }
 
 function usernameFromEmail(email?: string | null) {
@@ -421,6 +453,36 @@ function daysFromToday(date: string) {
 
 function todayISO() {
   return new Date().toISOString().slice(0, 10);
+}
+
+// ระยะเวลาผลิตเริ่มต้น (วัน) ใช้ตั้งกำหนดส่งล่วงหน้าจากวันรับงาน
+const DEFAULT_LEAD_TIME_DAYS = 7;
+
+function addDaysISO(isoDate: string, days: number) {
+  const base = new Date(`${isoDate}T00:00:00`);
+  if (Number.isNaN(base.getTime())) return isoDate;
+  base.setDate(base.getDate() + days);
+  return base.toISOString().slice(0, 10);
+}
+
+// สถานะที่ถือว่างานจบแล้ว ไม่ต้องเตือน/แสดงสีเร่งด่วน
+const FINISHED_STATUSES: JobStatus[] = ["Delivered / Picked Up", "Completed", "Cancelled"];
+
+type DueUrgency = { days: number; label: string; tone: string; dot: string };
+
+// คำนวณความเร่งด่วนจากจำนวนวันที่เหลือถึงกำหนดส่ง เพื่อแสดงสีและเตือนกันพลาด
+function dueUrgency(dueDate: string, status: JobStatus): DueUrgency | null {
+  if (FINISHED_STATUSES.includes(status)) return null;
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const due = new Date(`${dueDate}T00:00:00`);
+  if (Number.isNaN(due.getTime())) return null;
+  const days = Math.round((due.getTime() - today.getTime()) / 86_400_000);
+  if (days < 0) return { days, label: `เลยกำหนด ${Math.abs(days)} วัน`, tone: "bg-rose-100 text-rose-700", dot: "bg-rose-500" };
+  if (days <= 1) return { days, label: days === 0 ? "ครบกำหนดวันนี้" : "ครบกำหนดพรุ่งนี้", tone: "bg-orange-100 text-orange-700", dot: "bg-orange-500" };
+  if (days <= 3) return { days, label: `เหลือ ${days} วัน`, tone: "bg-amber-100 text-amber-800", dot: "bg-amber-500" };
+  if (days <= 7) return { days, label: `เหลือ ${days} วัน`, tone: "bg-sky-100 text-sky-700", dot: "bg-sky-500" };
+  return { days, label: `เหลือ ${days} วัน`, tone: "bg-emerald-100 text-emerald-700", dot: "bg-emerald-500" };
 }
 
 function getPaymentStatus(price: number, deposit: number): PaymentStatus {
@@ -616,6 +678,7 @@ function jobFromRow(
     orderDate: row.order_date,
     dueDate: row.due_date,
     priority: row.priority,
+    isExpress: row.is_express ?? false,
     status: row.status,
     assignedDesigner: row.assigned_designer ? profileNames.get(row.assigned_designer) ?? "Unassigned" : "Unassigned",
     assignedProduction: row.assigned_production ? profileNames.get(row.assigned_production) ?? "Unassigned" : "Unassigned",
@@ -637,6 +700,18 @@ function jobFromRow(
       by: event.changed_by ? profileNames.get(event.changed_by) ?? "K2 User" : "K2 User",
       at: new Date(event.created_at).toLocaleString("en-GB")
     }))
+  };
+}
+
+function notifFromRow(row: SupabaseNotificationRow): AppNotification {
+  return {
+    id: row.id,
+    type: row.type,
+    jobId: row.job_number ?? "",
+    jobTitle: row.job_title ?? "",
+    message: row.message,
+    at: new Date(row.created_at).toLocaleString("th-TH", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" }),
+    read: row.is_read
   };
 }
 
@@ -699,6 +774,10 @@ export default function Page() {
   const [selectedJobId, setSelectedJobId] = useState(initialJobs[0].id);
   const [query, setQuery] = useState("");
   const [draggedJobId, setDraggedJobId] = useState<string | null>(null);
+  const [notifications, setNotifications] = useState<AppNotification[]>([]);
+  const [showNotifPanel, setShowNotifPanel] = useState(false);
+  const notifPanelRef = useRef<HTMLDivElement>(null);
+  const [expressOrdersEnabled, setExpressOrdersEnabled] = useState(false);
 
   const selectedJob = jobs.find((job) => job.id === selectedJobId) ?? jobs[0] ?? null;
   const currentRolePermissions = useMemo(
@@ -770,6 +849,125 @@ export default function Page() {
     }
   }, []);
 
+  // โหมด mock (ไม่มี Supabase): โหลด/บันทึก notification ลง localStorage ต่อผู้ใช้
+  // โหมด Supabase: notification มาจากตาราง + Realtime จึงไม่ใช้ localStorage
+  useEffect(() => {
+    if (isSupabaseConfigured) return;
+    try {
+      const stored = window.localStorage.getItem(`k2-notifs-${currentUser.id}`);
+      setNotifications(stored ? (JSON.parse(stored) as AppNotification[]) : []);
+    } catch { setNotifications([]); }
+  }, [currentUser.id]);
+
+  useEffect(() => {
+    if (isSupabaseConfigured) return;
+    try {
+      window.localStorage.setItem(`k2-notifs-${currentUser.id}`, JSON.stringify(notifications));
+    } catch {}
+  }, [notifications, currentUser.id]);
+
+  // สถานะเปิดรับงานด่วน — โหมด mock อ่านจาก localStorage / โหมด Supabase อ่านจาก shop_state (ใน refreshWorkspaceData)
+  useEffect(() => {
+    if (isSupabaseConfigured) return;
+    setExpressOrdersEnabled(window.localStorage.getItem("k2-express-enabled") === "1");
+  }, []);
+
+  function toggleExpressOrders() {
+    const next = !expressOrdersEnabled;
+    setExpressOrdersEnabled(next);
+    if (supabase && isSupabaseConfigured) {
+      void supabase
+        .from("shop_state")
+        .update({ express_orders_enabled: next, updated_by: uuidPattern.test(currentUser.id) ? currentUser.id : null })
+        .eq("id", true);
+    } else {
+      try { window.localStorage.setItem("k2-express-enabled", next ? "1" : "0"); } catch {}
+    }
+  }
+
+  const canManageExpress = currentUser.role === "Owner" || currentUser.role === "Manager";
+
+  // Realtime: รับแจ้งเตือน + สวิตช์งานด่วน + ซิงก์ลูกค้า/งานจากเซิร์ฟเวอร์กลาง (เฉพาะโหมด Supabase)
+  useEffect(() => {
+    if (!supabase || !isSupabaseConfigured || !uuidPattern.test(currentUser.id)) return;
+    const client = supabase;
+    // รวมการเปลี่ยนแปลงหลายรายการแล้วค่อยรีโหลดทีเดียวแบบเงียบ ๆ (ไม่ดีดงานที่กำลังดู/ไม่รีเซ็ตฟอร์ม)
+    let syncTimer: ReturnType<typeof setTimeout> | null = null;
+    function scheduleSync() {
+      if (syncTimer) clearTimeout(syncTimer);
+      syncTimer = setTimeout(() => {
+        void refreshWorkspaceData({ silent: true });
+      }, 400);
+    }
+    const channel = client
+      .channel(`k2-rt-${currentUser.id}`)
+      .on(
+        "postgres_changes",
+        { event: "INSERT", schema: "public", table: "notifications", filter: `recipient_id=eq.${currentUser.id}` },
+        (payload) => {
+          const row = payload.new as SupabaseNotificationRow;
+          setNotifications((current) => (current.some((item) => item.id === row.id) ? current : [notifFromRow(row), ...current].slice(0, 50)));
+        }
+      )
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "shop_state" },
+        (payload) => {
+          const row = payload.new as { express_orders_enabled?: boolean };
+          if (typeof row?.express_orders_enabled === "boolean") setExpressOrdersEnabled(row.express_orders_enabled);
+        }
+      )
+      .on("postgres_changes", { event: "*", schema: "public", table: "customers" }, scheduleSync)
+      .on("postgres_changes", { event: "*", schema: "public", table: "jobs" }, scheduleSync)
+      .on("postgres_changes", { event: "*", schema: "public", table: "job_comments" }, scheduleSync)
+      .on("postgres_changes", { event: "*", schema: "public", table: "job_status_history" }, scheduleSync)
+      .subscribe();
+    return () => {
+      if (syncTimer) clearTimeout(syncTimer);
+      void client.removeChannel(channel);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentUser.id]);
+
+  // ปิด notification panel เมื่อคลิกนอกกล่อง
+  useEffect(() => {
+    if (!showNotifPanel) return;
+    function handleClickOutside(event: MouseEvent) {
+      if (notifPanelRef.current && !notifPanelRef.current.contains(event.target as Node)) {
+        setShowNotifPanel(false);
+      }
+    }
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, [showNotifPanel]);
+
+  // เตือนงานของตัวเองที่ใกล้ถึงกำหนดส่ง (ภายใน 2 วัน หรือเลยกำหนด) วันละครั้งต่อหนึ่งงาน
+  useEffect(() => {
+    const stampKey = `k2-due-notified-${currentUser.id}`;
+    let notified: string[] = [];
+    try { notified = JSON.parse(window.localStorage.getItem(stampKey) ?? "[]"); } catch {}
+    const today = todayISO();
+    const fresh: string[] = [];
+    jobs.forEach((job) => {
+      if (job.assignedDesigner !== currentUser.name && job.assignedProduction !== currentUser.name) return;
+      const urgency = dueUrgency(job.dueDate, job.status);
+      if (!urgency || urgency.days > 2) return;
+      const key = `${job.id}|${job.dueDate}|${today}`;
+      if (notified.includes(key)) return;
+      fresh.push(key);
+      const detail = urgency.days < 0
+        ? `เลยกำหนดส่ง ${Math.abs(urgency.days)} วันแล้ว`
+        : urgency.days === 0
+          ? "ครบกำหนดส่งวันนี้"
+          : `อีก ${urgency.days} วันถึงกำหนดส่ง`;
+      notifyDueSoonSelf(job, `⏰ งาน ${job.id} – ${detail}`);
+    });
+    if (fresh.length) {
+      try { window.localStorage.setItem(stampKey, JSON.stringify([...notified, ...fresh].slice(-200))); } catch {}
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [jobs, currentUser.id, currentUser.name]);
+
   useEffect(() => {
     if (!isAuthed || !supabase) return;
     void refreshWorkspaceData();
@@ -781,9 +979,10 @@ export default function Page() {
     setActiveView(navigationItems[0]?.label ?? "Dashboard");
   }, [activeView, isAuthed, navigationItems]);
 
-  async function refreshWorkspaceData() {
+  async function refreshWorkspaceData(options?: { silent?: boolean }) {
     if (!supabase) return;
-    setDataLoading(true);
+    const silent = options?.silent ?? false;
+    if (!silent) setDataLoading(true);
     setDataError("");
     try {
       const [
@@ -795,7 +994,9 @@ export default function Page() {
         historyResult,
         filesResult,
         auditResult,
-        rolePermissionsResult
+        rolePermissionsResult,
+        shopStateResult,
+        notificationsResult
       ] = await Promise.all([
         supabase.from("profiles").select("id, email, full_name, role, avatar_url, is_active").eq("is_active", true).order("created_at", { ascending: true }),
         supabase.from("company_settings").select("*").order("created_at", { ascending: true }).limit(1),
@@ -805,7 +1006,9 @@ export default function Page() {
         supabase.from("job_status_history").select("id, job_id, from_status, to_status, created_at, changed_by").order("created_at", { ascending: true }),
         supabase.from("job_files").select("id, job_id, file_name, file_type, file_size").order("created_at", { ascending: true }),
         supabase.from("audit_log").select("id, action, target_table, target_id, metadata, created_at, actor_id").order("created_at", { ascending: false }).limit(80),
-        supabase.from("role_permissions").select("role, permissions")
+        supabase.from("role_permissions").select("role, permissions"),
+        supabase.from("shop_state").select("express_orders_enabled").limit(1),
+        supabase.from("notifications").select("*").eq("recipient_id", currentUser.id).order("created_at", { ascending: false }).limit(50)
       ]);
 
       const failures = [profilesResult, customersResult, jobsResult, commentsResult, historyResult, filesResult].filter((result) => result.error);
@@ -841,11 +1044,19 @@ export default function Page() {
       setJobs(nextJobs);
       setCustomerRecords(customerRows.map((row) => customerFromRow(row, jobRows)));
       setAuditLog(auditResult.error ? [] : ((auditResult.data ?? []) as Parameters<typeof auditFromRow>[0][]).map((row) => auditFromRow(row, profileNames)));
-      setSelectedJobId(nextJobs[0]?.id ?? "");
+
+      if (!shopStateResult.error && shopStateResult.data?.[0]) {
+        setExpressOrdersEnabled(Boolean((shopStateResult.data[0] as { express_orders_enabled?: boolean }).express_orders_enabled));
+      }
+      if (!notificationsResult.error) {
+        setNotifications(((notificationsResult.data ?? []) as SupabaseNotificationRow[]).map(notifFromRow));
+      }
+      // คงงานที่กำลังเปิดดูไว้ ไม่ดีดออกเวลามีข้อมูลซิงก์เข้ามา
+      setSelectedJobId((current) => (current && nextJobs.some((job) => job.id === current) ? current : nextJobs[0]?.id ?? ""));
     } catch (error) {
       setDataError(errorMessage(error, "โหลดข้อมูลจาก Supabase ไม่สำเร็จ"));
     } finally {
-      setDataLoading(false);
+      if (!silent) setDataLoading(false);
     }
   }
 
@@ -904,11 +1115,7 @@ export default function Page() {
     setAuthError("");
     setAuthLoading(true);
     try {
-      const username = normalizeUsername(authForm.username);
-      if (!usernamePattern.test(username)) {
-        throw new Error("Username ต้องมี 3-32 ตัว ใช้ a-z, 0-9, จุด, ขีดกลาง หรือ _ เท่านั้น");
-      }
-      const authEmail = authEmailFromLogin(username);
+      const { authEmail, username } = resolveLoginIdentity(authForm.username);
       if (authMode === "signUp") {
         const { data, error } = await supabase.auth.signUp({
           email: authEmail,
@@ -960,6 +1167,82 @@ export default function Page() {
     setActiveView("Dashboard");
   }
 
+  // เพิ่มแจ้งเตือนลง state ปัจจุบัน (ใช้ในโหมด mock และ due_soon ของตัวเอง)
+  function pushLocalNotif(type: AppNotification["type"], job: Pick<Job, "id" | "title">, message: string) {
+    setNotifications((current) => [
+      {
+        id: crypto.randomUUID(),
+        type,
+        jobId: job.id,
+        jobTitle: job.title,
+        message,
+        at: new Date().toLocaleString("th-TH", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" }),
+        read: false
+      },
+      ...current
+    ].slice(0, 50));
+  }
+
+  // แจ้งเตือนผู้รับผิดชอบงาน (ออกแบบ/ผลิต) ยกเว้นตัวผู้กระทำเอง
+  // โหมด Supabase: insert ลงตาราง notifications -> Realtime ส่งถึงเครื่องผู้รับ
+  // โหมด mock: ถ้าผู้รับคือ user ปัจจุบัน ค่อยเด้งในเครื่อง (เดโมเครื่องเดียว)
+  function notifyAssignees(
+    type: AppNotification["type"],
+    job: Pick<Job, "id" | "title" | "dbId" | "assignedDesigner" | "assignedProduction">,
+    message: string
+  ) {
+    const recipients = Array.from(new Set([job.assignedDesigner, job.assignedProduction])).filter(
+      (name): name is string => Boolean(name) && name !== "Unassigned"
+    );
+    if (supabase && isSupabaseConfigured) {
+      const rows = recipients
+        .filter((name) => name !== currentUser.name)
+        .map((name) => teamMembers.find((member) => member.name === name)?.id)
+        .filter((id): id is string => typeof id === "string" && uuidPattern.test(id))
+        .map((recipientId) => ({
+          recipient_id: recipientId,
+          type,
+          job_id: job.dbId ?? null,
+          job_number: job.id,
+          job_title: job.title,
+          message
+        }));
+      if (rows.length) void supabase.from("notifications").insert(rows);
+    } else if (recipients.includes(currentUser.name)) {
+      pushLocalNotif(type, job, message);
+    }
+  }
+
+  // แจ้งเตือนตัวเอง (งานใกล้ถึงกำหนด) — โหมด Supabase insert ถึงตัวเอง แล้ว Realtime ส่งกลับ
+  function notifyDueSoonSelf(job: Pick<Job, "id" | "title" | "dbId">, message: string) {
+    if (supabase && isSupabaseConfigured && uuidPattern.test(currentUser.id)) {
+      void supabase.from("notifications").insert({
+        recipient_id: currentUser.id,
+        type: "due_soon",
+        job_id: job.dbId ?? null,
+        job_number: job.id,
+        job_title: job.title,
+        message
+      });
+    } else {
+      pushLocalNotif("due_soon", job, message);
+    }
+  }
+
+  function markAllNotifsRead() {
+    setNotifications((current) => current.map((item) => ({ ...item, read: true })));
+    if (supabase && isSupabaseConfigured && uuidPattern.test(currentUser.id)) {
+      void supabase.from("notifications").update({ is_read: true }).eq("recipient_id", currentUser.id).eq("is_read", false);
+    }
+  }
+
+  function clearAllNotifs() {
+    setNotifications([]);
+    if (supabase && isSupabaseConfigured && uuidPattern.test(currentUser.id)) {
+      void supabase.from("notifications").delete().eq("recipient_id", currentUser.id);
+    }
+  }
+
   async function moveJob(jobId: string, nextStatus: JobStatus) {
     if (!can("move_status")) {
       setDataError("บทบาทนี้ยังไม่มีสิทธิ์ย้ายสถานะงาน");
@@ -1001,6 +1284,7 @@ export default function Page() {
       });
     }
     void appendAudit(`moved status to ${nextStatus}`, jobId, "jobs", existingJob.dbId);
+    notifyAssignees("status_moved", existingJob, `งาน ${existingJob.id} ย้ายไป "${statusLabel[nextStatus]}" แล้ว`);
   }
 
   async function updatePayment(jobId: string, deposit: number) {
@@ -1064,6 +1348,7 @@ export default function Page() {
       }
     }
     void appendAudit("added comment", jobId, "jobs", existingJob.dbId);
+    notifyAssignees("comment", existingJob, `${currentUser.name} คอมเมนต์ใน ${existingJob.id}: "${text.slice(0, 40)}${text.length > 40 ? "…" : ""}"`);
   }
 
   async function createJob(input?: Partial<Job>) {
@@ -1182,6 +1467,7 @@ export default function Page() {
               order_date: input?.orderDate ?? todayISO(),
               due_date: input?.dueDate ?? todayISO(),
               priority: input?.priority ?? "Normal",
+              is_express: input?.isExpress ?? false,
               status: "New Order",
               assigned_designer: teamIdByName(teamMembers, input?.assignedDesigner),
               assigned_production: teamIdByName(teamMembers, input?.assignedProduction),
@@ -1208,6 +1494,17 @@ export default function Page() {
           });
         }
         await appendAudit("created job", insertedJobNumber, "jobs", insertedJob.id);
+        notifyAssignees(
+          "assigned",
+          {
+            id: insertedJobNumber,
+            title: input?.title ?? "งานใหม่",
+            dbId: insertedJob.id,
+            assignedDesigner: input?.assignedDesigner ?? "Unassigned",
+            assignedProduction: input?.assignedProduction ?? "Unassigned"
+          },
+          `ได้รับมอบหมายงาน ${insertedJobNumber} – ${input?.title ?? "งานใหม่"}`
+        );
         await refreshWorkspaceData();
         setSelectedJobId(insertedJobNumber);
         setActiveView("Detail");
@@ -1240,6 +1537,7 @@ export default function Page() {
       orderDate: input?.orderDate ?? todayISO(),
       dueDate: input?.dueDate ?? todayISO(),
       priority: input?.priority ?? "Urgent",
+      isExpress: input?.isExpress ?? false,
       status: "New Order",
       assignedDesigner: input?.assignedDesigner ?? "Beam S.",
       assignedProduction: input?.assignedProduction ?? "Unassigned",
@@ -1277,6 +1575,7 @@ export default function Page() {
       );
     }
     setJobs((current) => [job, ...current]);
+    notifyAssignees("assigned", job, `ได้รับมอบหมายงาน ${job.id} – ${job.title}`);
     setSelectedJobId(job.id);
     setActiveView("Detail");
     void appendAudit("created job", job.id);
@@ -1495,6 +1794,26 @@ export default function Page() {
     void appendAudit("removed customer", customer.name, "customers", customerId);
   }
 
+  async function removeJob(jobId: string) {
+    if (!can("delete_job")) {
+      setDataError("บทบาทนี้ยังไม่มีสิทธิ์ลบงาน");
+      return;
+    }
+    const existingJob = jobs.find((job) => job.id === jobId);
+    if (!existingJob) return;
+    if (supabase && existingJob.dbId && uuidPattern.test(currentUser.id)) {
+      const { error } = await supabase.from("jobs").delete().eq("id", existingJob.dbId);
+      if (error) {
+        setDataError(error.message);
+        return;
+      }
+    }
+    setJobs((current) => current.filter((job) => job.id !== jobId));
+    setSelectedJobId((current) => (current === jobId ? "" : current));
+    setActiveView("Dashboard");
+    void appendAudit("removed job", jobId, "jobs", existingJob.dbId);
+  }
+
   async function saveCompanyProfile(profile: CompanyProfile) {
     if (!can("manage_company_settings")) {
       setDataError("บทบาทนี้ยังไม่มีสิทธิ์ตั้งค่าบริษัท");
@@ -1645,8 +1964,8 @@ export default function Page() {
                   ) : null}
                   <input
                     value={authForm.username}
-                    onChange={(event) => setAuthForm((current) => ({ ...current, username: normalizeUsername(event.target.value) }))}
-                    placeholder="Username เช่น beam หรือ art01"
+                    onChange={(event) => setAuthForm((current) => ({ ...current, username: event.target.value.toLowerCase() }))}
+                    placeholder="Username หรืออีเมล เช่น beam หรือ you@email.com"
                     type="text"
                     autoCapitalize="none"
                     autoComplete="username"
@@ -1741,7 +2060,7 @@ export default function Page() {
         </aside>
 
         <section className="min-w-0 flex-1">
-          <header className="glass sticky top-3 z-30 mb-4 rounded-[1.5rem] p-3">
+          <header className="glass glass-solid sticky top-3 z-30 mb-4 rounded-[1.5rem] p-3">
             <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
               <div className="flex items-center gap-3">
                 <KLogoMark className="h-[5.25rem] w-[5.25rem] shrink-0 lg:hidden" />
@@ -1760,6 +2079,82 @@ export default function Page() {
                     className="w-full min-w-0 bg-transparent text-sm outline-none sm:w-72"
                   />
                 </label>
+
+                {/* สวิตช์เปิดรับงานด่วน — เฉพาะผู้จัดการ/เจ้าของ */}
+                {canManageExpress ? (
+                  <button
+                    onClick={toggleExpressOrders}
+                    className={`inline-flex items-center justify-center gap-2 rounded-2xl px-4 py-2.5 text-sm font-semibold shadow-sm transition ${
+                      expressOrdersEnabled ? "bg-rose-500 text-white shadow-rose-500/25" : "bg-white/70 text-k2-muted"
+                    }`}
+                    title={expressOrdersEnabled ? "ปิดรับงานด่วน" : "เปิดรับงานด่วน"}
+                  >
+                    <Zap className="h-4 w-4" />
+                    {expressOrdersEnabled ? "รับงานด่วน: เปิด" : "รับงานด่วน: ปิด"}
+                  </button>
+                ) : expressOrdersEnabled ? (
+                  <span className="inline-flex items-center gap-1.5 rounded-2xl bg-rose-100 px-3 py-2.5 text-sm font-bold text-rose-700">
+                    <Zap className="h-4 w-4" />
+                    รับงานด่วน
+                  </span>
+                ) : null}
+
+                {/* กระดิ่งแจ้งเตือน */}
+                <div ref={notifPanelRef} className="relative">
+                  <button
+                    onClick={() => {
+                      setShowNotifPanel((prev) => !prev);
+                      markAllNotifsRead();
+                    }}
+                    className="relative inline-flex h-10 w-10 items-center justify-center rounded-2xl bg-white/70 text-k2-muted shadow-sm"
+                    aria-label="การแจ้งเตือน"
+                  >
+                    <Bell className="h-4 w-4" />
+                    {notifications.some((n) => !n.read) && (
+                      <span className="absolute -right-1 -top-1 flex h-5 w-5 items-center justify-center rounded-full bg-rose-500 text-[10px] font-bold text-white">
+                        {Math.min(notifications.filter((n) => !n.read).length, 9)}
+                        {notifications.filter((n) => !n.read).length > 9 ? "+" : ""}
+                      </span>
+                    )}
+                  </button>
+
+                  {showNotifPanel && (
+                    <div className="absolute right-0 top-12 z-50 w-80 overflow-hidden rounded-[1.25rem] border border-white/80 bg-white/97 shadow-2xl backdrop-blur-xl">
+                      <div className="flex items-center justify-between border-b border-white/60 px-4 py-3">
+                        <span className="text-sm font-bold">การแจ้งเตือน</span>
+                        {notifications.length > 0 && (
+                          <button
+                            onClick={clearAllNotifs}
+                            className="text-xs font-semibold text-k2-muted hover:text-k2-ink"
+                          >
+                            ล้างทั้งหมด
+                          </button>
+                        )}
+                      </div>
+                      <div className="max-h-96 overflow-y-auto">
+                        {notifications.length === 0 ? (
+                          <p className="px-4 py-8 text-center text-sm font-semibold text-k2-muted">ยังไม่มีการแจ้งเตือน</p>
+                        ) : (
+                          notifications.map((notif) => (
+                            <button
+                              key={notif.id}
+                              onClick={() => {
+                                setSelectedJobId(notif.jobId);
+                                setActiveView("Detail");
+                                setShowNotifPanel(false);
+                              }}
+                              className={`flex w-full flex-col gap-1 border-b border-white/40 px-4 py-3 text-left hover:bg-white/60 ${notif.read ? "opacity-55" : "bg-teal-50/60"}`}
+                            >
+                              <p className="text-sm font-semibold leading-snug">{notif.message}</p>
+                              <p className="text-xs text-k2-muted">{notif.at}</p>
+                            </button>
+                          ))
+                        )}
+                      </div>
+                    </div>
+                  )}
+                </div>
+
                 <button
                   onClick={() => setActiveView("Create Job")}
                   disabled={!can("create_job")}
@@ -1836,7 +2231,7 @@ export default function Page() {
             )}
             {activeView === "Create Job" && (
               <motion.div key="create" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}>
-                <CreateJobView customers={customerRecords} teamMembers={teamMembers} onCreate={createJob} />
+                <CreateJobView customers={customerRecords} teamMembers={teamMembers} expressEnabled={expressOrdersEnabled} onCreate={createJob} />
               </motion.div>
             )}
             {activeView === "Customers" && (
@@ -1844,6 +2239,7 @@ export default function Page() {
                 <CustomersView
                   customers={customerRecords}
                   jobs={jobs}
+                  canDelete={can("delete_customer")}
                   onAddCustomer={addCustomer}
                   onUpdateCustomer={updateCustomer}
                   onRemoveCustomer={removeCustomer}
@@ -1884,7 +2280,7 @@ export default function Page() {
             {activeView === "Detail" && (
               <motion.div key="detail" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}>
                 {selectedJob ? (
-                  <JobDetail job={selectedJob} companyProfile={companyProfile} canSeeMoney={canSeeMoney} onPayment={updatePayment} onComment={addComment} onMove={moveJob} />
+                  <JobDetail job={selectedJob} companyProfile={companyProfile} canSeeMoney={canSeeMoney} canDeleteJob={can("delete_job")} onPayment={updatePayment} onComment={addComment} onMove={moveJob} onDelete={removeJob} />
                 ) : (
                   <EmptyState title="ยังไม่มีงานในระบบ" text="เริ่มจากสร้างลูกค้าและสร้างงานแรกได้เลย" action={() => setActiveView("Create Job")} />
                 )}
@@ -2062,18 +2458,30 @@ function Dashboard({
 }
 
 function JobRow({ job, canSeeMoney, onSelect }: { job: Job; canSeeMoney: boolean; onSelect: (id: string) => void }) {
+  const urgency = dueUrgency(job.dueDate, job.status);
   return (
     <button onClick={() => onSelect(job.id)} className="grid w-full gap-3 rounded-2xl bg-white/60 p-4 text-left transition hover:bg-white lg:grid-cols-[1.2fr_0.8fr_0.6fr_auto] lg:items-center">
       <div>
         <div className="mb-2 flex flex-wrap items-center gap-2">
-          <span className="font-bold">{job.id}</span>
+          <span className="flex items-center gap-1.5 font-bold">
+            {job.isExpress ? <Zap className="h-3.5 w-3.5 text-rose-500" /> : null}
+            {job.id}
+          </span>
           <span className={`rounded-full px-2.5 py-1 text-xs font-bold ${priorityClass[job.priority]}`}>{priorityLabel[job.priority]}</span>
         </div>
         <p className="font-semibold">{job.title}</p>
         <p className="text-sm text-k2-muted">{job.customerName}</p>
       </div>
       <span className={`w-fit rounded-full px-3 py-1 text-xs font-bold ${statusTint[job.status]}`}>{statusLabel[job.status]}</span>
-      <div className="text-sm text-k2-muted">กำหนดส่ง {job.dueDate}</div>
+      <div className="flex flex-col gap-1 text-sm text-k2-muted">
+        <span>กำหนดส่ง {job.dueDate}</span>
+        {urgency ? (
+          <span className={`flex w-fit items-center gap-1 rounded-full px-2 py-0.5 text-xs font-bold ${urgency.tone}`}>
+            <span className={`h-1.5 w-1.5 rounded-full ${urgency.dot}`} />
+            {urgency.label}
+          </span>
+        ) : null}
+      </div>
       <div className="font-semibold">{canSeeMoney ? money.format(job.remainingBalance) : "ซ่อนข้อมูล"}</div>
     </button>
   );
@@ -2116,30 +2524,65 @@ function Board({
                   {columnJobs.length} งาน
                 </span>
               </div>
-              <p className="mt-1.5 text-xs font-semibold text-k2-muted">ลากการ์ดมาวางเพื่อเปลี่ยนสถานะ</p>
+              <p className="mt-1.5 text-xs font-semibold text-k2-muted">
+                <span className="hidden sm:inline">ลากการ์ดมาวางเพื่อเปลี่ยนสถานะ · </span>
+                <span>แตะ ▼ ใต้การ์ดเพื่อย้ายขั้นตอน</span>
+              </p>
             </div>
             <div className="space-y-3">
-              {columnJobs.map((job) => (
-                <motion.button
+              {columnJobs.map((job) => {
+                const urgency = dueUrgency(job.dueDate, job.status);
+                return (
+                <motion.div
                   layout
-                  draggable
                   key={job.id}
-                  onDragStart={() => setDraggedJobId(job.id)}
-                  onClick={() => onSelect(job.id)}
-                  className="w-full rounded-[1.25rem] border border-white/80 bg-white/75 p-4 text-left shadow-sm transition hover:-translate-y-0.5 hover:bg-white"
+                  className={`overflow-hidden rounded-[1.25rem] border bg-white/75 shadow-sm transition hover:bg-white ${
+                    urgency && urgency.days <= 1 ? "border-l-4 border-l-rose-400 border-white/80" : "border-white/80"
+                  }`}
                 >
-                  <div className="mb-3 flex items-center justify-between gap-2">
-                    <span className="text-sm font-bold">{job.id}</span>
-                    <span className={`rounded-full px-2 py-1 text-[11px] font-bold ${priorityClass[job.priority]}`}>{priorityLabel[job.priority]}</span>
+                  {/* แตะเพื่อดูรายละเอียด / ลากเพื่อย้ายขั้นตอน (desktop) */}
+                  <button
+                    draggable
+                    onDragStart={() => setDraggedJobId(job.id)}
+                    onClick={() => onSelect(job.id)}
+                    className="w-full p-4 text-left"
+                  >
+                    <div className="mb-3 flex items-center justify-between gap-2">
+                      <span className="flex items-center gap-1.5 text-sm font-bold">
+                        {job.isExpress ? <Zap className="h-3.5 w-3.5 text-rose-500" /> : null}
+                        {job.id}
+                      </span>
+                      <span className={`rounded-full px-2 py-1 text-[11px] font-bold ${priorityClass[job.priority]}`}>{priorityLabel[job.priority]}</span>
+                    </div>
+                    <p className="font-semibold leading-5">{job.title}</p>
+                    <p className="mt-1 text-sm text-k2-muted">{job.customerName}</p>
+                    <div className="mt-4 flex items-center justify-between gap-2 text-xs font-semibold text-k2-muted">
+                      <span>{jobTypeLabel[job.type]}</span>
+                      {urgency ? (
+                        <span className={`flex items-center gap-1 rounded-full px-2 py-1 ${urgency.tone}`}>
+                          <span className={`h-1.5 w-1.5 rounded-full ${urgency.dot}`} />
+                          {urgency.label}
+                        </span>
+                      ) : (
+                        <span>{job.dueDate}</span>
+                      )}
+                    </div>
+                  </button>
+                  {/* เลือกขั้นตอนใหม่ — ใช้งานได้ทั้ง mobile touch และ desktop */}
+                  <div className="border-t border-white/60 px-3 py-2">
+                    <select
+                      value={status}
+                      onChange={(event) => moveJob(job.id, event.target.value as JobStatus)}
+                      className="w-full cursor-pointer rounded-xl bg-white/60 px-3 py-2 text-xs font-bold text-k2-muted outline-none"
+                    >
+                      {statuses.map((s) => (
+                        <option key={s} value={s}>{statusLabel[s]}</option>
+                      ))}
+                    </select>
                   </div>
-                  <p className="font-semibold leading-5">{job.title}</p>
-                  <p className="mt-1 text-sm text-k2-muted">{job.customerName}</p>
-                  <div className="mt-4 flex items-center justify-between text-xs font-semibold text-k2-muted">
-                    <span>{jobTypeLabel[job.type]}</span>
-                    <span>{job.dueDate}</span>
-                  </div>
-                </motion.button>
-              ))}
+                </motion.div>
+                );
+              })}
               {columnJobs.length === 0 ? (
                 <div className="rounded-[1.25rem] border border-dashed border-white/90 bg-white/35 px-4 py-6 text-center text-sm font-semibold text-k2-muted">
                   ยังไม่มีงานในขั้นตอนนี้
@@ -2157,19 +2600,24 @@ function JobDetail({
   job,
   companyProfile,
   canSeeMoney,
+  canDeleteJob,
   onPayment,
   onComment,
-  onMove
+  onMove,
+  onDelete
 }: {
   job: Job;
   companyProfile: CompanyProfile;
   canSeeMoney: boolean;
+  canDeleteJob: boolean;
   onPayment: (jobId: string, deposit: number) => void;
   onComment: (jobId: string, text: string) => void;
   onMove: (jobId: string, status: JobStatus) => void;
+  onDelete: (jobId: string) => void;
 }) {
   const [comment, setComment] = useState("");
   const workOrderNumber = job.quoteNumber ?? quoteNumberFor(Number(job.id.replace(/\D/g, "").slice(-4)) || 1, companyProfile.quotePrefix);
+  const dueInfo = dueUrgency(job.dueDate, job.status);
   return (
     <div className="grid gap-4 xl:grid-cols-[1.15fr_0.85fr]">
       <section className="glass rounded-[1.5rem] p-5">
@@ -2178,19 +2626,44 @@ function JobDetail({
             <div className="mb-3 flex flex-wrap gap-2">
               <span className={`rounded-full px-3 py-1 text-xs font-bold ${statusTint[job.status]}`}>{statusLabel[job.status]}</span>
               <span className={`rounded-full px-3 py-1 text-xs font-bold ${priorityClass[job.priority]}`}>{priorityLabel[job.priority]}</span>
+              {job.isExpress ? (
+                <span className="flex items-center gap-1 rounded-full bg-rose-500 px-3 py-1 text-xs font-bold text-white">
+                  <Zap className="h-3 w-3" /> งานด่วน
+                </span>
+              ) : null}
+              {dueInfo ? (
+                <span className={`flex items-center gap-1 rounded-full px-3 py-1 text-xs font-bold ${dueInfo.tone}`}>
+                  <span className={`h-1.5 w-1.5 rounded-full ${dueInfo.dot}`} />
+                  {dueInfo.label}
+                </span>
+              ) : null}
             </div>
             <h3 className="text-3xl font-semibold">{job.title}</h3>
             <p className="mt-2 text-k2-muted">{job.id} - {jobTypeLabel[job.type]} - {job.quantity} ชิ้น</p>
           </div>
-          <select
-            value={job.status}
-            onChange={(event) => onMove(job.id, event.target.value as JobStatus)}
-            className="rounded-2xl border border-white/80 bg-white/80 px-4 py-3 text-sm font-semibold outline-none"
-          >
-            {statuses.map((status) => (
-              <option key={status} value={status}>{statusLabel[status]}</option>
-            ))}
-          </select>
+          <div className="flex items-center gap-2">
+            <select
+              value={job.status}
+              onChange={(event) => onMove(job.id, event.target.value as JobStatus)}
+              className="rounded-2xl border border-white/80 bg-white/80 px-4 py-3 text-sm font-semibold outline-none"
+            >
+              {statuses.map((status) => (
+                <option key={status} value={status}>{statusLabel[status]}</option>
+              ))}
+            </select>
+            {canDeleteJob ? (
+              <button
+                type="button"
+                onClick={() => {
+                  if (window.confirm(`ลบงาน ${job.id} – "${job.title}" ออกจากระบบ?\nการลบนี้ย้อนกลับไม่ได้`)) onDelete(job.id);
+                }}
+                className="grid h-12 w-12 shrink-0 place-items-center rounded-2xl bg-rose-50 text-rose-600"
+                title="ลบงานนี้"
+              >
+                <Trash2 className="h-4 w-4" />
+              </button>
+            ) : null}
+          </div>
         </div>
         <p className="mt-5 rounded-3xl bg-white/60 p-5 leading-8 text-k2-muted">{job.description}</p>
 
@@ -2202,7 +2675,7 @@ function JobDetail({
           <Info label="เลขผู้เสียภาษี" value={job.taxId || "ยังไม่ระบุ"} icon={ReceiptText} />
           <Info label="อีเมลบัญชี" value={job.accountingEmail || "ยังไม่ระบุ"} icon={WalletCards} />
           <Info label="วันที่รับงาน" value={job.orderDate} icon={CalendarDays} />
-          <Info label="กำหนดส่ง" value={job.dueDate} icon={Clock3} />
+          <Info label={job.isExpress ? "วันที่นัดส่งงาน (ด่วน)" : "กำหนดส่ง"} value={dueInfo ? `${job.dueDate} · ${dueInfo.label}` : job.dueDate} icon={Clock3} />
           <Info label="ผู้รับผิดชอบออกแบบ" value={staffLabel(job.assignedDesigner)} icon={Sparkles} />
           <Info label="ผู้รับผิดชอบผลิต" value={staffLabel(job.assignedProduction)} icon={Factory} />
           <Info label="โน้ตภายใน" value={job.internalNotes} icon={ClipboardList} />
@@ -2505,59 +2978,155 @@ function MoneyLine({ label, value, visible }: { label: string; value: number; vi
   );
 }
 
+// ตัวเลือกลูกค้าแบบค้นหาได้ — พิมพ์ชื่อ เบอร์โทร หรือรหัสเพื่อกรอง เริ่มต้นเป็น "ลูกค้าใหม่" (ว่าง)
+function CustomerPicker({
+  customers,
+  selectedId,
+  selectedName,
+  onPickNew,
+  onPickCustomer
+}: {
+  customers: Customer[];
+  selectedId: string;
+  selectedName: string;
+  onPickNew: () => void;
+  onPickCustomer: (customer: Customer) => void;
+}) {
+  const [query, setQuery] = useState("");
+  const [open, setOpen] = useState(false);
+  const boxRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    function handleClickOutside(event: MouseEvent) {
+      if (boxRef.current && !boxRef.current.contains(event.target as Node)) setOpen(false);
+    }
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, [open]);
+
+  const normalized = query.trim().toLowerCase();
+  const matches = useMemo(() => {
+    const list = normalized
+      ? customers.filter((customer) =>
+          [customer.name, customer.phone, customer.id, customer.companyName, customer.lineId, customer.taxId]
+            .filter(Boolean)
+            .join(" ")
+            .toLowerCase()
+            .includes(normalized)
+        )
+      : customers;
+    return list.slice(0, 40);
+  }, [customers, normalized]);
+
+  const isNew = selectedId === "new";
+
+  return (
+    <div ref={boxRef} className="relative">
+      <button
+        type="button"
+        onClick={() => setOpen((current) => !current)}
+        className="flex w-full items-center justify-between gap-2 rounded-2xl border border-white/80 bg-white/80 px-4 py-3 text-left outline-none"
+      >
+        <span className={isNew ? "text-k2-muted" : "font-semibold"}>
+          {isNew ? "+ ลูกค้าใหม่ (ยังไม่เลือก)" : selectedName || "เลือกลูกค้า"}
+        </span>
+        <ChevronDown className="h-4 w-4 shrink-0 text-k2-muted" />
+      </button>
+      {open ? (
+        <div className="absolute left-0 right-0 top-full z-40 mt-2 overflow-hidden rounded-2xl border border-white/80 bg-white/97 shadow-2xl backdrop-blur-xl">
+          <div className="flex items-center gap-2 border-b border-white/60 px-3 py-2">
+            <Search className="h-4 w-4 shrink-0 text-k2-muted" />
+            <input
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              placeholder="ค้นหาด้วยชื่อ เบอร์โทร หรือรหัส"
+              autoFocus
+              className="w-full bg-transparent text-sm outline-none"
+            />
+          </div>
+          <div className="max-h-64 overflow-y-auto">
+            <button
+              type="button"
+              onClick={() => {
+                onPickNew();
+                setQuery("");
+                setOpen(false);
+              }}
+              className="flex w-full items-center gap-2 border-b border-white/40 px-4 py-3 text-left text-sm font-bold text-teal-700 hover:bg-white/60"
+            >
+              <Plus className="h-4 w-4" /> สร้างลูกค้าใหม่
+            </button>
+            {matches.map((customer) => (
+              <button
+                key={customer.id}
+                type="button"
+                onClick={() => {
+                  onPickCustomer(customer);
+                  setQuery("");
+                  setOpen(false);
+                }}
+                className={`flex w-full flex-col gap-0.5 border-b border-white/40 px-4 py-2.5 text-left hover:bg-white/60 ${
+                  customer.id === selectedId ? "bg-teal-50/70" : ""
+                }`}
+              >
+                <span className="text-sm font-semibold">{customer.name}</span>
+                <span className="text-xs text-k2-muted">
+                  {[customer.phone, customer.lineId].filter(Boolean).join(" · ") || "ไม่มีเบอร์/LINE"}
+                </span>
+              </button>
+            ))}
+            {matches.length === 0 ? (
+              <p className="px-4 py-6 text-center text-sm font-semibold text-k2-muted">ไม่พบลูกค้าที่ค้นหา</p>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function CreateJobView({
   customers,
   teamMembers,
+  expressEnabled,
   onCreate
 }: {
   customers: Customer[];
   teamMembers: TeamMember[];
+  expressEnabled: boolean;
   onCreate: (job: Partial<Job>) => void;
 }) {
-  const defaultCustomer = customers[0] ?? {
-    id: "new",
-    name: "",
+  const designerOptions = useMemo(() => teamMembers.filter((member) => ["Designer", "Admin", "Owner"].includes(member.role)), [teamMembers]);
+  const productionOptions = useMemo(() => teamMembers.filter((member) => ["Production Staff", "Admin", "Owner"].includes(member.role)), [teamMembers]);
+  const defaultDesigner = designerOptions[0]?.name ?? "Unassigned";
+  const defaultProduction = productionOptions[0]?.name ?? "Unassigned";
+  // ฟอร์มสร้างงานเริ่มจากค่าว่างเสมอ เพื่อไม่ให้ข้อมูลจากงานก่อนหน้าค้างมาทำให้สร้างออเดอร์ผิด/ซ้ำ
+  const [form, setForm] = useState({
+    customerId: "new",
+    customerName: "",
     phone: "",
     lineId: "",
-    email: "",
     companyName: "",
     taxId: "",
     branch: "สำนักงานใหญ่",
     billingAddress: "",
     accountingEmail: "",
     requiresInvoice: false,
-    totalOrders: 0,
-    lifetimeValue: 0,
-    lastOrderDate: "-"
-  };
-  const designerOptions = useMemo(() => teamMembers.filter((member) => ["Designer", "Admin", "Owner"].includes(member.role)), [teamMembers]);
-  const productionOptions = useMemo(() => teamMembers.filter((member) => ["Production Staff", "Admin", "Owner"].includes(member.role)), [teamMembers]);
-  const defaultDesigner = designerOptions[0]?.name ?? "Unassigned";
-  const defaultProduction = productionOptions[0]?.name ?? "Unassigned";
-  const [form, setForm] = useState({
-    customerId: defaultCustomer.id === "new" ? "new" : defaultCustomer.id,
-    customerName: defaultCustomer.name,
-    phone: defaultCustomer.phone,
-    lineId: defaultCustomer.lineId,
-    companyName: defaultCustomer.companyName ?? "",
-    taxId: defaultCustomer.taxId ?? "",
-    branch: defaultCustomer.branch ?? "สำนักงานใหญ่",
-    billingAddress: defaultCustomer.billingAddress ?? "",
-    accountingEmail: defaultCustomer.accountingEmail ?? defaultCustomer.email,
-    requiresInvoice: defaultCustomer.requiresInvoice ?? false,
-    title: "งานสินค้าใหม่",
+    title: "",
     type: "DTG Shirt" as JobType,
-    description: "รายละเอียดงานพร้อมผลิต สีวัสดุ ตำแหน่งพิมพ์ จำนวน และสิ่งที่ลูกค้าคาดหวัง",
-    quantity: 24,
+    description: "",
+    quantity: 1,
     orderDate: todayISO(),
-    dueDate: todayISO(),
+    dueDate: addDaysISO(todayISO(), DEFAULT_LEAD_TIME_DAYS),
+    isExpress: false,
     priority: "Normal" as Priority,
     assignedDesigner: defaultDesigner,
     assignedProduction: defaultProduction,
-    price: 12000,
-    deposit: 3000,
-    internalNotes: "ยืนยันขนาดไฟล์อาร์ตก่อนเริ่มออกแบบ",
-    fileName: "customer-artwork.pdf",
+    price: 0,
+    deposit: 0,
+    internalNotes: "",
+    fileName: "",
     sourceChannel: "LINE",
     fileStatus: "รอเช็กไฟล์",
     workSize: "",
@@ -2567,8 +3136,63 @@ function CreateJobView({
     deliveryMethod: "รับหน้าร้าน"
   });
 
+  const [formError, setFormError] = useState("");
+  const [lookupMsg, setLookupMsg] = useState("");
+
   function setField<Key extends keyof typeof form>(key: Key, value: (typeof form)[Key]) {
     setForm((current) => ({ ...current, [key]: value }));
+  }
+
+  // ค้นลูกค้าจากเบอร์โทรที่กรอก แล้วดึงข้อมูลทั้งหมดมาเติมในฟอร์ม
+  function lookupByPhone() {
+    const digits = form.phone.replace(/\D/g, "");
+    if (digits.length < 3) {
+      setLookupMsg("กรอกเบอร์อย่างน้อย 3 ตัวก่อนค้นหา");
+      return;
+    }
+    const found = customers.filter((customer) => customer.phone.replace(/\D/g, "").includes(digits));
+    if (found.length === 0) {
+      setLookupMsg("ไม่พบลูกค้าจากเบอร์นี้ — กรอกชื่อเพื่อสร้างใหม่ได้เลย");
+      return;
+    }
+    pickCustomer(found[0]);
+    setLookupMsg(
+      found.length > 1
+        ? `พบ ${found.length} ราย ดึงรายแรกมาให้ (${found[0].name}) ถ้าไม่ตรงใช้ช่องค้นหาด้านบน`
+        : `ดึงข้อมูล "${found[0].name}" มาเรียบร้อย`
+    );
+  }
+
+  function pickNewCustomer() {
+    setForm((current) => ({
+      ...current,
+      customerId: "new",
+      customerName: "",
+      phone: "",
+      lineId: "",
+      companyName: "",
+      taxId: "",
+      branch: "สำนักงานใหญ่",
+      billingAddress: "",
+      accountingEmail: "",
+      requiresInvoice: false
+    }));
+  }
+
+  function pickCustomer(customer: Customer) {
+    setForm((current) => ({
+      ...current,
+      customerId: customer.id,
+      customerName: customer.name,
+      phone: customer.phone,
+      lineId: customer.lineId,
+      companyName: customer.companyName ?? "",
+      taxId: customer.taxId ?? "",
+      branch: customer.branch ?? "สำนักงานใหญ่",
+      billingAddress: customer.billingAddress ?? "",
+      accountingEmail: customer.accountingEmail ?? customer.email,
+      requiresInvoice: customer.requiresInvoice ?? false
+    }));
   }
 
   useEffect(() => {
@@ -2586,6 +3210,12 @@ function CreateJobView({
     <form
       onSubmit={(event) => {
         event.preventDefault();
+        // ลูกค้าใหม่ต้องมีชื่อ เพื่อไม่ให้เกิดเรคคอร์ด "ลูกค้าใหม่" ค้างในระบบ
+        if (form.customerId === "new" && !form.customerName.trim()) {
+          setFormError("กรุณากรอกชื่อลูกค้า หรือเลือกลูกค้าเดิมจากช่องค้นหา");
+          return;
+        }
+        setFormError("");
         const workOrderSpec = [
           `ช่องทางรับงาน: ${form.sourceChannel || "-"}`,
           `สถานะไฟล์: ${form.fileStatus || "-"}`,
@@ -2624,47 +3254,13 @@ function CreateJobView({
         <div className="grid gap-4 md:grid-cols-2">
           <label className="space-y-2">
             <span className="text-sm font-semibold text-k2-muted">ลูกค้า</span>
-            <select
-              value={form.customerId}
-              onChange={(event) => {
-                if (event.target.value === "new") {
-                  setForm((current) => ({
-                    ...current,
-                    customerId: "new",
-                    customerName: "",
-                    phone: "",
-                    lineId: "",
-                    companyName: "",
-                    taxId: "",
-                    branch: "สำนักงานใหญ่",
-                    billingAddress: "",
-                    accountingEmail: "",
-                    requiresInvoice: false
-                  }));
-                  return;
-                }
-                const customer = customers.find((item) => item.id === event.target.value) ?? customers[0];
-                setForm((current) => ({
-                  ...current,
-                  customerId: customer.id,
-                  customerName: customer.name,
-                  phone: customer.phone,
-                  lineId: customer.lineId,
-                  companyName: customer.companyName ?? "",
-                  taxId: customer.taxId ?? "",
-                  branch: customer.branch ?? "สำนักงานใหญ่",
-                  billingAddress: customer.billingAddress ?? "",
-                  accountingEmail: customer.accountingEmail ?? customer.email,
-                  requiresInvoice: customer.requiresInvoice ?? false
-                }));
-              }}
-              className="w-full rounded-2xl border border-white/80 bg-white/80 px-4 py-3 outline-none"
-            >
-              <option value="new">+ สร้างลูกค้าใหม่</option>
-              {customers.map((customer) => (
-                <option key={customer.id} value={customer.id}>{customer.name}</option>
-              ))}
-            </select>
+            <CustomerPicker
+              customers={customers}
+              selectedId={form.customerId}
+              selectedName={form.customerName}
+              onPickNew={pickNewCustomer}
+              onPickCustomer={pickCustomer}
+            />
           </label>
           <TextField
             label={form.customerId === "new" ? "ชื่อลูกค้าใหม่" : "ชื่อลูกค้า"}
@@ -2683,7 +3279,29 @@ function CreateJobView({
               ))}
             </select>
           </label>
-          <TextField label="เบอร์โทร" value={form.phone} onChange={(value) => setField("phone", value)} />
+          <label className="space-y-2">
+            <span className="text-sm font-semibold text-k2-muted">เบอร์โทร</span>
+            <div className="flex gap-2">
+              <input
+                value={form.phone}
+                onChange={(event) => {
+                  setField("phone", event.target.value);
+                  if (lookupMsg) setLookupMsg("");
+                }}
+                inputMode="tel"
+                className="w-full rounded-2xl border border-white/80 bg-white/80 px-4 py-3 outline-none"
+              />
+              <button
+                type="button"
+                onClick={lookupByPhone}
+                className="inline-flex shrink-0 items-center gap-1 rounded-2xl bg-k2-mint px-3 py-3 text-sm font-bold text-k2-ink"
+                title="ค้นลูกค้าจากเบอร์นี้แล้วดึงข้อมูลมาเติม"
+              >
+                <Search className="h-4 w-4" /> ดึงข้อมูล
+              </button>
+            </div>
+            {lookupMsg ? <span className="block text-xs font-semibold text-k2-muted">{lookupMsg}</span> : null}
+          </label>
           <TextField label="LINE ID" value={form.lineId} onChange={(value) => setField("lineId", value)} />
           <TextField label="ชื่องาน" value={form.title} onChange={(value) => setField("title", value)} />
           <label className="space-y-2">
@@ -2699,8 +3317,62 @@ function CreateJobView({
             </select>
           </label>
           <NumberField label="จำนวน" value={form.quantity} onChange={(value) => setField("quantity", value)} />
-          <TextField label="วันที่รับงาน" type="date" value={form.orderDate} onChange={(value) => setField("orderDate", value)} />
-          <TextField label="กำหนดส่ง" type="date" value={form.dueDate} onChange={(value) => setField("dueDate", value)} />
+          {/* โหมดงานด่วน — เปิดได้เมื่อผู้จัดการ/เจ้าของเปิดรับงานด่วนเท่านั้น */}
+          <label
+            className={`flex items-center justify-between gap-3 rounded-2xl border px-4 py-3 md:col-span-2 ${
+              form.isExpress ? "border-rose-300 bg-rose-50" : "border-white/80 bg-white/80"
+            } ${!expressEnabled ? "opacity-60" : ""}`}
+          >
+            <span className="flex items-center gap-2 text-sm font-extrabold text-k2-ink">
+              <Zap className={`h-4 w-4 ${form.isExpress ? "text-rose-500" : "text-k2-muted"}`} />
+              งานด่วน
+              {!expressEnabled ? (
+                <span className="text-xs font-semibold text-k2-muted">(ผู้จัดการ/เจ้าของยังไม่เปิดรับงานด่วน)</span>
+              ) : (
+                <span className="text-xs font-semibold text-k2-muted">ระบุวันนัดส่งเองได้</span>
+              )}
+            </span>
+            <input
+              type="checkbox"
+              checked={form.isExpress}
+              disabled={!expressEnabled}
+              onChange={(event) =>
+                setForm((current) => {
+                  const isExpress = event.target.checked;
+                  return {
+                    ...current,
+                    isExpress,
+                    // เปิดด่วน: นัดส่งเริ่มที่วันนี้ + ดันความเร่งด่วน / ปิดด่วน: กลับไปใช้ lead time 7 วัน
+                    dueDate: isExpress ? current.orderDate : addDaysISO(current.orderDate, DEFAULT_LEAD_TIME_DAYS),
+                    priority: isExpress ? "Very Urgent" : current.priority
+                  };
+                })
+              }
+              className="h-5 w-5 accent-rose-500 disabled:cursor-not-allowed"
+            />
+          </label>
+          <TextField
+            label="วันที่รับงาน"
+            type="date"
+            value={form.orderDate}
+            onChange={(value) =>
+              setForm((current) => ({
+                ...current,
+                orderDate: value,
+                // งานปกติ: ขยับกำหนดส่งตามวันรับงาน + lead time (เว้นแต่ตั้งเอง) / งานด่วน: ไม่แตะวันนัดส่ง
+                dueDate:
+                  !current.isExpress && current.dueDate === addDaysISO(current.orderDate, DEFAULT_LEAD_TIME_DAYS)
+                    ? addDaysISO(value, DEFAULT_LEAD_TIME_DAYS)
+                    : current.dueDate
+              }))
+            }
+          />
+          <TextField
+            label={form.isExpress ? "วันที่นัดส่งงาน (ด่วน)" : "กำหนดส่ง"}
+            type="date"
+            value={form.dueDate}
+            onChange={(value) => setField("dueDate", value)}
+          />
           <label className="space-y-2">
             <span className="text-sm font-semibold text-k2-muted">ความเร่งด่วน</span>
             <select
@@ -2838,15 +3510,12 @@ function CreateJobView({
             <MiniStat label="สถานะชำระเงิน" value={paymentLabel[getPaymentStatus(form.price, form.deposit)]} />
             <MiniStat label="สถานะแรก" value={statusLabel["New Order"]} />
           </div>
+          {formError ? (
+            <p className="mt-4 rounded-2xl bg-amber-50 px-4 py-3 text-sm font-bold text-amber-700">{formError}</p>
+          ) : null}
           <button className="mt-5 w-full rounded-2xl bg-k2-ink px-5 py-4 font-semibold text-white shadow-lg shadow-slate-900/15">
             สร้างงาน
           </button>
-        </section>
-        <section className="glass rounded-[1.5rem] p-5">
-          <h4 className="text-xl font-semibold">หลักของ MVP</h4>
-          <p className="mt-3 leading-7 text-k2-muted">
-            เวอร์ชันแรกควรเน้นรับงานให้เสถียร ลากสถานะได้ มอบหมายคนรับผิดชอบ เห็นยอดชำระ และมีประวัติการแก้ไขครบ
-          </p>
         </section>
       </aside>
     </form>
@@ -3078,18 +3747,54 @@ function SettingsView({
           </button>
         </div>
         <div className="mt-5 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-          <input value={companyDraft.name} onChange={(event) => setCompanyDraft((current) => ({ ...current, name: event.target.value }))} placeholder="ชื่อแบรนด์" className="rounded-2xl border border-white/80 bg-white/80 px-4 py-3 text-sm font-semibold outline-none" />
-          <input value={companyDraft.legalName} onChange={(event) => setCompanyDraft((current) => ({ ...current, legalName: event.target.value }))} placeholder="ชื่อบริษัทตามกฎหมาย" className="rounded-2xl border border-white/80 bg-white/80 px-4 py-3 text-sm font-semibold outline-none" />
-          <input value={companyDraft.taxId} onChange={(event) => setCompanyDraft((current) => ({ ...current, taxId: event.target.value }))} placeholder="เลขผู้เสียภาษีบริษัทเรา" className="rounded-2xl border border-white/80 bg-white/80 px-4 py-3 text-sm font-semibold outline-none" />
-          <input value={companyDraft.branch} onChange={(event) => setCompanyDraft((current) => ({ ...current, branch: event.target.value }))} placeholder="สาขา" className="rounded-2xl border border-white/80 bg-white/80 px-4 py-3 text-sm font-semibold outline-none" />
-          <input value={companyDraft.phone} onChange={(event) => setCompanyDraft((current) => ({ ...current, phone: event.target.value }))} placeholder="เบอร์บริษัท" className="rounded-2xl border border-white/80 bg-white/80 px-4 py-3 text-sm font-semibold outline-none" />
-          <input value={companyDraft.email} onChange={(event) => setCompanyDraft((current) => ({ ...current, email: event.target.value }))} placeholder="อีเมลบริษัท" className="rounded-2xl border border-white/80 bg-white/80 px-4 py-3 text-sm font-semibold outline-none" />
-          <input value={companyDraft.quotePrefix} onChange={(event) => setCompanyDraft((current) => ({ ...current, quotePrefix: event.target.value }))} placeholder="Prefix ใบสั่งงาน เช่น WO" className="rounded-2xl border border-white/80 bg-white/80 px-4 py-3 text-sm font-semibold outline-none" />
-          <input value={companyDraft.bankName} onChange={(event) => setCompanyDraft((current) => ({ ...current, bankName: event.target.value }))} placeholder="ธนาคาร" className="rounded-2xl border border-white/80 bg-white/80 px-4 py-3 text-sm font-semibold outline-none" />
-          <input value={companyDraft.bankAccount} onChange={(event) => setCompanyDraft((current) => ({ ...current, bankAccount: event.target.value }))} placeholder="เลขบัญชี" className="rounded-2xl border border-white/80 bg-white/80 px-4 py-3 text-sm font-semibold outline-none" />
-          <input value={companyDraft.bankAccountName} onChange={(event) => setCompanyDraft((current) => ({ ...current, bankAccountName: event.target.value }))} placeholder="ชื่อบัญชี" className="rounded-2xl border border-white/80 bg-white/80 px-4 py-3 text-sm font-semibold outline-none" />
-          <textarea value={companyDraft.address} onChange={(event) => setCompanyDraft((current) => ({ ...current, address: event.target.value }))} placeholder="ที่อยู่บริษัท" className="min-h-24 rounded-2xl border border-white/80 bg-white/80 px-4 py-3 text-sm font-semibold outline-none md:col-span-2" />
-          <textarea value={companyDraft.quoteTerms} onChange={(event) => setCompanyDraft((current) => ({ ...current, quoteTerms: event.target.value }))} placeholder="เงื่อนไขใบสั่งงาน" className="min-h-24 rounded-2xl border border-white/80 bg-white/80 px-4 py-3 text-sm font-semibold outline-none md:col-span-2" />
+          <label className="space-y-2">
+            <span className="text-sm font-semibold text-k2-muted">ชื่อแบรนด์</span>
+            <input value={companyDraft.name} onChange={(event) => setCompanyDraft((current) => ({ ...current, name: event.target.value }))} placeholder="ชื่อแบรนด์" className="w-full rounded-2xl border border-white/80 bg-white/80 px-4 py-3 text-sm font-semibold outline-none" />
+          </label>
+          <label className="space-y-2">
+            <span className="text-sm font-semibold text-k2-muted">ชื่อบริษัทตามกฎหมาย</span>
+            <input value={companyDraft.legalName} onChange={(event) => setCompanyDraft((current) => ({ ...current, legalName: event.target.value }))} placeholder="ชื่อบริษัทตามกฎหมาย" className="w-full rounded-2xl border border-white/80 bg-white/80 px-4 py-3 text-sm font-semibold outline-none" />
+          </label>
+          <label className="space-y-2">
+            <span className="text-sm font-semibold text-k2-muted">เลขผู้เสียภาษี (บริษัทเรา)</span>
+            <input value={companyDraft.taxId} onChange={(event) => setCompanyDraft((current) => ({ ...current, taxId: event.target.value }))} placeholder="เลขผู้เสียภาษีบริษัทเรา" className="w-full rounded-2xl border border-white/80 bg-white/80 px-4 py-3 text-sm font-semibold outline-none" />
+          </label>
+          <label className="space-y-2">
+            <span className="text-sm font-semibold text-k2-muted">สาขา</span>
+            <input value={companyDraft.branch} onChange={(event) => setCompanyDraft((current) => ({ ...current, branch: event.target.value }))} placeholder="สาขา" className="w-full rounded-2xl border border-white/80 bg-white/80 px-4 py-3 text-sm font-semibold outline-none" />
+          </label>
+          <label className="space-y-2">
+            <span className="text-sm font-semibold text-k2-muted">เบอร์บริษัท</span>
+            <input value={companyDraft.phone} onChange={(event) => setCompanyDraft((current) => ({ ...current, phone: event.target.value }))} placeholder="เบอร์บริษัท" className="w-full rounded-2xl border border-white/80 bg-white/80 px-4 py-3 text-sm font-semibold outline-none" />
+          </label>
+          <label className="space-y-2">
+            <span className="text-sm font-semibold text-k2-muted">อีเมลบริษัท</span>
+            <input value={companyDraft.email} onChange={(event) => setCompanyDraft((current) => ({ ...current, email: event.target.value }))} placeholder="อีเมลบริษัท" className="w-full rounded-2xl border border-white/80 bg-white/80 px-4 py-3 text-sm font-semibold outline-none" />
+          </label>
+          <label className="space-y-2">
+            <span className="text-sm font-semibold text-k2-muted">Prefix ใบสั่งงาน</span>
+            <input value={companyDraft.quotePrefix} onChange={(event) => setCompanyDraft((current) => ({ ...current, quotePrefix: event.target.value }))} placeholder="Prefix ใบสั่งงาน เช่น WO" className="w-full rounded-2xl border border-white/80 bg-white/80 px-4 py-3 text-sm font-semibold outline-none" />
+          </label>
+          <label className="space-y-2">
+            <span className="text-sm font-semibold text-k2-muted">ธนาคาร</span>
+            <input value={companyDraft.bankName} onChange={(event) => setCompanyDraft((current) => ({ ...current, bankName: event.target.value }))} placeholder="ธนาคาร" className="w-full rounded-2xl border border-white/80 bg-white/80 px-4 py-3 text-sm font-semibold outline-none" />
+          </label>
+          <label className="space-y-2">
+            <span className="text-sm font-semibold text-k2-muted">เลขบัญชี</span>
+            <input value={companyDraft.bankAccount} onChange={(event) => setCompanyDraft((current) => ({ ...current, bankAccount: event.target.value }))} placeholder="เลขบัญชี" className="w-full rounded-2xl border border-white/80 bg-white/80 px-4 py-3 text-sm font-semibold outline-none" />
+          </label>
+          <label className="space-y-2">
+            <span className="text-sm font-semibold text-k2-muted">ชื่อบัญชี</span>
+            <input value={companyDraft.bankAccountName} onChange={(event) => setCompanyDraft((current) => ({ ...current, bankAccountName: event.target.value }))} placeholder="ชื่อบัญชี" className="w-full rounded-2xl border border-white/80 bg-white/80 px-4 py-3 text-sm font-semibold outline-none" />
+          </label>
+          <label className="space-y-2 md:col-span-2">
+            <span className="text-sm font-semibold text-k2-muted">ที่อยู่บริษัท</span>
+            <textarea value={companyDraft.address} onChange={(event) => setCompanyDraft((current) => ({ ...current, address: event.target.value }))} placeholder="ที่อยู่บริษัท" className="min-h-24 w-full rounded-2xl border border-white/80 bg-white/80 px-4 py-3 text-sm font-semibold outline-none" />
+          </label>
+          <label className="space-y-2 md:col-span-2">
+            <span className="text-sm font-semibold text-k2-muted">เงื่อนไขใบสั่งงาน</span>
+            <textarea value={companyDraft.quoteTerms} onChange={(event) => setCompanyDraft((current) => ({ ...current, quoteTerms: event.target.value }))} placeholder="เงื่อนไขใบสั่งงาน" className="min-h-24 w-full rounded-2xl border border-white/80 bg-white/80 px-4 py-3 text-sm font-semibold outline-none" />
+          </label>
         </div>
       </section>
       <section className="glass rounded-[1.5rem] p-5">
@@ -3367,12 +4072,14 @@ function CalendarView({ jobs, onSelect }: { jobs: Job[]; onSelect: (id: string) 
 function CustomersView({
   customers,
   jobs,
+  canDelete,
   onAddCustomer,
   onUpdateCustomer,
   onRemoveCustomer
 }: {
   customers: Customer[];
   jobs: Job[];
+  canDelete: boolean;
   onAddCustomer: (customer: Omit<Customer, "id" | "totalOrders" | "lifetimeValue" | "lastOrderDate">) => void;
   onUpdateCustomer: (customerId: string, updates: Pick<Customer, "name" | "phone" | "lineId" | "email" | "companyName" | "taxId" | "branch" | "billingAddress" | "accountingEmail" | "requiresInvoice">) => void;
   onRemoveCustomer: (customerId: string) => void;
@@ -3775,15 +4482,19 @@ function CustomersView({
                     <Pencil className="h-4 w-4" />
                   </button>
                 )}
-                <button
-                  type="button"
-                  onClick={() => onRemoveCustomer(customer.id)}
-                  disabled={customerJobs.length > 0}
-                  className="grid h-11 w-11 place-items-center rounded-2xl bg-rose-50 text-rose-600 disabled:opacity-35"
-                  title={customerJobs.length > 0 ? "ลบไม่ได้เพราะมีประวัติงาน" : "ลบลูกค้า"}
-                >
-                  <Trash2 className="h-4 w-4" />
-                </button>
+                {canDelete ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (window.confirm(`ลบลูกค้า "${customer.name}" ออกจากระบบ?`)) onRemoveCustomer(customer.id);
+                    }}
+                    disabled={customerJobs.length > 0}
+                    className="grid h-11 w-11 place-items-center rounded-2xl bg-rose-50 text-rose-600 disabled:opacity-35"
+                    title={customerJobs.length > 0 ? "ลบไม่ได้เพราะมีประวัติงาน" : "ลบลูกค้า"}
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </button>
+                ) : null}
               </div>
             </div>
             <div className="mt-5 grid grid-cols-3 gap-3">
