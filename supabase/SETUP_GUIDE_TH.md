@@ -30,14 +30,15 @@
 
 > ไฟล์นี้รันซ้ำได้ปลอดภัย ถ้ามีตารางอยู่แล้วจะไม่พังของเดิม
 
-**ตรวจว่าตารางครบ** (ไม่บังคับ): รันคำสั่งนี้ ควรได้ 15 ตาราง
+**ตรวจว่าตารางครบ** (ไม่บังคับ): รันคำสั่งนี้ ควรได้ 17 ตาราง
 ```sql
 select table_name from information_schema.tables
 where table_schema = 'public' order by table_name;
 ```
 ควรเห็น: attendance, audit_log, branch_settings, company_settings, customers,
-employee_hr, job_comments, job_files, job_status_history, jobs, notifications,
-profile_bank_details, profiles, role_permissions, shop_state
+employee_hr, holidays, job_comments, job_files, job_status_history, jobs,
+leave_requests, notifications, profile_bank_details, profiles, role_permissions,
+shop_state
 
 ---
 
