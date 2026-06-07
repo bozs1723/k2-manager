@@ -138,6 +138,9 @@ type SupabaseJobRow = {
   priority: Priority;
   status: JobStatus;
   is_express?: boolean | null;
+  production_branch?: string | null;
+  acceptance?: "pending" | "accepted" | "rejected" | null;
+  reject_reason?: string | null;
   assigned_designer: string | null;
   assigned_production: string | null;
   price: number | string;
@@ -688,6 +691,9 @@ function jobFromRow(
     dueDate: row.due_date,
     priority: row.priority,
     isExpress: row.is_express ?? false,
+    productionBranch: row.production_branch ?? "",
+    acceptance: row.acceptance ?? "accepted",
+    rejectReason: row.reject_reason ?? "",
     status: row.status,
     assignedDesigner: row.assigned_designer ? profileNames.get(row.assigned_designer) ?? "Unassigned" : "Unassigned",
     assignedProduction: row.assigned_production ? profileNames.get(row.assigned_production) ?? "Unassigned" : "Unassigned",
@@ -1283,7 +1289,53 @@ export default function Page() {
     }
     const job = jobs.find((item) => item.id === jobId);
     if (!job || job.status === nextStatus) return;
+    if (job.acceptance === "pending") {
+      setDataError("งานนี้รอผู้จัดการสาขายอมรับก่อน จึงจะย้ายสถานะได้");
+      return;
+    }
     setPendingMove({ jobId, from: job.status, to: nextStatus });
+  }
+
+  // ผู้จัดการ/เจ้าของ ยอมรับงานเข้าสาขา (เซลที่สร้างต้องรอยอมรับก่อน)
+  const canAcceptJobs = ["Owner", "Manager", "Admin"].includes(currentUser.role);
+
+  async function acceptJob(jobId: string) {
+    if (!canAcceptJobs) {
+      setDataError("เฉพาะผู้จัดการหรือเจ้าของเท่านั้นที่ยอมรับงานได้");
+      return;
+    }
+    const job = jobs.find((item) => item.id === jobId);
+    if (!job) return;
+    setJobs((current) => current.map((item) => (item.id === jobId ? { ...item, acceptance: "accepted", rejectReason: "" } : item)));
+    if (supabase && job.dbId) {
+      const { error } = await supabase.from("jobs").update({ acceptance: "accepted", reject_reason: null }).eq("id", job.dbId);
+      if (error) {
+        setDataError(error.message);
+        void refreshWorkspaceData();
+        return;
+      }
+    }
+    void appendAudit("accepted job", job.id, "jobs", job.dbId ?? null);
+  }
+
+  async function rejectJob(jobId: string, reason: string) {
+    if (!canAcceptJobs) {
+      setDataError("เฉพาะผู้จัดการหรือเจ้าของเท่านั้นที่ปฏิเสธงานได้");
+      return;
+    }
+    const job = jobs.find((item) => item.id === jobId);
+    if (!job) return;
+    const cleanReason = reason.trim() || "ไม่ระบุเหตุผล";
+    setJobs((current) => current.map((item) => (item.id === jobId ? { ...item, acceptance: "rejected", rejectReason: cleanReason } : item)));
+    if (supabase && job.dbId) {
+      const { error } = await supabase.from("jobs").update({ acceptance: "rejected", reject_reason: cleanReason }).eq("id", job.dbId);
+      if (error) {
+        setDataError(error.message);
+        void refreshWorkspaceData();
+        return;
+      }
+    }
+    void appendAudit("rejected job", job.id, "jobs", job.dbId ?? null);
   }
 
   async function moveJob(jobId: string, nextStatus: JobStatus) {
@@ -1437,6 +1489,8 @@ export default function Page() {
       : existingCustomer;
     const price = input?.price ?? 14400;
     const deposit = input?.deposit ?? 4000;
+    // เซลสร้างงาน -> ต้องให้ผู้จัดการสาขายอมรับก่อน; บทบาทอื่น (ผจก./เจ้าของ/แอดมิน) ยอมรับอัตโนมัติ
+    const jobAcceptance: "pending" | "accepted" = currentUser.role === "Sales Staff" ? "pending" : "accepted";
     const initialJobNumber = jobNumberFor(jobs);
     const initialQuoteNumber = quoteNumberFromValues(
       jobs.map((job) => job.quoteNumber ?? ""),
@@ -1511,6 +1565,9 @@ export default function Page() {
               due_date: input?.dueDate ?? todayISO(),
               priority: input?.priority ?? "Normal",
               is_express: input?.isExpress ?? false,
+              production_branch: input?.productionBranch ?? null,
+              acceptance: jobAcceptance,
+              reject_reason: null,
               status: "New Order",
               assigned_designer: teamIdByName(teamMembers, input?.assignedDesigner),
               assigned_production: teamIdByName(teamMembers, input?.assignedProduction),
@@ -1581,6 +1638,9 @@ export default function Page() {
       dueDate: input?.dueDate ?? todayISO(),
       priority: input?.priority ?? "Urgent",
       isExpress: input?.isExpress ?? false,
+      productionBranch: input?.productionBranch ?? "",
+      acceptance: jobAcceptance,
+      rejectReason: "",
       status: "New Order",
       assignedDesigner: input?.assignedDesigner ?? "Beam S.",
       assignedProduction: input?.assignedProduction ?? "Unassigned",
@@ -2269,6 +2329,9 @@ export default function Page() {
                   draggedJobId={draggedJobId}
                   setDraggedJobId={setDraggedJobId}
                   moveJob={requestMove}
+                  onAccept={acceptJob}
+                  onReject={rejectJob}
+                  canAccept={canAcceptJobs}
                   onSelect={(id) => {
                     setSelectedJobId(id);
                     setActiveView("Detail");
@@ -2583,14 +2646,22 @@ function Board({
   draggedJobId,
   setDraggedJobId,
   moveJob,
+  onAccept,
+  onReject,
+  canAccept,
   onSelect
 }: {
   jobs: Job[];
   draggedJobId: string | null;
   setDraggedJobId: (id: string | null) => void;
   moveJob: (jobId: string, status: JobStatus) => void;
+  onAccept: (id: string) => void;
+  onReject: (id: string, reason: string) => void;
+  canAccept: boolean;
   onSelect: (id: string) => void;
 }) {
+  const [rejectingId, setRejectingId] = useState<string | null>(null);
+  const [rejectText, setRejectText] = useState("");
   return (
     <div className="soft-scrollbar flex gap-4 overflow-x-auto pb-4">
       {statuses.map((status) => {
@@ -2659,17 +2730,55 @@ function Board({
                       )}
                     </div>
                   </button>
-                  {/* เลือกขั้นตอนใหม่ — ใช้งานได้ทั้ง mobile touch และ desktop */}
+                  {/* รอยอมรับ -> ปุ่มยอมรับ/ปฏิเสธ · ปกติ -> เลือกสถานะ (ลาก/แตะได้) */}
                   <div className="border-t border-white/60 px-3 py-2">
-                    <select
-                      value={status}
-                      onChange={(event) => moveJob(job.id, event.target.value as JobStatus)}
-                      className="w-full cursor-pointer rounded-xl bg-white/60 px-3 py-2 text-xs font-bold text-k2-muted outline-none"
-                    >
-                      {statuses.map((s) => (
-                        <option key={s} value={s}>{statusLabel[s]}</option>
-                      ))}
-                    </select>
+                    {job.acceptance === "pending" ? (
+                      <div className="space-y-2">
+                        <p className="rounded-lg bg-amber-100/80 px-2 py-1 text-[11px] font-bold text-amber-800">
+                          รอผู้จัดการสาขายอมรับ{job.productionBranch ? ` · ${job.productionBranch}` : ""}
+                        </p>
+                        {canAccept ? (
+                          rejectingId === job.id ? (
+                            <div className="space-y-2">
+                              <textarea
+                                value={rejectText}
+                                onChange={(event) => setRejectText(event.target.value)}
+                                placeholder="เหตุผลที่ตีกลับ (ให้เซลแก้)"
+                                className="w-full rounded-xl border border-white/80 bg-white/80 px-3 py-2 text-xs outline-none"
+                              />
+                              <div className="flex gap-2">
+                                <button type="button" onClick={() => { setRejectingId(null); setRejectText(""); }} className="flex-1 rounded-xl bg-white/70 px-2 py-2 text-xs font-bold text-k2-muted">ยกเลิก</button>
+                                <button type="button" onClick={() => { onReject(job.id, rejectText); setRejectingId(null); setRejectText(""); }} className="flex-1 rounded-xl bg-rose-500 px-2 py-2 text-xs font-bold text-white">ยืนยันตีกลับ</button>
+                              </div>
+                            </div>
+                          ) : (
+                            <div className="flex gap-2">
+                              <button type="button" onClick={() => onAccept(job.id)} className="flex-1 rounded-xl bg-emerald-500 px-2 py-2 text-xs font-bold text-white">ยอมรับ</button>
+                              <button type="button" onClick={() => { setRejectingId(job.id); setRejectText(""); }} className="flex-1 rounded-xl bg-white/70 px-2 py-2 text-xs font-bold text-rose-600">ปฏิเสธ</button>
+                            </div>
+                          )
+                        ) : null}
+                      </div>
+                    ) : job.acceptance === "rejected" ? (
+                      <div className="space-y-2">
+                        <p className="rounded-lg bg-rose-100/80 px-2 py-1 text-[11px] font-bold text-rose-700">
+                          ตีกลับ: {job.rejectReason || "ไม่ระบุเหตุผล"}
+                        </p>
+                        {canAccept ? (
+                          <button type="button" onClick={() => onAccept(job.id)} className="w-full rounded-xl bg-emerald-500 px-2 py-2 text-xs font-bold text-white">ยอมรับเข้าคิว</button>
+                        ) : null}
+                      </div>
+                    ) : (
+                      <select
+                        value={status}
+                        onChange={(event) => moveJob(job.id, event.target.value as JobStatus)}
+                        className="w-full cursor-pointer rounded-xl bg-white/60 px-3 py-2 text-xs font-bold text-k2-muted outline-none"
+                      >
+                        {statuses.map((s) => (
+                          <option key={s} value={s}>{statusLabel[s]}</option>
+                        ))}
+                      </select>
+                    )}
                   </div>
                 </motion.div>
                 );
@@ -3238,7 +3347,7 @@ function CreateJobView({
   }
 
   const materialOptions = ["อะคริลิค", "พลาสวูด", "ไวนิล", "สติ๊กเกอร์", "เสื้อ Cotton", "อื่น ๆ"];
-  const branchOptions = ["พะเยา", "ราม 9", "อื่น ๆ"];
+  const branchOptions = ["พะเยา", "กรุงเทพ"];
   function setMaterialAt(index: number, value: string) {
     setForm((current) => ({ ...current, materials: current.materials.map((m, i) => (i === index ? value : m)) }));
   }

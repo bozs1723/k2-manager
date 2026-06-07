@@ -117,6 +117,9 @@ export type Job = {
   dueDate: string;
   priority: Priority;
   isExpress?: boolean;
+  productionBranch?: string;
+  acceptance?: "pending" | "accepted" | "rejected";
+  rejectReason?: string;
   status: JobStatus;
   assignedDesigner: string;
   assignedProduction: string;
