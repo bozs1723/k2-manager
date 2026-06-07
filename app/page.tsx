@@ -42,7 +42,7 @@ import {
 import type { LucideIcon } from "lucide-react";
 import { customers as initialCustomers, initialAuditLog, initialJobs, statuses, team as initialTeam } from "@/lib/mock-data";
 import { createSupabaseAuthWorker, isSupabaseConfigured, supabase } from "@/lib/supabase";
-import type { AppNotification, Attendance, AuditEvent, BranchSetting, Customer, Job, JobStatus, JobType, PaymentStatus, Priority, QuoteStatus, Role, TeamMember } from "@/lib/types";
+import type { AppNotification, Attendance, AuditEvent, BranchSetting, Customer, Holiday, Job, JobStatus, JobType, LeaveRequest, PaymentStatus, Priority, QuoteStatus, Role, TeamMember } from "@/lib/types";
 
 type ImportedCustomer = Pick<Customer, "name" | "phone" | "lineId" | "email"> & {
   notes: string;
@@ -361,6 +361,7 @@ const viewLabel: Record<string, string> = {
   Settings: "ตั้งค่า",
   HR: "ฝ่ายบุคคล (HR)",
   Attendance: "ลงเวลา",
+  Leave: "การลา",
   Detail: "รายละเอียดงาน",
   Audit: "ประวัติการแก้ไข"
 };
@@ -819,6 +820,23 @@ function attendanceFromRow(row: { id: string; profile_id: string; work_date: str
   };
 }
 
+function leaveFromRow(row: { id: string; profile_id: string; leave_type: string | null; start_date: string; end_date: string; reason: string | null; status: string | null; created_at: string }): LeaveRequest {
+  return {
+    id: row.id,
+    profileId: row.profile_id,
+    leaveType: (row.leave_type as LeaveRequest["leaveType"]) ?? "sick",
+    startDate: row.start_date,
+    endDate: row.end_date,
+    reason: row.reason ?? "",
+    status: (row.status as LeaveRequest["status"]) ?? "pending",
+    createdAt: row.created_at
+  };
+}
+
+function holidayFromRow(row: { id: string; holiday_date: string; name: string }): Holiday {
+  return { id: row.id, date: row.holiday_date, name: row.name };
+}
+
 function notifFromRow(row: SupabaseNotificationRow): AppNotification {
   return {
     id: row.id,
@@ -912,6 +930,8 @@ export default function Page() {
   const [branchSettings, setBranchSettings] = useState<Record<string, BranchSetting>>({});
   const [myAttendance, setMyAttendance] = useState<Attendance | null>(null);
   const [allAttendance, setAllAttendance] = useState<Attendance[]>([]);
+  const [leaveRequests, setLeaveRequests] = useState<LeaveRequest[]>([]);
+  const [holidays, setHolidays] = useState<Holiday[]>([]);
   const [notifications, setNotifications] = useState<AppNotification[]>([]);
   const [showNotifPanel, setShowNotifPanel] = useState(false);
   const notifPanelRef = useRef<HTMLDivElement>(null);
@@ -937,6 +957,7 @@ export default function Page() {
         { label: "Payments", icon: WalletCards, visible: currentRolePermissions.includes("view_finance") || currentRolePermissions.includes("edit_payment") },
         { label: "Reports", icon: BarChart3, visible: currentRolePermissions.includes("view_dashboard") },
         { label: "Attendance", icon: Clock3, visible: currentRolePermissions.includes("view_dashboard") },
+        { label: "Leave", icon: CalendarDays, visible: currentRolePermissions.includes("view_dashboard") },
         { label: "HR", icon: UsersRound, visible: currentRolePermissions.includes("manage_hr") },
         { label: "Settings", icon: Settings, visible: true },
         { label: "Detail", icon: FileImage, visible: currentRolePermissions.includes("view_dashboard") },
@@ -1138,10 +1159,15 @@ export default function Page() {
     if (activeView === "HR") {
       void loadHrRecords();
       void loadBranchSettings();
+      void loadHolidays();
     }
     if (activeView === "Attendance") {
       void loadBranchSettings();
       void loadAttendance();
+    }
+    if (activeView === "Leave") {
+      void loadLeaves();
+      void loadHolidays();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isAuthed, activeView]);
@@ -2025,6 +2051,99 @@ export default function Page() {
     return { ok: true, msg: "เช็คเอาท์แล้ว ✓" };
   }
 
+  async function loadLeaves() {
+    if (!supabase) return;
+    const { data, error } = await supabase
+      .from("leave_requests")
+      .select("id, profile_id, leave_type, start_date, end_date, reason, status, created_at")
+      .order("created_at", { ascending: false });
+    if (error) {
+      setDataError(error.message);
+      return;
+    }
+    setLeaveRequests(((data ?? []) as Parameters<typeof leaveFromRow>[0][]).map(leaveFromRow));
+  }
+
+  async function submitLeave(input: { leaveType: LeaveRequest["leaveType"]; startDate: string; endDate: string; reason: string }) {
+    if (!input.startDate || !input.endDate) {
+      setDataError("กรุณาเลือกวันที่เริ่มและสิ้นสุดการลา");
+      return;
+    }
+    if (supabase && uuidPattern.test(currentUser.id)) {
+      const { error } = await supabase
+        .from("leave_requests")
+        .insert({ profile_id: currentUser.id, leave_type: input.leaveType, start_date: input.startDate, end_date: input.endDate, reason: input.reason || null, status: "pending" });
+      if (error) {
+        setDataError(error.message);
+        return;
+      }
+      await loadLeaves();
+    } else {
+      setLeaveRequests((current) => [
+        { id: crypto.randomUUID(), profileId: currentUser.id, leaveType: input.leaveType, startDate: input.startDate, endDate: input.endDate, reason: input.reason, status: "pending", createdAt: new Date().toISOString() },
+        ...current
+      ]);
+    }
+    void appendAudit("requested leave", currentUser.name, "leave_requests", null);
+  }
+
+  async function reviewLeave(id: string, status: "approved" | "rejected") {
+    if (!can("manage_hr")) {
+      setDataError("เฉพาะเจ้าของหรือ HR เท่านั้นที่อนุมัติ/ปฏิเสธการลาได้");
+      return;
+    }
+    setLeaveRequests((current) => current.map((leave) => (leave.id === id ? { ...leave, status } : leave)));
+    if (supabase && uuidPattern.test(currentUser.id)) {
+      const { error } = await supabase.from("leave_requests").update({ status, reviewed_by: currentUser.id }).eq("id", id);
+      if (error) {
+        setDataError(error.message);
+        void loadLeaves();
+        return;
+      }
+    }
+    void appendAudit(status === "approved" ? "approved leave" : "rejected leave", id, "leave_requests", id);
+  }
+
+  async function loadHolidays() {
+    if (!supabase) return;
+    const { data, error } = await supabase.from("holidays").select("id, holiday_date, name").order("holiday_date", { ascending: true });
+    if (error) {
+      setDataError(error.message);
+      return;
+    }
+    setHolidays(((data ?? []) as Parameters<typeof holidayFromRow>[0][]).map(holidayFromRow));
+  }
+
+  async function addHoliday(date: string, name: string) {
+    if (!can("manage_hr")) {
+      setDataError("เฉพาะเจ้าของหรือ HR เท่านั้นที่เพิ่มวันหยุดได้");
+      return;
+    }
+    if (!date || !name.trim()) {
+      setDataError("กรอกวันที่และชื่อวันหยุดก่อน");
+      return;
+    }
+    if (supabase) {
+      const { error } = await supabase.from("holidays").upsert({ holiday_date: date, name: name.trim() }, { onConflict: "holiday_date" });
+      if (error) {
+        setDataError(error.message);
+        return;
+      }
+      await loadHolidays();
+    } else {
+      setHolidays((current) => [...current, { id: crypto.randomUUID(), date, name: name.trim() }]);
+    }
+    void appendAudit("added holiday", name, "holidays", null);
+  }
+
+  async function removeHoliday(id: string) {
+    if (!can("manage_hr")) return;
+    setHolidays((current) => current.filter((holiday) => holiday.id !== id));
+    if (supabase && uuidPattern.test(id)) {
+      await supabase.from("holidays").delete().eq("id", id);
+    }
+  }
+
   async function saveHrRecord(memberId: string, record: { salary: number; position: string; startDate: string }) {
     if (!can("manage_hr")) {
       setDataError("เฉพาะเจ้าของหรือ HR เท่านั้นที่แก้ข้อมูลเงินเดือนได้");
@@ -2723,7 +2842,7 @@ export default function Page() {
             )}
             {activeView === "HR" && (
               <motion.div key="hr" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}>
-                <HRView teamMembers={teamMembers} records={hrRecords} canEdit={can("manage_hr")} onSave={saveHrRecord} branches={BRANCH_LIST} branchSettings={branchSettings} onSaveBranch={saveBranchSetting} />
+                <HRView teamMembers={teamMembers} records={hrRecords} canEdit={can("manage_hr")} onSave={saveHrRecord} branches={BRANCH_LIST} branchSettings={branchSettings} onSaveBranch={saveBranchSetting} holidays={holidays} onAddHoliday={addHoliday} onRemoveHoliday={removeHoliday} />
               </motion.div>
             )}
             {activeView === "Attendance" && (
@@ -2737,6 +2856,19 @@ export default function Page() {
                   isHr={can("manage_hr")}
                   onCheckIn={checkIn}
                   onCheckOut={checkOut}
+                />
+              </motion.div>
+            )}
+            {activeView === "Leave" && (
+              <motion.div key="leave" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}>
+                <LeaveView
+                  currentUser={currentUser}
+                  teamMembers={teamMembers}
+                  leaveRequests={leaveRequests}
+                  holidays={holidays}
+                  isHr={can("manage_hr")}
+                  onSubmit={submitLeave}
+                  onReview={reviewLeave}
                 />
               </motion.div>
             )}
@@ -5450,6 +5582,128 @@ function MiniStat({ label, value }: { label: string; value: string | number }) {
   );
 }
 
+const leaveTypeLabel: Record<LeaveRequest["leaveType"], string> = { sick: "ลาป่วย", personal: "ลากิจ", vacation: "ลาพักร้อน" };
+const leaveStatusLabel: Record<LeaveRequest["status"], string> = { pending: "รออนุมัติ", approved: "อนุมัติแล้ว", rejected: "ไม่อนุมัติ" };
+const leaveStatusTone: Record<LeaveRequest["status"], string> = { pending: "bg-amber-100 text-amber-800", approved: "bg-emerald-100 text-emerald-700", rejected: "bg-rose-100 text-rose-700" };
+
+function LeaveView({
+  currentUser,
+  teamMembers,
+  leaveRequests,
+  holidays,
+  isHr,
+  onSubmit,
+  onReview
+}: {
+  currentUser: TeamMember;
+  teamMembers: TeamMember[];
+  leaveRequests: LeaveRequest[];
+  holidays: Holiday[];
+  isHr: boolean;
+  onSubmit: (input: { leaveType: LeaveRequest["leaveType"]; startDate: string; endDate: string; reason: string }) => void;
+  onReview: (id: string, status: "approved" | "rejected") => void;
+}) {
+  const [leaveType, setLeaveType] = useState<LeaveRequest["leaveType"]>("sick");
+  const [startDate, setStartDate] = useState("");
+  const [endDate, setEndDate] = useState("");
+  const [reason, setReason] = useState("");
+  const nameById = (id: string) => teamMembers.find((member) => member.id === id)?.name ?? "พนักงาน";
+  const myLeaves = leaveRequests.filter((leave) => leave.profileId === currentUser.id);
+  const pending = leaveRequests.filter((leave) => leave.status === "pending");
+
+  function submit() {
+    onSubmit({ leaveType, startDate, endDate, reason });
+    setStartDate("");
+    setEndDate("");
+    setReason("");
+  }
+
+  return (
+    <div className="space-y-4">
+      <section className="glass rounded-[1.5rem] p-5">
+        <p className="text-sm font-semibold text-k2-muted">ขอลา</p>
+        <h3 className="mb-4 text-2xl font-semibold">ยื่นใบลา</h3>
+        <div className="grid gap-3 md:grid-cols-2">
+          <label className="space-y-1">
+            <span className="text-xs font-semibold text-k2-muted">ประเภทการลา</span>
+            <select value={leaveType} onChange={(event) => setLeaveType(event.target.value as LeaveRequest["leaveType"])} className="w-full rounded-2xl border border-white/80 bg-white/85 px-3 py-2 text-sm outline-none">
+              {(["sick", "personal", "vacation"] as LeaveRequest["leaveType"][]).map((type) => (
+                <option key={type} value={type}>{leaveTypeLabel[type]}</option>
+              ))}
+            </select>
+          </label>
+          <label className="space-y-1">
+            <span className="text-xs font-semibold text-k2-muted">เหตุผล</span>
+            <input value={reason} onChange={(event) => setReason(event.target.value)} className="w-full rounded-2xl border border-white/80 bg-white/85 px-3 py-2 text-sm outline-none" />
+          </label>
+          <label className="space-y-1">
+            <span className="text-xs font-semibold text-k2-muted">วันที่เริ่มลา</span>
+            <input type="date" value={startDate} onChange={(event) => setStartDate(event.target.value)} className="w-full rounded-2xl border border-white/80 bg-white/85 px-3 py-2 text-sm outline-none" />
+          </label>
+          <label className="space-y-1">
+            <span className="text-xs font-semibold text-k2-muted">ถึงวันที่</span>
+            <input type="date" value={endDate} onChange={(event) => setEndDate(event.target.value)} className="w-full rounded-2xl border border-white/80 bg-white/85 px-3 py-2 text-sm outline-none" />
+          </label>
+        </div>
+        <button type="button" onClick={submit} className="mt-4 rounded-2xl bg-k2-ink px-5 py-3 font-bold text-white">ส่งใบลา</button>
+      </section>
+
+      {isHr ? (
+        <section className="glass rounded-[1.5rem] p-5">
+          <h4 className="mb-3 text-lg font-extrabold">ใบลารออนุมัติ ({pending.length})</h4>
+          {pending.length === 0 ? (
+            <p className="text-sm font-semibold text-k2-muted">ไม่มีใบลารออนุมัติ</p>
+          ) : (
+            <div className="space-y-2">
+              {pending.map((leave) => (
+                <div key={leave.id} className="flex flex-wrap items-center justify-between gap-2 rounded-2xl bg-white/60 px-4 py-3">
+                  <div>
+                    <p className="font-bold">{nameById(leave.profileId)} · {leaveTypeLabel[leave.leaveType]}</p>
+                    <p className="text-sm text-k2-muted">{leave.startDate} ถึง {leave.endDate}{leave.reason ? ` · ${leave.reason}` : ""}</p>
+                  </div>
+                  <div className="flex gap-2">
+                    <button type="button" onClick={() => onReview(leave.id, "approved")} className="rounded-xl bg-emerald-500 px-3 py-2 text-xs font-bold text-white">อนุมัติ</button>
+                    <button type="button" onClick={() => onReview(leave.id, "rejected")} className="rounded-xl bg-white/70 px-3 py-2 text-xs font-bold text-rose-600">ไม่อนุมัติ</button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </section>
+      ) : null}
+
+      <section className="glass rounded-[1.5rem] p-5">
+        <h4 className="mb-3 text-lg font-extrabold">ใบลาของฉัน</h4>
+        {myLeaves.length === 0 ? (
+          <p className="text-sm font-semibold text-k2-muted">ยังไม่มีใบลา</p>
+        ) : (
+          <div className="space-y-2">
+            {myLeaves.map((leave) => (
+              <div key={leave.id} className="flex flex-wrap items-center justify-between gap-2 rounded-2xl bg-white/60 px-4 py-3">
+                <span className="font-semibold">{leaveTypeLabel[leave.leaveType]} · {leave.startDate} ถึง {leave.endDate}</span>
+                <span className={`rounded-full px-3 py-1 text-xs font-bold ${leaveStatusTone[leave.status]}`}>{leaveStatusLabel[leave.status]}</span>
+              </div>
+            ))}
+          </div>
+        )}
+      </section>
+
+      <section className="glass rounded-[1.5rem] p-5">
+        <h4 className="mb-3 text-lg font-extrabold">วันหยุดบริษัท</h4>
+        {holidays.length === 0 ? (
+          <p className="text-sm font-semibold text-k2-muted">ยังไม่มีวันหยุดในระบบ</p>
+        ) : (
+          <div className="flex flex-wrap gap-2">
+            {holidays.map((holiday) => (
+              <span key={holiday.id} className="rounded-full bg-k2-mint px-3 py-1 text-sm font-semibold text-emerald-800">{holiday.date} · {holiday.name}</span>
+            ))}
+          </div>
+        )}
+      </section>
+    </div>
+  );
+}
+
 function AttendanceView({
   currentUser,
   branchSetting,
@@ -5690,7 +5944,10 @@ function HRView({
   onSave,
   branches,
   branchSettings,
-  onSaveBranch
+  onSaveBranch,
+  holidays,
+  onAddHoliday,
+  onRemoveHoliday
 }: {
   teamMembers: TeamMember[];
   records: Record<string, { salary: number; position: string; startDate: string }>;
@@ -5699,7 +5956,12 @@ function HRView({
   branches: string[];
   branchSettings: Record<string, BranchSetting>;
   onSaveBranch: (setting: BranchSetting) => void;
+  holidays: Holiday[];
+  onAddHoliday: (date: string, name: string) => void;
+  onRemoveHoliday: (id: string) => void;
 }) {
+  const [holidayDate, setHolidayDate] = useState("");
+  const [holidayName, setHolidayName] = useState("");
   const [drafts, setDrafts] = useState<Record<string, { salary: string; position: string; startDate: string }>>({});
   const staff = teamMembers.filter((member) => member.role !== "Owner");
   const staffBranches = Array.from(new Set(staff.map((member) => member.branch || "ยังไม่กำหนดสาขา")));
@@ -5739,6 +6001,36 @@ function HRView({
             />
           ))}
         </div>
+      </section>
+
+      <section className="glass rounded-[1.5rem] p-5">
+        <h4 className="text-lg font-extrabold">วันหยุดบริษัท</h4>
+        <p className="mb-3 mt-1 text-sm font-semibold text-k2-muted">ใช้อ้างอิงการลา/คำนวณเงินเดือน</p>
+        {canEdit ? (
+          <div className="mb-3 flex flex-wrap items-end gap-2">
+            <label className="space-y-1">
+              <span className="text-xs font-semibold text-k2-muted">วันที่</span>
+              <input type="date" value={holidayDate} onChange={(event) => setHolidayDate(event.target.value)} className="rounded-2xl border border-white/80 bg-white/85 px-3 py-2 text-sm outline-none" />
+            </label>
+            <label className="flex-1 space-y-1">
+              <span className="text-xs font-semibold text-k2-muted">ชื่อวันหยุด</span>
+              <input value={holidayName} onChange={(event) => setHolidayName(event.target.value)} placeholder="เช่น วันสงกรานต์" className="w-full rounded-2xl border border-white/80 bg-white/85 px-3 py-2 text-sm outline-none" />
+            </label>
+            <button type="button" onClick={() => { onAddHoliday(holidayDate, holidayName); setHolidayDate(""); setHolidayName(""); }} className="rounded-2xl bg-k2-ink px-4 py-2 text-sm font-bold text-white">เพิ่ม</button>
+          </div>
+        ) : null}
+        {holidays.length === 0 ? (
+          <p className="text-sm font-semibold text-k2-muted">ยังไม่มีวันหยุด</p>
+        ) : (
+          <div className="flex flex-wrap gap-2">
+            {holidays.map((holiday) => (
+              <span key={holiday.id} className="inline-flex items-center gap-2 rounded-full bg-k2-mint px-3 py-1 text-sm font-semibold text-emerald-800">
+                {holiday.date} · {holiday.name}
+                {canEdit ? <button type="button" onClick={() => onRemoveHoliday(holiday.id)} className="font-bold text-rose-600">✕</button> : null}
+              </span>
+            ))}
+          </div>
+        )}
       </section>
 
       {staffBranches.map((branch) => (

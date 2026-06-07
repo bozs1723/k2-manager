@@ -69,6 +69,23 @@ export type Customer = {
   lastOrderDate: string;
 };
 
+export type LeaveRequest = {
+  id: string;
+  profileId: string;
+  leaveType: "sick" | "personal" | "vacation";
+  startDate: string;
+  endDate: string;
+  reason: string;
+  status: "pending" | "approved" | "rejected";
+  createdAt: string;
+};
+
+export type Holiday = {
+  id: string;
+  date: string;
+  name: string;
+};
+
 export type Attendance = {
   id: string;
   profileId: string;
