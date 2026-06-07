@@ -249,7 +249,7 @@ const defaultRolePermissions: Record<Role, PermissionKey[]> = {
   Owner: ["view_dashboard", "create_job", "edit_job", "delete_job", "move_status", "assign_staff", "view_finance", "edit_payment", "create_customer", "edit_customer", "delete_customer", "export_quote", "manage_users", "manage_permissions", "manage_company_settings", "view_audit_log", "manage_hr"],
   Manager: ["view_dashboard", "create_job", "edit_job", "move_status", "assign_staff", "view_finance", "edit_payment", "create_customer", "edit_customer", "export_quote", "view_audit_log"],
   Admin: ["view_dashboard", "create_job", "edit_job", "move_status", "assign_staff", "view_finance", "edit_payment", "create_customer", "edit_customer", "export_quote", "manage_users", "view_audit_log"],
-  HR: ["view_dashboard", "manage_hr"],
+  HR: ["view_dashboard", "manage_hr", "manage_users"],
   Designer: ["view_dashboard", "edit_job", "move_status"],
   "Production Staff": ["view_dashboard", "edit_job", "move_status"],
   "Packing Staff": ["view_dashboard", "edit_job", "move_status"],
@@ -1822,6 +1822,11 @@ export default function Page() {
     }
     const existingMember = teamMembers.find((member) => member.id === memberId);
     if (!existingMember) return;
+    // ข้อมูลเจ้าของ แก้ได้เฉพาะเจ้าของเท่านั้น (HR/แอดมิน แก้พนักงานคนอื่นได้หมด ยกเว้นเจ้าของ)
+    if (existingMember.role === "Owner" && currentUser.role !== "Owner") {
+      setDataError("แก้ไขข้อมูลเจ้าของได้เฉพาะเจ้าของเท่านั้น");
+      return;
+    }
     const nextRole = can("manage_users") ? updates.role : existingMember.role;
     // เจ้าของไม่มีสาขาประจำ (เห็นทุกสาขา); บทบาทอื่นกำหนดสาขาได้เฉพาะผู้มีสิทธิ์จัดการผู้ใช้
     const nextBranch = nextRole === "Owner"
@@ -4234,8 +4239,9 @@ function SettingsView({
         <div className="mt-4 space-y-3">
           {teamMembers.map((member) => {
             const isEditing = editingId === member.id;
-            const canEditThisMember = canManageTeam || member.id === currentUserId;
-            const canEditThisRole = canManageTeam;
+            // เจ้าของแก้ได้เฉพาะตัวเอง; คนอื่น (HR/แอดมิน) แก้ได้ทุกคน ยกเว้นแถวเจ้าของ
+            const canEditThisMember = member.id === currentUserId || (canManageTeam && member.role !== "Owner");
+            const canEditThisRole = canManageTeam && member.role !== "Owner";
             return (
               <div key={member.id} className="rounded-[1.35rem] border border-white/70 bg-white/60 p-3 shadow-sm">
                 <div className="grid gap-3 md:grid-cols-[auto_1fr_auto] md:items-center">
