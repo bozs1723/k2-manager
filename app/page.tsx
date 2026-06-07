@@ -19,6 +19,7 @@ import {
   Factory,
   FileImage,
   LayoutDashboard,
+  ListTodo,
   Lock,
   LogOut,
   MessageSquare,
@@ -350,6 +351,7 @@ const initialCompanyProfile: CompanyProfile = {
 
 const viewLabel: Record<string, string> = {
   Dashboard: "แดชบอร์ด",
+  "My Jobs": "งานของฉัน",
   Board: "บอร์ดคิวงาน",
   "Create Job": "สร้างงาน",
   Calendar: "ปฏิทิน",
@@ -582,6 +584,56 @@ function initialsFromName(name: string) {
       .map((part) => part[0]?.toUpperCase())
       .join("") || "K2"
   );
+}
+
+type PersonalizationPrefs = Partial<Pick<TeamMember, "nickname" | "avatarBorderColor" | "statusEmoji" | "statusText">>;
+
+const AVATAR_BORDER_PRESETS: Array<{ value: string; label: string }> = [
+  { value: "", label: "ค่าเริ่มต้น" },
+  { value: "#ec4899", label: "ชมพู" },
+  { value: "#f43f5e", label: "โรส" },
+  { value: "#f97316", label: "ส้ม" },
+  { value: "#f59e0b", label: "ทอง" },
+  { value: "#84cc16", label: "ไลม์" },
+  { value: "#10b981", label: "เขียว" },
+  { value: "#06b6d4", label: "ฟ้าคราม" },
+  { value: "#3b82f6", label: "ฟ้า" },
+  { value: "#6366f1", label: "อินดิโก้" },
+  { value: "#a855f7", label: "ม่วง" },
+  { value: "#64748b", label: "เทา" },
+  { value: "#0f172a", label: "ดำ" }
+];
+
+const STATUS_PRESETS: Array<{ emoji: string; text: string }> = [
+  { emoji: "🟢", text: "พร้อมทำงาน" },
+  { emoji: "🔴", text: "ยุ่งอยู่" },
+  { emoji: "🟡", text: "อาจไม่อยู่ที่เครื่อง" },
+  { emoji: "☕", text: "พักสักครู่" },
+  { emoji: "🎯", text: "โฟกัสสูง" },
+  { emoji: "💪", text: "กำลังผลิต!" },
+  { emoji: "🚀", text: "ไปส่งของ" },
+  { emoji: "😴", text: "วันหยุด" }
+];
+
+// Personalization (nickname, avatar border color, status) is stored per-member in
+// localStorage so it works without any database change. mergePersonalization reads it
+// at render time, so personalized avatars/names show everywhere automatically.
+function readPersonalization(): Record<string, PersonalizationPrefs> {
+  if (typeof window === "undefined") return {};
+  try {
+    return JSON.parse(window.localStorage.getItem("k2-personalization") ?? "{}") as Record<string, PersonalizationPrefs>;
+  } catch {
+    return {};
+  }
+}
+
+function mergePersonalization(member: TeamMember): TeamMember {
+  const prefs = readPersonalization()[member.id];
+  return prefs ? { ...member, ...prefs } : member;
+}
+
+function memberDisplayName(member: TeamMember): string {
+  return member.nickname?.trim() || member.name;
 }
 
 function profileToMember(profile: { id: string; email?: string | null; username?: string | null; full_name: string | null; role: Role | null; avatar_url?: string | null; branch?: string | null }): TeamMember {
@@ -838,6 +890,23 @@ export default function Page() {
   const [selectedJobId, setSelectedJobId] = useState(initialJobs[0].id);
   const [query, setQuery] = useState("");
   const [draggedJobId, setDraggedJobId] = useState<string | null>(null);
+  const [personalizationVersion, setPersonalizationVersion] = useState(0);
+  const [showPersonalization, setShowPersonalization] = useState(false);
+  // personalizationVersion is an intentional trigger: bumping it re-reads localStorage prefs.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const currentUserPrefs = useMemo(() => mergePersonalization(currentUser), [currentUser, personalizationVersion]);
+
+  function updatePersonalization(updates: PersonalizationPrefs) {
+    if (typeof window === "undefined") return;
+    const all = readPersonalization();
+    const merged: PersonalizationPrefs = { ...(all[currentUser.id] ?? {}), ...updates };
+    (Object.keys(merged) as Array<keyof PersonalizationPrefs>).forEach((key) => {
+      if (!merged[key]) delete merged[key];
+    });
+    all[currentUser.id] = merged;
+    window.localStorage.setItem("k2-personalization", JSON.stringify(all));
+    setPersonalizationVersion((value) => value + 1);
+  }
   const [pendingMove, setPendingMove] = useState<{ jobId: string; from: JobStatus; to: JobStatus } | null>(null);
   const [hrRecords, setHrRecords] = useState<Record<string, { salary: number; position: string; startDate: string }>>({});
   const [branchSettings, setBranchSettings] = useState<Record<string, BranchSetting>>({});
@@ -860,6 +929,7 @@ export default function Page() {
     () =>
       [
         { label: "Dashboard", icon: LayoutDashboard, visible: currentRolePermissions.includes("view_dashboard") },
+        { label: "My Jobs", icon: ListTodo, visible: true },
         { label: "Board", icon: ClipboardList, visible: currentRolePermissions.includes("view_dashboard") },
         { label: "Create Job", icon: ClipboardPlus, visible: currentRolePermissions.includes("create_job") },
         { label: "Calendar", icon: CalendarDays, visible: currentRolePermissions.includes("view_dashboard") },
@@ -2394,7 +2464,7 @@ export default function Page() {
     <main className="min-h-screen px-3 py-3 text-k2-ink sm:px-5 sm:py-5">
       <div className="mx-auto flex max-w-[1800px] gap-4">
         <aside className="glass sticky top-5 hidden h-[calc(100vh-2.5rem)] w-72 shrink-0 rounded-[1.7rem] p-4 lg:block">
-          <BrandBlock currentUser={currentUser} />
+          <BrandBlock currentUser={currentUserPrefs} onEditProfile={() => setShowPersonalization(true)} />
           <Nav activeView={activeView} items={navigationItems} onChange={setActiveView} />
           <div className="mt-6 rounded-3xl bg-white/55 p-4">
             <p className="text-xs font-bold uppercase tracking-[0.18em] text-k2-muted">สิทธิ์ปัจจุบัน</p>
@@ -2556,6 +2626,19 @@ export default function Page() {
                 }} />
               </motion.div>
             )}
+            {activeView === "My Jobs" && (
+              <motion.div key="my-jobs" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}>
+                <MyJobsView
+                  jobs={filteredJobs}
+                  currentUser={currentUser}
+                  canSeeMoney={canSeeMoney}
+                  onSelect={(id) => {
+                    setSelectedJobId(id);
+                    setActiveView("Detail");
+                  }}
+                />
+              </motion.div>
+            )}
             {activeView === "Board" && (
               <motion.div key="board" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}>
                 <Board
@@ -2702,48 +2785,179 @@ export default function Page() {
         </div>
       ) : null}
 
+      {showPersonalization ? (
+        <PersonalizationModal
+          currentUser={currentUserPrefs}
+          onUpdate={updatePersonalization}
+          onClose={() => setShowPersonalization(false)}
+        />
+      ) : null}
+
     </main>
   );
 }
 
-function BrandBlock({ currentUser }: { currentUser: TeamMember }) {
+function PersonalizationModal({
+  currentUser,
+  onUpdate,
+  onClose
+}: {
+  currentUser: TeamMember;
+  onUpdate: (updates: PersonalizationPrefs) => void;
+  onClose: () => void;
+}) {
+  const [nickname, setNickname] = useState(currentUser.nickname ?? "");
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4 backdrop-blur-sm" onClick={onClose}>
+      <div className="glass-solid max-h-[88vh] w-full max-w-md overflow-y-auto rounded-[1.6rem] p-6" onClick={(event) => event.stopPropagation()}>
+        <div className="mb-4 flex items-center gap-3">
+          <MemberAvatar member={currentUser} className="h-14 w-14 rounded-2xl text-base" />
+          <div className="min-w-0">
+            <h3 className="text-xl font-extrabold text-k2-ink">ปรับแต่งโปรไฟล์ของฉัน</h3>
+            <p className="text-sm font-semibold text-k2-muted">ชื่อเล่น · กรอบสี · สถานะ (เห็นบนเครื่องนี้)</p>
+          </div>
+        </div>
+
+        <label className="block">
+          <span className="mb-1.5 block text-sm font-bold text-k2-muted">ชื่อเล่น</span>
+          <div className="flex gap-2">
+            <input
+              value={nickname}
+              onChange={(event) => setNickname(event.target.value)}
+              placeholder={currentUser.name}
+              className="min-w-0 flex-1 rounded-2xl border border-white/80 bg-white/85 px-4 py-3 text-sm font-semibold outline-none"
+            />
+            <button
+              type="button"
+              onClick={() => onUpdate({ nickname: nickname.trim() || undefined })}
+              className="rounded-2xl bg-k2-ink px-4 text-sm font-extrabold text-white"
+            >
+              บันทึก
+            </button>
+          </div>
+        </label>
+
+        <div className="mt-5">
+          <p className="mb-2 text-sm font-bold text-k2-muted">สีกรอบรูป</p>
+          <div className="flex flex-wrap gap-2">
+            {AVATAR_BORDER_PRESETS.map((preset) => {
+              const isSelected = (currentUser.avatarBorderColor ?? "") === preset.value;
+              return (
+                <button
+                  key={preset.label}
+                  type="button"
+                  title={preset.label}
+                  onClick={() => onUpdate({ avatarBorderColor: preset.value || undefined })}
+                  className={`h-9 w-9 rounded-full ring-2 transition ${isSelected ? "scale-110 ring-k2-ink" : "ring-white/70"}`}
+                  style={{ background: preset.value || "rgba(167,139,250,0.7)" }}
+                />
+              );
+            })}
+          </div>
+        </div>
+
+        <div className="mt-5">
+          <p className="mb-2 text-sm font-bold text-k2-muted">สถานะ</p>
+          <div className="grid grid-cols-2 gap-2">
+            <button
+              type="button"
+              onClick={() => onUpdate({ statusEmoji: undefined, statusText: undefined })}
+              className={`rounded-2xl px-3 py-2.5 text-left text-sm font-bold ${!currentUser.statusEmoji ? "bg-k2-ink text-white" : "bg-white/70 text-k2-muted"}`}
+            >
+              ไม่แสดงสถานะ
+            </button>
+            {STATUS_PRESETS.map((preset) => {
+              const isActive = currentUser.statusEmoji === preset.emoji && currentUser.statusText === preset.text;
+              return (
+                <button
+                  key={preset.text}
+                  type="button"
+                  onClick={() => onUpdate({ statusEmoji: preset.emoji, statusText: preset.text })}
+                  className={`rounded-2xl px-3 py-2.5 text-left text-sm font-bold ${isActive ? "bg-k2-ink text-white" : "bg-white/70 text-k2-muted"}`}
+                >
+                  {preset.emoji} {preset.text}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        <button
+          type="button"
+          onClick={onClose}
+          className="mt-6 w-full rounded-2xl bg-k2-ink px-4 py-3 font-extrabold text-white"
+        >
+          เสร็จสิ้น
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function BrandBlock({ currentUser, onEditProfile }: { currentUser: TeamMember; onEditProfile?: () => void }) {
   return (
     <div className="mb-6">
       <div className="mb-5 flex items-center gap-3">
         <KLogoMark className="h-[6.5rem] w-[6.5rem]" />
         <KLogoLockup size="sidebar" />
       </div>
-      <div className="rounded-3xl bg-white/60 p-4">
+      <button
+        type="button"
+        onClick={onEditProfile}
+        title="ปรับแต่งโปรไฟล์ของฉัน"
+        className="group w-full rounded-3xl bg-white/60 p-4 text-left transition hover:bg-white focus:outline-none focus-visible:ring-2 focus-visible:ring-k2-ink/30"
+      >
         <div className="flex items-center gap-3">
           <MemberAvatar member={currentUser} className="h-10 w-10 rounded-2xl text-sm" />
-          <div>
-            <p className="font-semibold">{currentUser.name}</p>
-            <p className="text-sm text-k2-muted">{roleLabel[currentUser.role]}</p>
+          <div className="min-w-0 flex-1">
+            <p className="truncate font-semibold">{currentUser.nickname || currentUser.name}</p>
+            <p className="truncate text-sm text-k2-muted">{roleLabel[currentUser.role]}</p>
+            {currentUser.statusText ? (
+              <p className="mt-0.5 truncate text-xs text-k2-muted">{currentUser.statusEmoji} {currentUser.statusText}</p>
+            ) : null}
           </div>
+          <Sparkles className="h-4 w-4 shrink-0 text-k2-muted transition group-hover:scale-110" />
         </div>
-      </div>
+      </button>
     </div>
   );
 }
 
-function MemberAvatar({ member, className = "h-12 w-12 rounded-2xl text-sm" }: { member: TeamMember; className?: string }) {
-  if (member.avatarUrl) {
-    return (
-      <Image
-        src={member.avatarUrl}
-        alt={member.name}
-        width={96}
-        height={96}
-        unoptimized
-        className={`${className} object-cover shadow-sm ring-2 ring-white/75`}
-      />
-    );
-  }
+function MemberAvatar({ member: rawMember, className = "h-12 w-12 rounded-2xl text-sm" }: { member: TeamMember; className?: string }) {
+  const member = mergePersonalization(rawMember);
+  const ringStyle: React.CSSProperties = member.avatarBorderColor
+    ? ({ "--tw-ring-color": member.avatarBorderColor } as React.CSSProperties)
+    : {};
+  const ringClass = `ring-2 ${member.avatarBorderColor ? "" : "ring-white/70"}`;
 
-  return (
-    <span className={`grid place-items-center bg-k2-lilac font-extrabold text-violet-800 shadow-sm ring-2 ring-white/70 ${className}`}>
+  const inner = member.avatarUrl ? (
+    <Image
+      src={member.avatarUrl}
+      alt={member.name}
+      width={96}
+      height={96}
+      unoptimized
+      className={`${className} object-cover shadow-sm ${ringClass}`}
+      style={ringStyle}
+    />
+  ) : (
+    <span
+      className={`grid place-items-center bg-k2-lilac font-extrabold text-violet-800 shadow-sm ${ringClass} ${className}`}
+      style={ringStyle}
+    >
       {member.avatar}
     </span>
+  );
+
+  return (
+    <div className="relative inline-flex shrink-0">
+      {inner}
+      {member.statusEmoji ? (
+        <span className="pointer-events-none absolute -bottom-1.5 -right-0.5 select-none text-[14px] leading-none">
+          {member.statusEmoji}
+        </span>
+      ) : null}
+    </div>
   );
 }
 
@@ -2801,6 +3015,71 @@ function Nav({
         </button>
       ))}
     </nav>
+  );
+}
+
+function jobIsAssignedTo(job: Job, user: TeamMember) {
+  return job.assignedDesigner === user.name || job.assignedProduction === user.name;
+}
+
+function MyJobsView({
+  jobs,
+  currentUser,
+  canSeeMoney,
+  onSelect
+}: {
+  jobs: Job[];
+  currentUser: TeamMember;
+  canSeeMoney: boolean;
+  onSelect: (id: string) => void;
+}) {
+  const mine = useMemo(() => jobs.filter((job) => jobIsAssignedTo(job, currentUser)), [jobs, currentUser]);
+  const openJobs = mine.filter((job) => !["Completed", "Cancelled"].includes(job.status));
+  const doneJobs = mine.filter((job) => ["Completed", "Cancelled"].includes(job.status));
+  const overdue = openJobs.filter((job) => daysFromToday(job.dueDate) < 0).length;
+  const dueToday = openJobs.filter((job) => daysFromToday(job.dueDate) === 0).length;
+  const ordered = openJobs.slice().sort((a, b) => a.dueDate.localeCompare(b.dueDate));
+
+  return (
+    <div className="space-y-4">
+      <div className="glass flex flex-wrap items-center gap-3 rounded-[1.5rem] p-5">
+        <div>
+          <p className="text-sm font-semibold text-k2-muted">งานที่มอบหมายให้</p>
+          <h3 className="text-2xl font-semibold">{currentUser.name}</h3>
+        </div>
+        <div className="ml-auto flex flex-wrap gap-2 text-xs font-bold">
+          <span className="rounded-full bg-k2-sky px-3 py-1.5">กำลังทำ {openJobs.length}</span>
+          <span className="rounded-full bg-k2-peach px-3 py-1.5">ครบกำหนดวันนี้ {dueToday}</span>
+          <span className={`rounded-full px-3 py-1.5 ${overdue ? "bg-k2-rose text-rose-700" : "bg-white/70 text-k2-muted"}`}>เลยกำหนด {overdue}</span>
+        </div>
+      </div>
+
+      <div className="glass rounded-[1.5rem] p-5">
+        <h3 className="mb-4 text-xl font-semibold">งานที่ต้องทำ</h3>
+        {ordered.length ? (
+          <div className="space-y-3">
+            {ordered.map((job) => (
+              <JobRow key={job.id} job={job} canSeeMoney={canSeeMoney} onSelect={onSelect} />
+            ))}
+          </div>
+        ) : (
+          <div className="rounded-2xl border border-dashed border-white/90 bg-white/40 px-4 py-10 text-center text-sm font-semibold text-k2-muted">
+            ยังไม่มีงานที่มอบหมายให้คุณ
+          </div>
+        )}
+      </div>
+
+      {doneJobs.length ? (
+        <div className="glass rounded-[1.5rem] p-5">
+          <h3 className="mb-4 text-xl font-semibold">เสร็จแล้ว / ปิดงาน ({doneJobs.length})</h3>
+          <div className="space-y-3">
+            {doneJobs.map((job) => (
+              <JobRow key={job.id} job={job} canSeeMoney={canSeeMoney} onSelect={onSelect} />
+            ))}
+          </div>
+        </div>
+      ) : null}
+    </div>
   );
 }
 
