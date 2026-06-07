@@ -183,6 +183,10 @@ export type Job = {
   assignedProduction: string;
   price: number;
   deposit: number;
+  depositSlip?: string;
+  depositReceivedDate?: string;
+  depositConfirmed?: boolean;
+  depositConfirmedBy?: string;
   remainingBalance: number;
   paymentStatus: PaymentStatus;
   internalNotes: string;

@@ -2,7 +2,7 @@
 -- K2 Manager — ไฟล์ติดตั้งฐานข้อมูลครบในไฟล์เดียว (รันรอบเดียวจบ)
 -- วิธีใช้: Supabase → SQL Editor → New query → วางทั้งหมด → Run
 -- ปลอดภัย/รันซ้ำได้ (idempotent) — ไม่ลบข้อมูลเดิม
--- สร้างจาก: setup_safe.sql + migrations ทั้งหมดถึง 2026-06-07 (express approval)
+-- สร้างจาก: setup_safe.sql + migrations ทั้งหมดถึง 2026-06-07 (deposit slip)
 -- ============================================================
 
 -- ===== [1] schema หลัก (ตาราง/สิทธิ์/seed) =====
@@ -945,3 +945,15 @@ begin
     alter publication supabase_realtime add table public.express_requests;
   end if;
 end $$;
+
+-- ============================================================
+-- ===== migration: 20260607070000_deposit_slip =====
+-- ============================================================
+-- บังคับแนบสลิปมัดจำ + ผู้จัดการยืนยันยอดก่อนเข้าคิวผลิต
+-- ปลอดภัย/รันซ้ำได้ (idempotent) — เพิ่มคอลัมน์อย่างเดียว ไม่ลบข้อมูลเดิม
+
+alter table public.jobs add column if not exists deposit_slip text;                 -- รูปสลิป (data URL)
+alter table public.jobs add column if not exists deposit_received_date date;         -- วันที่รับเงินมัดจำ
+alter table public.jobs add column if not exists deposit_confirmed boolean not null default false;  -- ผู้จัดการยืนยันยอดแล้ว
+alter table public.jobs add column if not exists deposit_confirmed_by uuid references public.profiles(id);
+alter table public.jobs add column if not exists deposit_confirmed_at timestamptz;

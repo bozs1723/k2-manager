@@ -152,6 +152,10 @@ type SupabaseJobRow = {
   remaining_balance: number | string;
   payment_status: PaymentStatus;
   internal_notes: string | null;
+  deposit_slip?: string | null;
+  deposit_received_date?: string | null;
+  deposit_confirmed?: boolean | null;
+  deposit_confirmed_by?: string | null;
   created_at: string;
 };
 
@@ -813,6 +817,10 @@ function jobFromRow(
     assignedProduction: row.assigned_production ? profileNames.get(row.assigned_production) ?? "Unassigned" : "Unassigned",
     price,
     deposit,
+    depositSlip: row.deposit_slip ?? undefined,
+    depositReceivedDate: row.deposit_received_date ?? undefined,
+    depositConfirmed: Boolean(row.deposit_confirmed),
+    depositConfirmedBy: row.deposit_confirmed_by ? profileNames.get(row.deposit_confirmed_by) ?? undefined : undefined,
     remainingBalance: Number(row.remaining_balance),
     paymentStatus: row.payment_status,
     internalNotes: row.internal_notes ?? "",
@@ -1752,6 +1760,29 @@ export default function Page() {
     void appendAudit("updated payment", jobId, "jobs", existingJob.dbId);
   }
 
+  // ผู้จัดการ/แอดมิน ยืนยันยอดมัดจำ → ปลดล็อกให้งานเข้าคิวผลิต
+  async function confirmDeposit(jobId: string) {
+    if (!["Owner", "Manager", "Admin"].includes(currentUser.role)) {
+      setDataError("เฉพาะเจ้าของ/ผู้จัดการ/แอดมินเท่านั้นที่ยืนยันยอดมัดจำได้");
+      return;
+    }
+    const existingJob = jobs.find((job) => job.id === jobId);
+    if (!existingJob) return;
+    setJobs((current) => current.map((job) => (job.id === jobId ? { ...job, depositConfirmed: true, depositConfirmedBy: currentUser.name } : job)));
+    if (supabase && existingJob.dbId) {
+      const { error } = await supabase
+        .from("jobs")
+        .update({ deposit_confirmed: true, deposit_confirmed_by: uuidPattern.test(currentUser.id) ? currentUser.id : null, deposit_confirmed_at: new Date().toISOString() })
+        .eq("id", existingJob.dbId);
+      if (error) {
+        setDataError(error.message);
+        void refreshWorkspaceData();
+        return;
+      }
+    }
+    void appendAudit("confirmed deposit", jobId, "jobs", existingJob.dbId);
+  }
+
   async function addComment(jobId: string, text: string) {
     if (!text.trim()) return;
     const existingJob = jobs.find((job) => job.id === jobId);
@@ -1904,6 +1935,8 @@ export default function Page() {
               due_date: input?.dueDate ?? todayISO(),
               priority: input?.priority ?? "Normal",
               is_express: input?.isExpress ?? false,
+              deposit_slip: input?.depositSlip ?? null,
+              deposit_received_date: input?.depositReceivedDate || null,
               production_branch: input?.productionBranch ?? null,
               acceptance: jobAcceptance,
               reject_reason: null,
@@ -1977,6 +2010,9 @@ export default function Page() {
       dueDate: input?.dueDate ?? todayISO(),
       priority: input?.priority ?? "Urgent",
       isExpress: input?.isExpress ?? false,
+      depositSlip: input?.depositSlip ?? undefined,
+      depositReceivedDate: input?.depositReceivedDate ?? undefined,
+      depositConfirmed: false,
       productionBranch: input?.productionBranch ?? "",
       acceptance: jobAcceptance,
       rejectReason: "",
@@ -3090,7 +3126,7 @@ export default function Page() {
             {activeView === "Detail" && (
               <motion.div key="detail" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}>
                 {selectedJob ? (
-                  <JobDetail job={selectedJob} companyProfile={companyProfile} canSeeMoney={canSeeMoney} canDeleteJob={can("delete_job")} onPayment={updatePayment} onComment={addComment} onMove={requestMove} onDelete={removeJob} />
+                  <JobDetail job={selectedJob} companyProfile={companyProfile} canSeeMoney={canSeeMoney} canDeleteJob={can("delete_job")} canConfirmDeposit={["Owner", "Manager", "Admin"].includes(currentUser.role)} onPayment={updatePayment} onConfirmDeposit={confirmDeposit} onComment={addComment} onMove={requestMove} onDelete={removeJob} />
                 ) : (
                   <EmptyState title="ยังไม่มีงานในระบบ" text="เริ่มจากสร้างลูกค้าและสร้างงานแรกได้เลย" action={() => setActiveView("Create Job")} />
                 )}
@@ -3912,7 +3948,9 @@ function JobDetail({
   companyProfile,
   canSeeMoney,
   canDeleteJob,
+  canConfirmDeposit,
   onPayment,
+  onConfirmDeposit,
   onComment,
   onMove,
   onDelete
@@ -3921,7 +3959,9 @@ function JobDetail({
   companyProfile: CompanyProfile;
   canSeeMoney: boolean;
   canDeleteJob: boolean;
+  canConfirmDeposit: boolean;
   onPayment: (jobId: string, deposit: number) => void;
+  onConfirmDeposit: (jobId: string) => void;
   onComment: (jobId: string, text: string) => void;
   onMove: (jobId: string, status: JobStatus) => void;
   onDelete: (jobId: string) => void;
@@ -4034,6 +4074,40 @@ function JobDetail({
           <div className="mt-4 flex items-center justify-between rounded-2xl bg-white/70 p-3">
             <span className="font-semibold">สถานะชำระเงิน</span>
             <span className="rounded-full bg-k2-mint px-3 py-1 text-xs font-bold text-emerald-800">{paymentLabel[job.paymentStatus]}</span>
+          </div>
+
+          {/* มัดจำ: วันที่รับเงิน + สลิป + ยืนยันยอด */}
+          <div className="mt-4 rounded-2xl border border-white/70 bg-white/55 p-3">
+            <div className="flex items-center justify-between">
+              <span className="font-semibold">มัดจำ</span>
+              {job.depositConfirmed ? (
+                <span className="inline-flex items-center gap-1 rounded-full bg-teal-100 px-3 py-1 text-xs font-bold text-teal-700">
+                  <CheckCircle2 className="h-3.5 w-3.5" /> ยืนยันยอดแล้ว{job.depositConfirmedBy ? ` · ${job.depositConfirmedBy}` : ""}
+                </span>
+              ) : (
+                <span className="rounded-full bg-amber-100 px-3 py-1 text-xs font-bold text-amber-700">รอยืนยันยอด</span>
+              )}
+            </div>
+            {job.depositReceivedDate ? (
+              <p className="mt-2 text-sm font-semibold text-k2-muted">วันที่รับเงิน: {job.depositReceivedDate}</p>
+            ) : null}
+            {job.depositSlip ? (
+              <a href={job.depositSlip} target="_blank" rel="noreferrer" className="mt-2 inline-block">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img src={job.depositSlip} alt="สลิปมัดจำ" className="h-28 w-auto rounded-xl object-cover ring-1 ring-white/80" />
+              </a>
+            ) : (
+              <p className="mt-2 text-sm font-semibold text-k2-muted">— ไม่มีรูปสลิป —</p>
+            )}
+            {!job.depositConfirmed && canConfirmDeposit ? (
+              <button
+                type="button"
+                onClick={() => onConfirmDeposit(job.id)}
+                className="mt-3 w-full rounded-2xl bg-teal-500 px-4 py-3 text-sm font-extrabold text-white"
+              >
+                ✓ ยืนยันยอดมัดจำ (ปลดล็อกเข้าคิวผลิต)
+              </button>
+            ) : null}
           </div>
           {canSeeMoney && (
             <label className="mt-4 block">
@@ -4438,6 +4512,8 @@ function CreateJobView({
     assignedProduction: defaultProduction,
     price: 0,
     deposit: 0,
+    depositReceivedDate: todayISO(),
+    depositSlip: "",
     internalNotes: "",
     fileName: "",
     sourceChannel: "LINE",
@@ -4453,6 +4529,22 @@ function CreateJobView({
 
   const [formError, setFormError] = useState("");
   const [lookupMsg, setLookupMsg] = useState("");
+  const [slipError, setSlipError] = useState("");
+
+  async function handleSlipUpload(file: File | null) {
+    if (!file) return;
+    setSlipError("");
+    if (!file.type.startsWith("image/")) {
+      setSlipError("กรุณาเลือกไฟล์รูปภาพเท่านั้น");
+      return;
+    }
+    if (file.size > 1_500_000) {
+      setSlipError("รูปสลิปต้องมีขนาดไม่เกิน 1.5 MB");
+      return;
+    }
+    const dataUrl = await readImageAsDataUrl(file);
+    setField("depositSlip", dataUrl);
+  }
 
   function setField<Key extends keyof typeof form>(key: Key, value: (typeof form)[Key]) {
     setForm((current) => ({ ...current, [key]: value }));
@@ -4540,6 +4632,19 @@ function CreateJobView({
         // ลูกค้าใหม่ต้องมีชื่อ เพื่อไม่ให้เกิดเรคคอร์ด "ลูกค้าใหม่" ค้างในระบบ
         if (form.customerId === "new" && !form.customerName.trim()) {
           setFormError("กรุณากรอกชื่อลูกค้า หรือเลือกลูกค้าเดิมจากช่องค้นหา");
+          return;
+        }
+        // บังคับแนบสลิปมัดจำ: ต้องมียอดมัดจำ + วันที่รับเงิน + รูปสลิป
+        if (form.deposit <= 0) {
+          setFormError("กรุณาระบุยอดเงินมัดจำก่อนสร้างงาน");
+          return;
+        }
+        if (!form.depositReceivedDate) {
+          setFormError("กรุณาระบุวันที่รับเงินมัดจำ");
+          return;
+        }
+        if (!form.depositSlip) {
+          setFormError("กรุณาแนบรูปสลิปมัดจำก่อนสร้างงาน");
           return;
         }
         setFormError("");
@@ -4768,7 +4873,37 @@ function CreateJobView({
           </label>
           <NumberField label="ราคา" value={form.price} onChange={(value) => setField("price", value)} />
           <NumberField label="มัดจำ" value={form.deposit} onChange={(value) => setField("deposit", value)} />
+          <TextField
+            label="วันที่รับเงินมัดจำ"
+            type="date"
+            value={form.depositReceivedDate}
+            onChange={(value) => setField("depositReceivedDate", value)}
+          />
           <TextField label="ไฟล์ / รูปแนบ" value={form.fileName} onChange={(value) => setField("fileName", value)} />
+          {/* สลิปมัดจำ — บังคับแนบก่อนสร้างงาน */}
+          <div className="space-y-2 md:col-span-2 rounded-2xl border border-rose-200 bg-rose-50/60 p-4">
+            <span className="flex items-center gap-2 text-sm font-extrabold text-k2-ink">
+              <WalletCards className="h-4 w-4 text-rose-500" />
+              สลิปมัดจำ <span className="text-xs font-bold text-rose-600">* บังคับแนบก่อนสร้างงาน</span>
+            </span>
+            <div className="flex flex-wrap items-center gap-3">
+              <label className="inline-flex cursor-pointer items-center gap-2 rounded-2xl bg-white px-4 py-2.5 text-sm font-bold text-k2-ink shadow-sm">
+                <FileImage className="h-4 w-4" />
+                {form.depositSlip ? "เปลี่ยนรูปสลิป" : "แนบรูปสลิป"}
+                <input type="file" accept="image/*" className="hidden" onChange={(event) => void handleSlipUpload(event.target.files?.[0] ?? null)} />
+              </label>
+              {form.depositSlip ? (
+                <div className="flex items-center gap-2">
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img src={form.depositSlip} alt="สลิปมัดจำ" className="h-16 w-16 rounded-xl object-cover ring-1 ring-rose-200" />
+                  <button type="button" onClick={() => setField("depositSlip", "")} className="text-xs font-bold text-rose-600">ลบรูป</button>
+                </div>
+              ) : (
+                <span className="text-xs font-semibold text-k2-muted">ยังไม่ได้แนบสลิป</span>
+              )}
+            </div>
+            {slipError ? <p className="text-xs font-semibold text-rose-600">{slipError}</p> : null}
+          </div>
         </div>
 
         <div className="mt-5 rounded-[1.35rem] border border-white/70 bg-white/45 p-4">
