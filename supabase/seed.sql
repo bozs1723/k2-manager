@@ -12,6 +12,7 @@ insert into public.company_settings (
   bank_account_name,
   quote_prefix,
   quote_terms,
+  facebook_pages,
   created_at,
   updated_at
 )
@@ -29,6 +30,7 @@ values (
   'บริษัท เคทู ไซน์ มีเดีย จำกัด',
   'WO',
   'ใบสั่งงานนี้ใช้ยืนยันรายละเอียดการผลิต และเริ่มผลิตหลังลูกค้ายืนยันแบบพร้อมชำระมัดจำ',
+  '["K2sign media", "K2 Smart"]'::jsonb,
   now(),
   now()
 )
@@ -45,6 +47,7 @@ on conflict (id) do update set
   bank_account_name = excluded.bank_account_name,
   quote_prefix = excluded.quote_prefix,
   quote_terms = excluded.quote_terms,
+  facebook_pages = excluded.facebook_pages,
   updated_at = now();
 
 insert into public.customers (id, name, phone, line_id, email, notes, company_name, tax_id, branch, billing_address, accounting_email, requires_invoice, created_at, updated_at)

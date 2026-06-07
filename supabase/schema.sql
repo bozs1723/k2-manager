@@ -55,6 +55,7 @@ create table public.company_settings (
   bank_account_name text,
   quote_prefix text not null default 'WO',
   quote_terms text,
+  facebook_pages jsonb not null default '[]'::jsonb,
   updated_at timestamptz not null default now(),
   created_at timestamptz not null default now()
 );

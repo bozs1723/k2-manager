@@ -67,6 +67,7 @@ type CompanyProfile = {
   bankAccountName: string;
   quotePrefix: string;
   quoteTerms: string;
+  facebookPages: string[];
 };
 
 type PermissionKey =
@@ -173,6 +174,7 @@ type SupabaseCompanyRow = {
   bank_account_name: string | null;
   quote_prefix: string;
   quote_terms: string | null;
+  facebook_pages?: string[] | null;
 };
 
 type SupabaseRolePermissionRow = {
@@ -263,6 +265,7 @@ const jobTypes: JobType[] = ["DTG Shirt", "UV Print", "Laser Cut", "Signage", "3
 const priorities: Priority[] = ["Normal", "Urgent", "Very Urgent", "Today"];
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const appTagline = "คุมงานผลิตครบในที่เดียว";
+const facebookPagesStorageKey = "k2-facebook-pages";
 const internalAuthDomain = "k2smart.local";
 const usernamePattern = /^[a-z0-9][a-z0-9._-]{2,31}$/;
 const legacyQuotePrefix = "Q" + "T";
@@ -297,6 +300,10 @@ function usernameFromEmail(email?: string | null) {
   return email.endsWith(`@${internalAuthDomain}`) ? email.split("@")[0] : "";
 }
 
+function normalizeFacebookPages(pages: string[]) {
+  return Array.from(new Set(pages.map((page) => page.trim()).filter(Boolean)));
+}
+
 const initialCompanyProfile: CompanyProfile = {
   name: "K2Smart",
   legalName: "บริษัท เคทู ไซน์ มีเดีย จำกัด",
@@ -309,7 +316,8 @@ const initialCompanyProfile: CompanyProfile = {
   bankAccount: "000-0-00000-0",
   bankAccountName: "บริษัท เคทู ไซน์ มีเดีย จำกัด",
   quotePrefix: "WO",
-  quoteTerms: "ใบสั่งงานนี้ใช้ยืนยันรายละเอียดการผลิต และเริ่มผลิตหลังลูกค้ายืนยันแบบพร้อมชำระมัดจำ"
+  quoteTerms: "ใบสั่งงานนี้ใช้ยืนยันรายละเอียดการผลิต และเริ่มผลิตหลังลูกค้ายืนยันแบบพร้อมชำระมัดจำ",
+  facebookPages: ["K2sign media", "K2 Smart"]
 };
 
 const viewLabel: Record<string, string> = {
@@ -615,7 +623,8 @@ function companyFromRow(row: SupabaseCompanyRow): CompanyProfile {
     bankAccount: row.bank_account ?? "",
     bankAccountName: row.bank_account_name ?? "",
     quotePrefix: row.quote_prefix === legacyQuotePrefix ? "WO" : row.quote_prefix,
-    quoteTerms: row.quote_terms?.includes("เสนอราคา") ? initialCompanyProfile.quoteTerms : row.quote_terms ?? ""
+    quoteTerms: row.quote_terms?.includes("เสนอราคา") ? initialCompanyProfile.quoteTerms : row.quote_terms ?? "",
+    facebookPages: Array.isArray(row.facebook_pages) && row.facebook_pages.length ? row.facebook_pages : initialCompanyProfile.facebookPages
   };
 }
 
@@ -774,6 +783,7 @@ export default function Page() {
   const [selectedJobId, setSelectedJobId] = useState(initialJobs[0].id);
   const [query, setQuery] = useState("");
   const [draggedJobId, setDraggedJobId] = useState<string | null>(null);
+  const [pendingMove, setPendingMove] = useState<{ jobId: string; from: JobStatus; to: JobStatus } | null>(null);
   const [notifications, setNotifications] = useState<AppNotification[]>([]);
   const [showNotifPanel, setShowNotifPanel] = useState(false);
   const notifPanelRef = useRef<HTMLDivElement>(null);
@@ -969,6 +979,19 @@ export default function Page() {
   }, [jobs, currentUser.id, currentUser.name]);
 
   useEffect(() => {
+    const saved = window.localStorage.getItem(facebookPagesStorageKey);
+    if (!saved) return;
+    try {
+      const savedPages = normalizeFacebookPages(JSON.parse(saved));
+      if (savedPages.length) {
+        setCompanyProfile((current) => ({ ...current, facebookPages: savedPages }));
+      }
+    } catch {
+      window.localStorage.removeItem(facebookPagesStorageKey);
+    }
+  }, []);
+
+  useEffect(() => {
     if (!isAuthed || !supabase) return;
     void refreshWorkspaceData();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1020,7 +1043,16 @@ export default function Page() {
       if (members.length) setTeamMembers(members);
 
       const companyRows = companyResult.error ? [] : (companyResult.data ?? []) as SupabaseCompanyRow[];
-      if (companyRows[0]) setCompanyProfile(companyFromRow(companyRows[0]));
+      if (companyRows[0]) {
+        const savedFacebookPages = (() => {
+          try {
+            return normalizeFacebookPages(JSON.parse(window.localStorage.getItem(facebookPagesStorageKey) ?? "[]"));
+          } catch {
+            return [];
+          }
+        })();
+        setCompanyProfile({ ...companyFromRow(companyRows[0]), ...(savedFacebookPages.length ? { facebookPages: savedFacebookPages } : {}) });
+      }
 
       if (!rolePermissionsResult.error) {
         const savedPermissions = ((rolePermissionsResult.data ?? []) as SupabaseRolePermissionRow[]).reduce<Record<string, PermissionKey[]>>((acc, row) => {
@@ -1241,6 +1273,17 @@ export default function Page() {
     if (supabase && isSupabaseConfigured && uuidPattern.test(currentUser.id)) {
       void supabase.from("notifications").delete().eq("recipient_id", currentUser.id);
     }
+  }
+
+  // ขอย้ายสถานะ -> เปิด popup ยืนยันก่อนเสมอ (กันลากผิด/กดพลาด โดยเฉพาะย้ายถอยหลัง)
+  function requestMove(jobId: string, nextStatus: JobStatus) {
+    if (!can("move_status")) {
+      setDataError("บทบาทนี้ยังไม่มีสิทธิ์ย้ายสถานะงาน");
+      return;
+    }
+    const job = jobs.find((item) => item.id === jobId);
+    if (!job || job.status === nextStatus) return;
+    setPendingMove({ jobId, from: job.status, to: nextStatus });
   }
 
   async function moveJob(jobId: string, nextStatus: JobStatus) {
@@ -1819,21 +1862,23 @@ export default function Page() {
       setDataError("บทบาทนี้ยังไม่มีสิทธิ์ตั้งค่าบริษัท");
       return;
     }
-    setCompanyProfile(profile);
+    const normalizedProfile = { ...profile, facebookPages: normalizeFacebookPages(profile.facebookPages) };
+    window.localStorage.setItem(facebookPagesStorageKey, JSON.stringify(normalizedProfile.facebookPages));
+    setCompanyProfile(normalizedProfile);
     if (!supabase || !isSupabaseConfigured) return;
     const payload = {
-      name: profile.name,
-      legal_name: profile.legalName,
-      tax_id: profile.taxId,
-      branch: profile.branch,
-      address: profile.address,
-      phone: profile.phone,
-      email: profile.email,
-      bank_name: profile.bankName,
-      bank_account: profile.bankAccount,
-      bank_account_name: profile.bankAccountName,
-      quote_prefix: profile.quotePrefix,
-      quote_terms: profile.quoteTerms
+      name: normalizedProfile.name,
+      legal_name: normalizedProfile.legalName,
+      tax_id: normalizedProfile.taxId,
+      branch: normalizedProfile.branch,
+      address: normalizedProfile.address,
+      phone: normalizedProfile.phone,
+      email: normalizedProfile.email,
+      bank_name: normalizedProfile.bankName,
+      bank_account: normalizedProfile.bankAccount,
+      bank_account_name: normalizedProfile.bankAccountName,
+      quote_prefix: normalizedProfile.quotePrefix,
+      quote_terms: normalizedProfile.quoteTerms
     };
     const { data: existing, error: readError } = await supabase.from("company_settings").select("id").limit(1);
     if (readError) {
@@ -1847,6 +1892,16 @@ export default function Page() {
     if (error) {
       setDataError(error.message);
       return;
+    }
+    if (existingId) {
+      const pagesResult = await supabase
+        .from("company_settings")
+        .update({ facebook_pages: normalizedProfile.facebookPages })
+        .eq("id", existingId);
+      if (pagesResult.error && !pagesResult.error.message.includes("facebook_pages")) {
+        setDataError(pagesResult.error.message);
+        return;
+      }
     }
     void appendAudit("updated company settings", profile.legalName, "company_settings", existingId);
   }
@@ -2213,7 +2268,7 @@ export default function Page() {
                   jobs={filteredJobs}
                   draggedJobId={draggedJobId}
                   setDraggedJobId={setDraggedJobId}
-                  moveJob={moveJob}
+                  moveJob={requestMove}
                   onSelect={(id) => {
                     setSelectedJobId(id);
                     setActiveView("Detail");
@@ -2231,7 +2286,7 @@ export default function Page() {
             )}
             {activeView === "Create Job" && (
               <motion.div key="create" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}>
-                <CreateJobView customers={customerRecords} teamMembers={teamMembers} expressEnabled={expressOrdersEnabled} onCreate={createJob} />
+                <CreateJobView customers={customerRecords} teamMembers={teamMembers} companyProfile={companyProfile} expressEnabled={expressOrdersEnabled} onCreate={createJob} />
               </motion.div>
             )}
             {activeView === "Customers" && (
@@ -2280,7 +2335,7 @@ export default function Page() {
             {activeView === "Detail" && (
               <motion.div key="detail" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}>
                 {selectedJob ? (
-                  <JobDetail job={selectedJob} companyProfile={companyProfile} canSeeMoney={canSeeMoney} canDeleteJob={can("delete_job")} onPayment={updatePayment} onComment={addComment} onMove={moveJob} onDelete={removeJob} />
+                  <JobDetail job={selectedJob} companyProfile={companyProfile} canSeeMoney={canSeeMoney} canDeleteJob={can("delete_job")} onPayment={updatePayment} onComment={addComment} onMove={requestMove} onDelete={removeJob} />
                 ) : (
                   <EmptyState title="ยังไม่มีงานในระบบ" text="เริ่มจากสร้างลูกค้าและสร้างงานแรกได้เลย" action={() => setActiveView("Create Job")} />
                 )}
@@ -2294,6 +2349,42 @@ export default function Page() {
           </AnimatePresence>
         </section>
       </div>
+
+      {pendingMove ? (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4 backdrop-blur-sm"
+          onClick={() => setPendingMove(null)}
+        >
+          <div className="glass-solid w-full max-w-sm rounded-[1.6rem] p-6" onClick={(event) => event.stopPropagation()}>
+            <h3 className="text-xl font-extrabold text-k2-ink">ยืนยันการย้ายสถานะ</h3>
+            <p className="mt-3 leading-7 text-k2-muted">
+              ย้ายงานนี้จาก{" "}
+              <span className="font-extrabold text-k2-ink">{statusLabel[pendingMove.from]}</span>
+              {" "}ไป{" "}
+              <span className="font-extrabold text-k2-ink">{statusLabel[pendingMove.to]}</span>
+              {" "}ใช่ไหม?
+            </p>
+            <div className="mt-6 flex gap-3">
+              <button
+                onClick={() => setPendingMove(null)}
+                className="flex-1 rounded-2xl bg-white/70 px-4 py-3 font-bold text-k2-muted"
+              >
+                ยกเลิก
+              </button>
+              <button
+                onClick={() => {
+                  const move = pendingMove;
+                  setPendingMove(null);
+                  void moveJob(move.jobId, move.to);
+                }}
+                className="flex-1 rounded-2xl bg-k2-ink px-4 py-3 font-bold text-white"
+              >
+                ตกลง ย้ายเลย
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
 
     </main>
   );
@@ -3089,11 +3180,13 @@ function CustomerPicker({
 function CreateJobView({
   customers,
   teamMembers,
+  companyProfile,
   expressEnabled,
   onCreate
 }: {
   customers: Customer[];
   teamMembers: TeamMember[];
+  companyProfile: CompanyProfile;
   expressEnabled: boolean;
   onCreate: (job: Partial<Job>) => void;
 }) {
@@ -3128,12 +3221,13 @@ function CreateJobView({
     internalNotes: "",
     fileName: "",
     sourceChannel: "LINE",
+    facebookPage: companyProfile.facebookPages[0] ?? "",
     fileStatus: "รอเช็กไฟล์",
-    workSize: "",
-    material: "",
+    materials: [""] as string[],
     colorSpec: "",
-    productionMethod: "",
-    deliveryMethod: "รับหน้าร้าน"
+    productionBranch: "พะเยา",
+    deliveryMethod: "รับหน้าร้าน",
+    deliveryOther: ""
   });
 
   const [formError, setFormError] = useState("");
@@ -3141,6 +3235,18 @@ function CreateJobView({
 
   function setField<Key extends keyof typeof form>(key: Key, value: (typeof form)[Key]) {
     setForm((current) => ({ ...current, [key]: value }));
+  }
+
+  const materialOptions = ["อะคริลิค", "พลาสวูด", "ไวนิล", "สติ๊กเกอร์", "เสื้อ Cotton", "อื่น ๆ"];
+  const branchOptions = ["พะเยา", "ราม 9", "อื่น ๆ"];
+  function setMaterialAt(index: number, value: string) {
+    setForm((current) => ({ ...current, materials: current.materials.map((m, i) => (i === index ? value : m)) }));
+  }
+  function addMaterial() {
+    setForm((current) => ({ ...current, materials: [...current.materials, ""] }));
+  }
+  function removeMaterial(index: number) {
+    setForm((current) => ({ ...current, materials: current.materials.filter((_, i) => i !== index) }));
   }
 
   // ค้นลูกค้าจากเบอร์โทรที่กรอก แล้วดึงข้อมูลทั้งหมดมาเติมในฟอร์ม
@@ -3218,12 +3324,12 @@ function CreateJobView({
         setFormError("");
         const workOrderSpec = [
           `ช่องทางรับงาน: ${form.sourceChannel || "-"}`,
+          ...(form.sourceChannel === "Facebook" ? [`เพจ Facebook: ${form.facebookPage || "-"}`] : []),
           `สถานะไฟล์: ${form.fileStatus || "-"}`,
-          `ขนาดงาน: ${form.workSize || "-"}`,
-          `วัสดุ: ${form.material || "-"}`,
+          `วัสดุ: ${form.materials.filter(Boolean).join(", ") || "-"}`,
           `สี / สเปกสี: ${form.colorSpec || "-"}`,
-          `วิธีผลิต: ${form.productionMethod || "-"}`,
-          `วิธีรับ/จัดส่ง: ${form.deliveryMethod || "-"}`
+          `สาขาที่ผลิต: ${form.productionBranch || "-"}`,
+          `วิธีรับ/จัดส่ง: ${form.deliveryMethod === "ขนส่งอื่น ๆ" && form.deliveryOther ? `${form.deliveryMethod} (${form.deliveryOther})` : form.deliveryMethod || "-"}`
         ].join("\n");
         onCreate({
           ...form,
@@ -3271,7 +3377,14 @@ function CreateJobView({
             <span className="text-sm font-semibold text-k2-muted">ลูกค้าจากช่องทาง</span>
             <select
               value={form.sourceChannel}
-              onChange={(event) => setField("sourceChannel", event.target.value)}
+              onChange={(event) => {
+                const nextChannel = event.target.value;
+                setForm((current) => ({
+                  ...current,
+                  sourceChannel: nextChannel,
+                  facebookPage: nextChannel === "Facebook" ? current.facebookPage || companyProfile.facebookPages[0] || "" : current.facebookPage
+                }));
+              }}
               className="w-full rounded-2xl border border-white/80 bg-white/80 px-4 py-3 outline-none"
             >
               {["Facebook", "LINE", "หน้าร้าน", "โทรศัพท์", "Sales", "ลูกค้าเก่า", "อื่น ๆ"].map((channel) => (
@@ -3279,6 +3392,27 @@ function CreateJobView({
               ))}
             </select>
           </label>
+          {form.sourceChannel === "Facebook" ? (
+            <label className="space-y-2">
+              <span className="text-sm font-semibold text-k2-muted">ชื่อเพจ Facebook</span>
+              <select
+                value={form.facebookPage}
+                onChange={(event) => setField("facebookPage", event.target.value)}
+                className="w-full rounded-2xl border border-white/80 bg-white/80 px-4 py-3 outline-none"
+              >
+                {companyProfile.facebookPages.length ? (
+                  companyProfile.facebookPages.map((pageName) => (
+                    <option key={pageName} value={pageName}>{pageName}</option>
+                  ))
+                ) : (
+                  <option value="">ยังไม่มีเพจในระบบ</option>
+                )}
+              </select>
+              {!companyProfile.facebookPages.length ? (
+                <p className="text-xs font-bold text-amber-700">ไปที่ตั้งค่า แล้วเพิ่มเพจ Facebook ก่อนใช้งานช่องนี้</p>
+              ) : null}
+            </label>
+          ) : null}
           <label className="space-y-2">
             <span className="text-sm font-semibold text-k2-muted">เบอร์โทร</span>
             <div className="flex gap-2">
@@ -3421,22 +3555,56 @@ function CreateJobView({
             <p className="text-sm font-semibold text-k2-muted">ข้อมูลที่ทีมออกแบบ ผลิต QC และแพ็กของต้องใช้ทำงานจริง</p>
           </div>
           <div className="grid gap-4 md:grid-cols-2">
+            {/* สถานะไฟล์ + ขนาดงาน: ตัดออกจากฟอร์มเปิดงาน — สถานะให้ฝ่ายผลิตคุมบนบอร์ด, ขนาด/จำนวนหลายชิ้นให้พิมพ์ในช่อง "รายละเอียดงาน" ด้านล่าง */}
+            <div className="space-y-2 md:col-span-2">
+              <span className="text-sm font-semibold text-k2-muted">วัสดุ (เพิ่มได้หลายรายการ)</span>
+              <div className="space-y-2">
+                {form.materials.map((mat, index) => (
+                  <div key={index} className="flex gap-2">
+                    <select
+                      value={mat}
+                      onChange={(event) => setMaterialAt(index, event.target.value)}
+                      className="w-full rounded-2xl border border-white/80 bg-white/80 px-4 py-3 outline-none"
+                    >
+                      <option value="">เลือกวัสดุ</option>
+                      {materialOptions.map((option) => (
+                        <option key={option} value={option}>{option}</option>
+                      ))}
+                    </select>
+                    {form.materials.length > 1 ? (
+                      <button
+                        type="button"
+                        onClick={() => removeMaterial(index)}
+                        className="shrink-0 rounded-2xl bg-white/70 px-3 py-3 text-sm font-bold text-rose-600"
+                        title="ลบวัสดุนี้"
+                      >
+                        ลบ
+                      </button>
+                    ) : null}
+                  </div>
+                ))}
+              </div>
+              <button
+                type="button"
+                onClick={addMaterial}
+                className="inline-flex items-center gap-1 rounded-2xl bg-k2-mint px-3 py-2 text-sm font-bold text-k2-ink"
+              >
+                <Plus className="h-4 w-4" /> เพิ่มวัสดุ
+              </button>
+            </div>
+            <TextField label="สี / สเปกสี" value={form.colorSpec} onChange={(value) => setField("colorSpec", value)} />
             <label className="space-y-2">
-              <span className="text-sm font-semibold text-k2-muted">สถานะไฟล์</span>
+              <span className="text-sm font-semibold text-k2-muted">สาขาที่ผลิต</span>
               <select
-                value={form.fileStatus}
-                onChange={(event) => setField("fileStatus", event.target.value)}
+                value={form.productionBranch}
+                onChange={(event) => setField("productionBranch", event.target.value)}
                 className="w-full rounded-2xl border border-white/80 bg-white/80 px-4 py-3 outline-none"
               >
-                {["ยังไม่มีไฟล์", "รอเช็กไฟล์", "รอแก้ไฟล์", "ไฟล์พร้อมออกแบบ", "ไฟล์พร้อมผลิต"].map((status) => (
-                  <option key={status}>{status}</option>
+                {branchOptions.map((branch) => (
+                  <option key={branch}>{branch}</option>
                 ))}
               </select>
             </label>
-            <TextField label="ขนาดงาน" value={form.workSize} onChange={(value) => setField("workSize", value)} />
-            <TextField label="วัสดุ" value={form.material} onChange={(value) => setField("material", value)} />
-            <TextField label="สี / สเปกสี" value={form.colorSpec} onChange={(value) => setField("colorSpec", value)} />
-            <TextField label="วิธีผลิต / เครื่องที่ใช้" value={form.productionMethod} onChange={(value) => setField("productionMethod", value)} />
             <label className="space-y-2 md:col-span-2">
               <span className="text-sm font-semibold text-k2-muted">วิธีรับ/จัดส่งสินค้า</span>
               <select
@@ -3448,6 +3616,14 @@ function CreateJobView({
                   <option key={method}>{method}</option>
                 ))}
               </select>
+              {form.deliveryMethod === "ขนส่งอื่น ๆ" ? (
+                <input
+                  value={form.deliveryOther}
+                  onChange={(event) => setField("deliveryOther", event.target.value)}
+                  placeholder="ระบุขนส่ง เช่น รถทัวร์ / ไปรษณีย์ / รถรับจ้าง"
+                  className="mt-2 w-full rounded-2xl border border-white/80 bg-white/80 px-4 py-3 outline-none"
+                />
+              ) : null}
             </label>
           </div>
         </div>
@@ -3688,6 +3864,7 @@ function SettingsView({
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingMember, setEditingMember] = useState({ name: "", role: "Designer" as Role });
   const [companyDraft, setCompanyDraft] = useState(companyProfile);
+  const [facebookPageName, setFacebookPageName] = useState("");
   const [avatarError, setAvatarError] = useState("");
 
   useEffect(() => {
@@ -3710,6 +3887,16 @@ function SettingsView({
     if (!editingMember.name.trim() || (!canManageTeam && memberId !== currentUserId)) return;
     onUpdateMember(memberId, { name: editingMember.name.trim(), role: editingMember.role });
     setEditingId(null);
+  }
+
+  function addFacebookPage() {
+    const nextPages = normalizeFacebookPages([...companyDraft.facebookPages, facebookPageName]);
+    setCompanyDraft((current) => ({ ...current, facebookPages: nextPages }));
+    setFacebookPageName("");
+  }
+
+  function removeFacebookPage(pageName: string) {
+    setCompanyDraft((current) => ({ ...current, facebookPages: current.facebookPages.filter((page) => page !== pageName) }));
   }
 
   async function handleAvatarUpload(member: TeamMember, file: File | null) {
@@ -4017,6 +4204,61 @@ function SettingsView({
             );
           })}
         </div>
+      </section>
+      <section className="glass rounded-[1.5rem] p-5">
+        <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+          <div>
+            <p className="text-sm font-semibold text-k2-muted">Customer channels</p>
+            <h3 className="text-2xl font-semibold">ตั้งค่าเพจ Facebook</h3>
+            <p className="mt-2 text-sm font-semibold text-k2-muted">เพิ่มชื่อเพจที่ใช้รับงาน ก่อนเลือกเพจตอนสร้างใบสั่งงาน</p>
+          </div>
+          <span className="w-fit rounded-full bg-white/70 px-3 py-1 text-xs font-extrabold text-k2-muted">
+            {companyDraft.facebookPages.length} เพจ
+          </span>
+        </div>
+        <div className="mt-5 grid gap-3 md:grid-cols-[1fr_auto]">
+          <input
+            value={facebookPageName}
+            onChange={(event) => setFacebookPageName(event.target.value)}
+            placeholder="ชื่อเพจ เช่น K2sign media"
+            disabled={!canManageCompany}
+            className="rounded-2xl border border-white/80 bg-white/80 px-4 py-3 text-sm font-semibold outline-none disabled:opacity-60"
+          />
+          <button
+            type="button"
+            onClick={addFacebookPage}
+            disabled={!canManageCompany || !facebookPageName.trim()}
+            className="inline-flex items-center justify-center gap-2 rounded-2xl bg-k2-ink px-4 py-3 text-sm font-extrabold text-white shadow-lg shadow-slate-900/15 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            <Plus className="h-4 w-4" />
+            เพิ่มเพจ
+          </button>
+        </div>
+        <div className="mt-4 grid gap-2 sm:grid-cols-2">
+          {companyDraft.facebookPages.length ? (
+            companyDraft.facebookPages.map((pageName) => (
+              <div key={pageName} className="flex items-center justify-between gap-3 rounded-2xl border border-white/70 bg-white/65 px-4 py-3">
+                <span className="truncate font-extrabold">{pageName}</span>
+                <button
+                  type="button"
+                  onClick={() => removeFacebookPage(pageName)}
+                  disabled={!canManageCompany}
+                  className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-rose-50 text-rose-600 disabled:opacity-40"
+                  title="ลบเพจ"
+                >
+                  <Trash2 className="h-4 w-4" />
+                </button>
+              </div>
+            ))
+          ) : (
+            <p className="rounded-2xl bg-white/60 px-4 py-3 text-sm font-bold text-k2-muted sm:col-span-2">
+              ยังไม่มีรายชื่อเพจ Facebook
+            </p>
+          )}
+        </div>
+        <p className="mt-3 text-xs font-bold text-k2-muted">
+          หลังเพิ่มหรือแก้ไขเพจ ให้กด “บันทึกข้อมูลบริษัท” ด้านบนเพื่อบันทึกการตั้งค่า
+        </p>
       </section>
       <section className="glass rounded-[1.5rem] p-5">
         <h3 className="text-2xl font-semibold">ตั้งค่าลำดับคิว</h3>

@@ -12,9 +12,12 @@ create table if not exists public.company_settings (
   bank_account_name text,
   quote_prefix text not null default 'WO',
   quote_terms text,
+  facebook_pages jsonb not null default '[]'::jsonb,
   updated_at timestamptz not null default now(),
   created_at timestamptz not null default now()
 );
+
+alter table public.company_settings add column if not exists facebook_pages jsonb not null default '[]'::jsonb;
 
 alter table public.company_settings enable row level security;
 
@@ -43,7 +46,8 @@ insert into public.company_settings (
   bank_account,
   bank_account_name,
   quote_prefix,
-  quote_terms
+  quote_terms,
+  facebook_pages
 )
 select
   'K2Smart',
@@ -57,5 +61,6 @@ select
   '000-0-00000-0',
   'บริษัท เคทู ไซน์ มีเดีย จำกัด',
   'WO',
-  'ใบสั่งงานนี้ใช้ยืนยันรายละเอียดการผลิต และเริ่มผลิตหลังลูกค้ายืนยันแบบพร้อมชำระมัดจำ'
+  'ใบสั่งงานนี้ใช้ยืนยันรายละเอียดการผลิต และเริ่มผลิตหลังลูกค้ายืนยันแบบพร้อมชำระมัดจำ',
+  '["K2sign media", "K2 Smart"]'::jsonb
 where not exists (select 1 from public.company_settings);
