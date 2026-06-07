@@ -41,7 +41,7 @@ import {
 import type { LucideIcon } from "lucide-react";
 import { customers as initialCustomers, initialAuditLog, initialJobs, statuses, team as initialTeam } from "@/lib/mock-data";
 import { createSupabaseAuthWorker, isSupabaseConfigured, supabase } from "@/lib/supabase";
-import type { AppNotification, AuditEvent, BranchSetting, Customer, Job, JobStatus, JobType, PaymentStatus, Priority, QuoteStatus, Role, TeamMember } from "@/lib/types";
+import type { AppNotification, Attendance, AuditEvent, BranchSetting, Customer, Job, JobStatus, JobType, PaymentStatus, Priority, QuoteStatus, Role, TeamMember } from "@/lib/types";
 
 type ImportedCustomer = Pick<Customer, "name" | "phone" | "lineId" | "email"> & {
   notes: string;
@@ -269,6 +269,25 @@ const roleSummaryPermissions: Record<Role, string[]> = {
 
 const roles: Role[] = ["Owner", "Manager", "Admin", "HR", "Designer", "Production Staff", "Packing Staff", "Sales Staff"];
 const BRANCH_LIST = ["พะเยา", "กรุงเทพ"];
+
+// ระยะห่างระหว่างพิกัด (เมตร) — สูตร haversine
+function distanceMeters(lat1: number, lng1: number, lat2: number, lng2: number) {
+  const toRad = (deg: number) => (deg * Math.PI) / 180;
+  const R = 6371000;
+  const dLat = toRad(lat2 - lat1);
+  const dLng = toRad(lng2 - lng1);
+  const a = Math.sin(dLat / 2) ** 2 + Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLng / 2) ** 2;
+  return Math.round(R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a)));
+}
+
+// นาทีที่สาย เทียบเวลาเข้างาน + ผ่อนผัน (เช่น 5 นาที)
+function lateMinutesNow(workStart: string, graceMinutes: number) {
+  const [h, m] = workStart.split(":").map((value) => Number(value) || 0);
+  const now = new Date();
+  const nowMin = now.getHours() * 60 + now.getMinutes();
+  const startMin = h * 60 + m + (graceMinutes || 0);
+  return Math.max(0, nowMin - startMin);
+}
 const defaultBranchSetting = (branch: string): BranchSetting => ({ branch, workStart: "09:00", workEnd: "18:00", lateGraceMinutes: 5, gpsLat: null, gpsLng: null, radiusM: 150 });
 const jobTypes: JobType[] = ["DTG Shirt", "UV Print", "Laser Cut", "Signage", "3D Print", "Other"];
 const priorities: Priority[] = ["Normal", "Urgent", "Very Urgent", "Today"];
@@ -339,6 +358,7 @@ const viewLabel: Record<string, string> = {
   Reports: "รายงาน",
   Settings: "ตั้งค่า",
   HR: "ฝ่ายบุคคล (HR)",
+  Attendance: "ลงเวลา",
   Detail: "รายละเอียดงาน",
   Audit: "ประวัติการแก้ไข"
 };
@@ -732,6 +752,21 @@ function jobFromRow(
   };
 }
 
+function attendanceFromRow(row: { id: string; profile_id: string; work_date: string; check_in_at: string | null; check_out_at: string | null; check_in_selfie: string | null; check_in_lat: number | string | null; check_in_lng: number | string | null; late_minutes: number | null; status: string | null }): Attendance {
+  return {
+    id: row.id,
+    profileId: row.profile_id,
+    workDate: row.work_date,
+    checkInAt: row.check_in_at,
+    checkOutAt: row.check_out_at,
+    checkInSelfie: row.check_in_selfie,
+    checkInLat: row.check_in_lat != null ? Number(row.check_in_lat) : null,
+    checkInLng: row.check_in_lng != null ? Number(row.check_in_lng) : null,
+    lateMinutes: row.late_minutes ?? 0,
+    status: (row.status as Attendance["status"]) ?? "on_time"
+  };
+}
+
 function notifFromRow(row: SupabaseNotificationRow): AppNotification {
   return {
     id: row.id,
@@ -806,6 +841,8 @@ export default function Page() {
   const [pendingMove, setPendingMove] = useState<{ jobId: string; from: JobStatus; to: JobStatus } | null>(null);
   const [hrRecords, setHrRecords] = useState<Record<string, { salary: number; position: string; startDate: string }>>({});
   const [branchSettings, setBranchSettings] = useState<Record<string, BranchSetting>>({});
+  const [myAttendance, setMyAttendance] = useState<Attendance | null>(null);
+  const [allAttendance, setAllAttendance] = useState<Attendance[]>([]);
   const [notifications, setNotifications] = useState<AppNotification[]>([]);
   const [showNotifPanel, setShowNotifPanel] = useState(false);
   const notifPanelRef = useRef<HTMLDivElement>(null);
@@ -829,6 +866,7 @@ export default function Page() {
         { label: "Customers", icon: UsersRound, visible: currentRolePermissions.includes("create_customer") || currentRolePermissions.includes("edit_customer") || currentRolePermissions.includes("delete_customer") },
         { label: "Payments", icon: WalletCards, visible: currentRolePermissions.includes("view_finance") || currentRolePermissions.includes("edit_payment") },
         { label: "Reports", icon: BarChart3, visible: currentRolePermissions.includes("view_dashboard") },
+        { label: "Attendance", icon: Clock3, visible: currentRolePermissions.includes("view_dashboard") },
         { label: "HR", icon: UsersRound, visible: currentRolePermissions.includes("manage_hr") },
         { label: "Settings", icon: Settings, visible: true },
         { label: "Detail", icon: FileImage, visible: currentRolePermissions.includes("view_dashboard") },
@@ -1026,9 +1064,14 @@ export default function Page() {
   }, [activeView, isAuthed, navigationItems]);
 
   useEffect(() => {
-    if (isAuthed && activeView === "HR") {
+    if (!isAuthed) return;
+    if (activeView === "HR") {
       void loadHrRecords();
       void loadBranchSettings();
+    }
+    if (activeView === "Attendance") {
+      void loadBranchSettings();
+      void loadAttendance();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isAuthed, activeView]);
@@ -1771,7 +1814,7 @@ export default function Page() {
       const profileId = authData.user?.id ?? nextMember.id;
       const { data, error } = await supabase
         .from("profiles")
-        .upsert({ id: profileId, email: authEmail, full_name: member.name, role: member.role, avatar_url: member.avatarUrl ?? null, is_active: true }, { onConflict: "id" })
+        .upsert({ id: profileId, email: authEmail, full_name: member.name, role: member.role, avatar_url: member.avatarUrl ?? null, branch: member.branch || null, is_active: true }, { onConflict: "id" })
         .select("id, email, full_name, role, avatar_url, branch")
         .single();
       if (error) {
@@ -1840,6 +1883,76 @@ export default function Page() {
       }
     }
     void appendAudit("updated branch settings", setting.branch, "branch_settings", null);
+  }
+
+  async function loadAttendance() {
+    if (!supabase) return;
+    const { data, error } = await supabase
+      .from("attendance")
+      .select("id, profile_id, work_date, check_in_at, check_out_at, check_in_selfie, check_in_lat, check_in_lng, late_minutes, status")
+      .eq("work_date", todayISO());
+    if (error) {
+      setDataError(error.message);
+      return;
+    }
+    const rows = ((data ?? []) as Parameters<typeof attendanceFromRow>[0][]).map(attendanceFromRow);
+    setAllAttendance(rows);
+    setMyAttendance(rows.find((row) => row.profileId === currentUser.id) ?? null);
+  }
+
+  // พนักงานเช็คอิน: ขอ GPS -> ตรวจอยู่ในรัศมีสาขา -> คำนวณสาย -> บันทึก (พร้อมรูปเซลฟี่)
+  async function checkIn(selfie: string): Promise<{ ok: boolean; msg: string }> {
+    if (!currentUser.branch) return { ok: false, msg: "ยังไม่ได้กำหนดสาขาประจำ — ให้ HR ตั้งค่าก่อน" };
+    const setting = branchSettings[currentUser.branch];
+    if (!navigator.geolocation) return { ok: false, msg: "เบราว์เซอร์ไม่รองรับ GPS" };
+    return new Promise((resolve) => {
+      navigator.geolocation.getCurrentPosition(
+        async (pos) => {
+          const lat = pos.coords.latitude;
+          const lng = pos.coords.longitude;
+          if (setting && setting.gpsLat != null && setting.gpsLng != null) {
+            const dist = distanceMeters(lat, lng, setting.gpsLat, setting.gpsLng);
+            if (dist > (setting.radiusM || 150)) {
+              resolve({ ok: false, msg: `อยู่นอกรัศมีสาขา (${dist} ม. / อนุญาต ${setting.radiusM} ม.)` });
+              return;
+            }
+          }
+          const late = setting ? lateMinutesNow(setting.workStart, setting.lateGraceMinutes) : 0;
+          const status = late > 0 ? "late" : "on_time";
+          const checkInAt = new Date().toISOString();
+          if (supabase && uuidPattern.test(currentUser.id)) {
+            const { error } = await supabase
+              .from("attendance")
+              .upsert({ profile_id: currentUser.id, work_date: todayISO(), check_in_at: checkInAt, check_in_selfie: selfie || null, check_in_lat: lat, check_in_lng: lng, late_minutes: late, status }, { onConflict: "profile_id,work_date" });
+            if (error) {
+              resolve({ ok: false, msg: error.message });
+              return;
+            }
+            await loadAttendance();
+          } else {
+            setMyAttendance({ id: crypto.randomUUID(), profileId: currentUser.id, workDate: todayISO(), checkInAt, checkOutAt: null, checkInSelfie: selfie, checkInLat: lat, checkInLng: lng, lateMinutes: late, status });
+          }
+          void appendAudit("checked in", currentUser.name, "attendance", null);
+          resolve({ ok: true, msg: late > 0 ? `เช็คอินแล้ว — สาย ${late} นาที` : "เช็คอินตรงเวลา ✓" });
+        },
+        () => resolve({ ok: false, msg: "ดึงตำแหน่งไม่สำเร็จ — อนุญาตให้เข้าถึงตำแหน่งก่อน" }),
+        { enableHighAccuracy: true, timeout: 10000 }
+      );
+    });
+  }
+
+  async function checkOut(): Promise<{ ok: boolean; msg: string }> {
+    if (!myAttendance) return { ok: false, msg: "ยังไม่ได้เช็คอินวันนี้" };
+    const checkOutAt = new Date().toISOString();
+    if (supabase && uuidPattern.test(currentUser.id)) {
+      const { error } = await supabase.from("attendance").update({ check_out_at: checkOutAt }).eq("id", myAttendance.id);
+      if (error) return { ok: false, msg: error.message };
+      await loadAttendance();
+    } else {
+      setMyAttendance({ ...myAttendance, checkOutAt });
+    }
+    void appendAudit("checked out", currentUser.name, "attendance", null);
+    return { ok: true, msg: "เช็คเอาท์แล้ว ✓" };
   }
 
   async function saveHrRecord(memberId: string, record: { salary: number; position: string; startDate: string }) {
@@ -2528,6 +2641,20 @@ export default function Page() {
             {activeView === "HR" && (
               <motion.div key="hr" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}>
                 <HRView teamMembers={teamMembers} records={hrRecords} canEdit={can("manage_hr")} onSave={saveHrRecord} branches={BRANCH_LIST} branchSettings={branchSettings} onSaveBranch={saveBranchSetting} />
+              </motion.div>
+            )}
+            {activeView === "Attendance" && (
+              <motion.div key="attendance" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}>
+                <AttendanceView
+                  currentUser={currentUser}
+                  branchSetting={currentUser.branch ? branchSettings[currentUser.branch] : undefined}
+                  myAttendance={myAttendance}
+                  allAttendance={allAttendance}
+                  teamMembers={teamMembers}
+                  isHr={can("manage_hr")}
+                  onCheckIn={checkIn}
+                  onCheckOut={checkOut}
+                />
               </motion.div>
             )}
             {activeView === "Audit" && (
@@ -4095,7 +4222,8 @@ function SettingsView({
   const canManageTeam = currentPermissions.includes("manage_users");
   const canManagePermissions = currentPermissions.includes("manage_permissions");
   const canManageCompany = currentPermissions.includes("manage_company_settings");
-  const [newMember, setNewMember] = useState({ name: "", username: "", password: "", role: "Designer" as Role });
+  const [newMember, setNewMember] = useState({ name: "", username: "", password: "", role: "Designer" as Role, branch: "" });
+  const newMemberBranchOptions = ["พะเยา", "กรุงเทพ"];
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingMember, setEditingMember] = useState({ name: "", role: "Designer" as Role, branch: "" });
   const memberBranchOptions = ["พะเยา", "กรุงเทพ"];
@@ -4115,8 +4243,8 @@ function SettingsView({
   function submitNewMember() {
     const username = normalizeUsername(newMember.username);
     if (!newMember.name.trim() || !username || !canManageTeam) return;
-    onAddMember({ name: newMember.name.trim(), username, password: newMember.password, role: newMember.role });
-    setNewMember({ name: "", username: "", password: "", role: "Designer" });
+    onAddMember({ name: newMember.name.trim(), username, password: newMember.password, role: newMember.role, branch: newMember.role === "Owner" ? "" : newMember.branch });
+    setNewMember({ name: "", username: "", password: "", role: "Designer", branch: "" });
   }
 
   function submitEdit(memberId: string) {
@@ -4231,7 +4359,7 @@ function SettingsView({
           </span>
         </div>
 
-        <div className="mt-5 grid gap-3 rounded-[1.35rem] border border-white/70 bg-white/45 p-3 md:grid-cols-2 xl:grid-cols-[1fr_180px_180px_180px_auto]">
+        <div className="mt-5 grid gap-3 rounded-[1.35rem] border border-white/70 bg-white/45 p-3 md:grid-cols-2 xl:grid-cols-[1fr_150px_150px_140px_140px_auto]">
           <input
             value={newMember.name}
             onChange={(event) => setNewMember((current) => ({ ...current, name: event.target.value }))}
@@ -4265,6 +4393,17 @@ function SettingsView({
           >
             {roles.map((role) => (
               <option key={role} value={role}>{roleLabel[role]}</option>
+            ))}
+          </select>
+          <select
+            value={newMember.branch}
+            onChange={(event) => setNewMember((current) => ({ ...current, branch: event.target.value }))}
+            disabled={!canManageTeam || newMember.role === "Owner"}
+            className="rounded-2xl border border-white/80 bg-white/80 px-4 py-3 text-sm font-semibold outline-none disabled:opacity-60"
+          >
+            <option value="">— สาขา —</option>
+            {newMemberBranchOptions.map((branch) => (
+              <option key={branch} value={branch}>{branch}</option>
             ))}
           </select>
           <button
@@ -5028,6 +5167,168 @@ function MiniStat({ label, value }: { label: string; value: string | number }) {
     <div className="rounded-2xl bg-white/65 p-3">
       <p className="text-xs font-bold uppercase tracking-[0.14em] text-k2-muted">{label}</p>
       <p className="mt-1 font-bold">{value}</p>
+    </div>
+  );
+}
+
+function AttendanceView({
+  currentUser,
+  branchSetting,
+  myAttendance,
+  allAttendance,
+  teamMembers,
+  isHr,
+  onCheckIn,
+  onCheckOut
+}: {
+  currentUser: TeamMember;
+  branchSetting?: BranchSetting;
+  myAttendance: Attendance | null;
+  allAttendance: Attendance[];
+  teamMembers: TeamMember[];
+  isHr: boolean;
+  onCheckIn: (selfie: string) => Promise<{ ok: boolean; msg: string }>;
+  onCheckOut: () => Promise<{ ok: boolean; msg: string }>;
+}) {
+  const [selfie, setSelfie] = useState<string | null>(null);
+  const [camOn, setCamOn] = useState(false);
+  const [msg, setMsg] = useState("");
+  const [busy, setBusy] = useState(false);
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+
+  function stopCam() {
+    streamRef.current?.getTracks().forEach((track) => track.stop());
+    streamRef.current = null;
+    setCamOn(false);
+  }
+  useEffect(() => () => stopCam(), []);
+  async function startCam() {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "user" } });
+      streamRef.current = stream;
+      setCamOn(true);
+      setTimeout(() => {
+        if (videoRef.current) {
+          videoRef.current.srcObject = stream;
+          void videoRef.current.play();
+        }
+      }, 60);
+    } catch {
+      setMsg("เปิดกล้องไม่ได้ — กรุณาอนุญาตการใช้กล้องก่อน");
+    }
+  }
+  function capture() {
+    const video = videoRef.current;
+    if (!video) return;
+    const canvas = document.createElement("canvas");
+    canvas.width = 320;
+    canvas.height = 240;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+    ctx.drawImage(video, 0, 0, 320, 240);
+    setSelfie(canvas.toDataURL("image/jpeg", 0.6));
+    stopCam();
+  }
+  async function doCheckIn() {
+    if (!selfie) {
+      setMsg("ถ่ายเซลฟี่ก่อนเช็คอิน");
+      return;
+    }
+    setBusy(true);
+    const result = await onCheckIn(selfie);
+    setBusy(false);
+    setMsg(result.msg);
+    if (result.ok) setSelfie(null);
+  }
+  async function doCheckOut() {
+    setBusy(true);
+    const result = await onCheckOut();
+    setBusy(false);
+    setMsg(result.msg);
+  }
+
+  const fmtTime = (iso: string | null) => (iso ? new Date(iso).toLocaleTimeString("th-TH", { hour: "2-digit", minute: "2-digit" }) : "-");
+  const nameById = (id: string) => teamMembers.find((member) => member.id === id)?.name ?? "พนักงาน";
+
+  return (
+    <div className="space-y-4">
+      <section className="glass rounded-[1.5rem] p-5">
+        <p className="text-sm font-semibold text-k2-muted">ลงเวลาเข้า-ออกงาน</p>
+        <h3 className="text-2xl font-semibold">เช็คอินวันนี้</h3>
+        {currentUser.branch ? (
+          <p className="mt-1 text-sm font-semibold text-k2-muted">
+            สาขา{currentUser.branch}
+            {branchSetting ? ` · เข้างาน ${branchSetting.workStart} (สายได้ ${branchSetting.lateGraceMinutes} นาที)` : " · HR ยังไม่ได้ตั้งค่าเวลา/พิกัดสาขานี้"}
+          </p>
+        ) : (
+          <p className="mt-1 text-sm font-semibold text-rose-600">ยังไม่ได้กำหนดสาขาประจำ — ให้ HR ตั้งค่าก่อนจึงจะเช็คอินได้</p>
+        )}
+      </section>
+
+      {currentUser.branch ? (
+        <section className="glass rounded-[1.5rem] p-5">
+          {myAttendance && myAttendance.checkInAt ? (
+            <div className="space-y-3">
+              <div className="flex flex-wrap items-center gap-3">
+                <span className={`rounded-full px-3 py-1 text-sm font-bold ${myAttendance.status === "late" ? "bg-rose-100 text-rose-700" : "bg-emerald-100 text-emerald-700"}`}>
+                  {myAttendance.status === "late" ? `เข้างานสาย ${myAttendance.lateMinutes} นาที` : "เข้างานตรงเวลา"}
+                </span>
+                <span className="text-sm font-semibold text-k2-muted">เข้า {fmtTime(myAttendance.checkInAt)} · ออก {fmtTime(myAttendance.checkOutAt)}</span>
+              </div>
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              {myAttendance.checkInSelfie ? <img src={myAttendance.checkInSelfie} alt="selfie" className="h-28 w-28 rounded-2xl object-cover" /> : null}
+              {!myAttendance.checkOutAt ? (
+                <button type="button" disabled={busy} onClick={doCheckOut} className="rounded-2xl bg-k2-ink px-5 py-3 font-bold text-white disabled:opacity-60">เช็คเอาท์</button>
+              ) : (
+                <p className="text-sm font-semibold text-k2-muted">ลงเวลาครบแล้ววันนี้ ✓</p>
+              )}
+            </div>
+          ) : (
+            <div className="space-y-3">
+              {camOn ? (
+                <div className="space-y-3">
+                  <video ref={videoRef} playsInline muted className="h-60 w-full max-w-sm rounded-2xl bg-black object-cover" />
+                  <button type="button" onClick={capture} className="rounded-2xl bg-k2-ink px-5 py-3 font-bold text-white">ถ่ายรูป</button>
+                </div>
+              ) : selfie ? (
+                <div className="space-y-3">
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img src={selfie} alt="selfie" className="h-60 w-full max-w-sm rounded-2xl object-cover" />
+                  <div className="flex flex-wrap gap-3">
+                    <button type="button" onClick={() => { setSelfie(null); void startCam(); }} className="rounded-2xl bg-white/70 px-4 py-3 font-bold text-k2-muted">ถ่ายใหม่</button>
+                    <button type="button" disabled={busy} onClick={doCheckIn} className="rounded-2xl bg-emerald-500 px-5 py-3 font-bold text-white disabled:opacity-60">เช็คอิน (GPS + รูป)</button>
+                  </div>
+                </div>
+              ) : (
+                <button type="button" onClick={startCam} className="rounded-2xl bg-k2-mint px-5 py-3 font-bold text-k2-ink">เปิดกล้องถ่ายเซลฟี่</button>
+              )}
+            </div>
+          )}
+          {msg ? <p className="mt-3 text-sm font-semibold text-k2-ink">{msg}</p> : null}
+        </section>
+      ) : null}
+
+      {isHr ? (
+        <section className="glass rounded-[1.5rem] p-5">
+          <h4 className="mb-3 text-lg font-extrabold">สรุปการลงเวลาวันนี้</h4>
+          {allAttendance.length === 0 ? (
+            <p className="text-sm font-semibold text-k2-muted">ยังไม่มีพนักงานเช็คอินวันนี้</p>
+          ) : (
+            <div className="space-y-2">
+              {allAttendance.map((row) => (
+                <div key={row.id} className="flex flex-wrap items-center justify-between gap-2 rounded-2xl bg-white/60 px-4 py-3">
+                  <span className="font-bold">{nameById(row.profileId)}</span>
+                  <span className="text-sm font-semibold text-k2-muted">เข้า {fmtTime(row.checkInAt)} · ออก {fmtTime(row.checkOutAt)}</span>
+                  <span className={`rounded-full px-3 py-1 text-xs font-bold ${row.status === "late" ? "bg-rose-100 text-rose-700" : "bg-emerald-100 text-emerald-700"}`}>
+                    {row.status === "late" ? `สาย ${row.lateMinutes} นาที` : "ตรงเวลา"}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+        </section>
+      ) : null}
     </div>
   );
 }

@@ -65,6 +65,19 @@ export type Customer = {
   lastOrderDate: string;
 };
 
+export type Attendance = {
+  id: string;
+  profileId: string;
+  workDate: string;
+  checkInAt: string | null;
+  checkOutAt: string | null;
+  checkInSelfie: string | null;
+  checkInLat: number | null;
+  checkInLng: number | null;
+  lateMinutes: number;
+  status: "on_time" | "late" | "absent";
+};
+
 export type BranchSetting = {
   branch: string;
   workStart: string;
