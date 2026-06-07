@@ -19,6 +19,7 @@ import {
   Factory,
   FileImage,
   LayoutDashboard,
+  ListTodo,
   Lock,
   LogOut,
   MessageSquare,
@@ -331,6 +332,7 @@ const initialCompanyProfile: CompanyProfile = {
 
 const viewLabel: Record<string, string> = {
   Dashboard: "แดชบอร์ด",
+  "My Jobs": "งานของฉัน",
   Board: "บอร์ดคิวงาน",
   "Create Job": "สร้างงาน",
   Calendar: "ปฏิทิน",
@@ -823,6 +825,7 @@ export default function Page() {
     () =>
       [
         { label: "Dashboard", icon: LayoutDashboard, visible: currentRolePermissions.includes("view_dashboard") },
+        { label: "My Jobs", icon: ListTodo, visible: true },
         { label: "Board", icon: ClipboardList, visible: currentRolePermissions.includes("view_dashboard") },
         { label: "Create Job", icon: ClipboardPlus, visible: currentRolePermissions.includes("create_job") },
         { label: "Calendar", icon: CalendarDays, visible: currentRolePermissions.includes("view_dashboard") },
@@ -2443,6 +2446,19 @@ export default function Page() {
                 }} />
               </motion.div>
             )}
+            {activeView === "My Jobs" && (
+              <motion.div key="my-jobs" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}>
+                <MyJobsView
+                  jobs={filteredJobs}
+                  currentUser={currentUser}
+                  canSeeMoney={canSeeMoney}
+                  onSelect={(id) => {
+                    setSelectedJobId(id);
+                    setActiveView("Detail");
+                  }}
+                />
+              </motion.div>
+            )}
             {activeView === "Board" && (
               <motion.div key="board" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}>
                 <Board
@@ -2674,6 +2690,71 @@ function Nav({
         </button>
       ))}
     </nav>
+  );
+}
+
+function jobIsAssignedTo(job: Job, user: TeamMember) {
+  return job.assignedDesigner === user.name || job.assignedProduction === user.name;
+}
+
+function MyJobsView({
+  jobs,
+  currentUser,
+  canSeeMoney,
+  onSelect
+}: {
+  jobs: Job[];
+  currentUser: TeamMember;
+  canSeeMoney: boolean;
+  onSelect: (id: string) => void;
+}) {
+  const mine = useMemo(() => jobs.filter((job) => jobIsAssignedTo(job, currentUser)), [jobs, currentUser]);
+  const openJobs = mine.filter((job) => !["Completed", "Cancelled"].includes(job.status));
+  const doneJobs = mine.filter((job) => ["Completed", "Cancelled"].includes(job.status));
+  const overdue = openJobs.filter((job) => daysFromToday(job.dueDate) < 0).length;
+  const dueToday = openJobs.filter((job) => daysFromToday(job.dueDate) === 0).length;
+  const ordered = openJobs.slice().sort((a, b) => a.dueDate.localeCompare(b.dueDate));
+
+  return (
+    <div className="space-y-4">
+      <div className="glass flex flex-wrap items-center gap-3 rounded-[1.5rem] p-5">
+        <div>
+          <p className="text-sm font-semibold text-k2-muted">งานที่มอบหมายให้</p>
+          <h3 className="text-2xl font-semibold">{currentUser.name}</h3>
+        </div>
+        <div className="ml-auto flex flex-wrap gap-2 text-xs font-bold">
+          <span className="rounded-full bg-k2-sky px-3 py-1.5">กำลังทำ {openJobs.length}</span>
+          <span className="rounded-full bg-k2-peach px-3 py-1.5">ครบกำหนดวันนี้ {dueToday}</span>
+          <span className={`rounded-full px-3 py-1.5 ${overdue ? "bg-k2-rose text-rose-700" : "bg-white/70 text-k2-muted"}`}>เลยกำหนด {overdue}</span>
+        </div>
+      </div>
+
+      <div className="glass rounded-[1.5rem] p-5">
+        <h3 className="mb-4 text-xl font-semibold">งานที่ต้องทำ</h3>
+        {ordered.length ? (
+          <div className="space-y-3">
+            {ordered.map((job) => (
+              <JobRow key={job.id} job={job} canSeeMoney={canSeeMoney} onSelect={onSelect} />
+            ))}
+          </div>
+        ) : (
+          <div className="rounded-2xl border border-dashed border-white/90 bg-white/40 px-4 py-10 text-center text-sm font-semibold text-k2-muted">
+            ยังไม่มีงานที่มอบหมายให้คุณ
+          </div>
+        )}
+      </div>
+
+      {doneJobs.length ? (
+        <div className="glass rounded-[1.5rem] p-5">
+          <h3 className="mb-4 text-xl font-semibold">เสร็จแล้ว / ปิดงาน ({doneJobs.length})</h3>
+          <div className="space-y-3">
+            {doneJobs.map((job) => (
+              <JobRow key={job.id} job={job} canSeeMoney={canSeeMoney} onSelect={onSelect} />
+            ))}
+          </div>
+        </div>
+      ) : null}
+    </div>
   );
 }
 
