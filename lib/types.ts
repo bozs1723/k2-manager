@@ -1,6 +1,6 @@
 export type AppNotification = {
   id: string;
-  type: "assigned" | "status_moved" | "comment" | "due_soon";
+  type: "assigned" | "status_moved" | "comment" | "due_soon" | "express_request" | "express_decision";
   jobId: string;
   jobTitle: string;
   message: string;
@@ -49,6 +49,17 @@ export type TeamMember = {
   avatarBorderColor?: string;
   statusEmoji?: string;
   statusText?: string;
+};
+
+export type ExpressRequest = {
+  id: string;
+  requestedById: string;
+  requestedByName: string;
+  status: "pending" | "approved" | "rejected";
+  approvedById?: string;
+  approvedByName?: string;
+  consumed: boolean;
+  createdAt: string;
 };
 
 export type Customer = {

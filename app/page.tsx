@@ -42,7 +42,7 @@ import {
 import type { LucideIcon } from "lucide-react";
 import { customers as initialCustomers, initialAuditLog, initialJobs, statuses, team as initialTeam } from "@/lib/mock-data";
 import { createSupabaseAuthWorker, isSupabaseConfigured, supabase } from "@/lib/supabase";
-import type { AppNotification, Attendance, AuditEvent, BranchSetting, Customer, Holiday, Job, JobStatus, JobType, LeaveRequest, PaymentStatus, Priority, QuoteStatus, Role, TeamMember } from "@/lib/types";
+import type { AppNotification, Attendance, AuditEvent, BranchSetting, Customer, ExpressRequest, Holiday, Job, JobStatus, JobType, LeaveRequest, PaymentStatus, Priority, QuoteStatus, Role, TeamMember } from "@/lib/types";
 
 type ImportedCustomer = Pick<Customer, "name" | "phone" | "lineId" | "email"> & {
   notes: string;
@@ -188,6 +188,30 @@ type SupabaseRolePermissionRow = {
   role: Role;
   permissions: PermissionKey[] | null;
 };
+
+type SupabaseExpressRequestRow = {
+  id: string;
+  requested_by: string;
+  requested_by_name: string | null;
+  status: string | null;
+  approved_by: string | null;
+  approved_by_name: string | null;
+  consumed: boolean | null;
+  created_at: string;
+};
+
+function expressRowToRequest(row: SupabaseExpressRequestRow): ExpressRequest {
+  return {
+    id: row.id,
+    requestedById: row.requested_by,
+    requestedByName: row.requested_by_name ?? "",
+    status: (row.status as ExpressRequest["status"]) ?? "pending",
+    approvedById: row.approved_by ?? undefined,
+    approvedByName: row.approved_by_name ?? undefined,
+    consumed: Boolean(row.consumed),
+    createdAt: row.created_at
+  };
+}
 
 type NewTeamMemberInput = Omit<TeamMember, "id" | "avatar"> & {
   password?: string;
@@ -940,6 +964,9 @@ export default function Page() {
   const [showNotifPanel, setShowNotifPanel] = useState(false);
   const notifPanelRef = useRef<HTMLDivElement>(null);
   const [expressOrdersEnabled, setExpressOrdersEnabled] = useState(false);
+  const [expressRequests, setExpressRequests] = useState<ExpressRequest[]>([]);
+  const [showExpressPanel, setShowExpressPanel] = useState(false);
+  const expressPanelRef = useRef<HTMLDivElement>(null);
 
   const selectedJob = jobs.find((job) => job.id === selectedJobId) ?? jobs[0] ?? null;
   const currentRolePermissions = useMemo(
@@ -1051,7 +1078,126 @@ export default function Page() {
     }
   }
 
+  // โหลดคำขอด่วน (เปิด/ที่อนุมัติแล้ว) สำหรับโหมด Supabase
+  async function reloadExpressRequests() {
+    if (!supabase || !isSupabaseConfigured) return;
+    const { data, error } = await supabase
+      .from("express_requests")
+      .select("id, requested_by, requested_by_name, status, approved_by, approved_by_name, consumed, created_at")
+      .order("created_at", { ascending: false })
+      .limit(100);
+    if (error) return;
+    setExpressRequests(((data ?? []) as SupabaseExpressRequestRow[]).map(expressRowToRequest));
+  }
+
+  // เซลส์กด "ขออนุมัติงานด่วน" → สร้างคำขอ + แจ้งผู้จัดการ/เจ้าของ + log
+  async function requestExpress() {
+    if (!can("create_job")) {
+      setDataError("บทบาทนี้ยังไม่มีสิทธิ์สร้างงาน");
+      return;
+    }
+    if (myLatestExpressRequest?.status === "pending") {
+      setDataError("คุณมีคำขอด่วนที่รออนุมัติอยู่แล้ว");
+      return;
+    }
+    if (myApprovedExpressRequest) {
+      setDataError("คำขอด่วนของคุณได้รับอนุมัติแล้ว สร้างงานด่วนได้เลย");
+      return;
+    }
+    if (supabase && isSupabaseConfigured && uuidPattern.test(currentUser.id)) {
+      const { error } = await supabase.from("express_requests").insert({
+        requested_by: currentUser.id,
+        requested_by_name: currentUser.name,
+        status: "pending"
+      });
+      if (error) {
+        setDataError(error.message);
+        return;
+      }
+      // แจ้งเตือนผู้จัดการ/เจ้าของทุกคน
+      const managerIds = teamMembers
+        .filter((member) => (member.role === "Owner" || member.role === "Manager") && uuidPattern.test(member.id))
+        .map((member) => member.id);
+      if (managerIds.length) {
+        void supabase.from("notifications").insert(
+          managerIds.map((recipientId) => ({
+            recipient_id: recipientId,
+            type: "express_request",
+            message: `${currentUser.name} ขออนุมัติสร้างงานด่วน`
+          }))
+        );
+      }
+      void appendAudit("requested express order", currentUser.name, "express_requests", null);
+      await reloadExpressRequests();
+    } else {
+      // โหมด mock
+      setExpressRequests((current) => [
+        { id: crypto.randomUUID(), requestedById: currentUser.id, requestedByName: currentUser.name, status: "pending", consumed: false, createdAt: new Date().toISOString() },
+        ...current
+      ]);
+    }
+  }
+
+  // ผู้จัดการ/เจ้าของ อนุมัติหรือปฏิเสธคำขอด่วน
+  async function decideExpress(requestId: string, decision: "approved" | "rejected") {
+    if (!canManageExpress) {
+      setDataError("เฉพาะผู้จัดการ/เจ้าของเท่านั้นที่อนุมัติงานด่วนได้");
+      return;
+    }
+    const target = expressRequests.find((req) => req.id === requestId);
+    if (supabase && isSupabaseConfigured) {
+      const { error } = await supabase
+        .from("express_requests")
+        .update({ status: decision, approved_by: uuidPattern.test(currentUser.id) ? currentUser.id : null, approved_by_name: currentUser.name, decided_at: new Date().toISOString() })
+        .eq("id", requestId);
+      if (error) {
+        setDataError(error.message);
+        return;
+      }
+      // แจ้งเตือนผู้ขอ
+      if (target && uuidPattern.test(target.requestedById)) {
+        void supabase.from("notifications").insert({
+          recipient_id: target.requestedById,
+          type: "express_decision",
+          message: decision === "approved" ? `${currentUser.name} อนุมัติงานด่วนของคุณแล้ว — สร้างงานด่วนได้เลย` : `${currentUser.name} ปฏิเสธคำขอด่วนของคุณ`
+        });
+      }
+      void appendAudit(decision === "approved" ? "approved express order" : "rejected express order", target?.requestedByName ?? requestId, "express_requests", requestId);
+      await reloadExpressRequests();
+    } else {
+      setExpressRequests((current) => current.map((req) => (req.id === requestId ? { ...req, status: decision, approvedByName: currentUser.name } : req)));
+    }
+  }
+
+  // ทำเครื่องหมายว่าคำขอด่วนถูกใช้สร้างงานแล้ว (เรียกหลังสร้างงานด่วนสำเร็จ)
+  async function consumeExpressRequest() {
+    const req = myApprovedExpressRequest;
+    if (!req) return;
+    if (supabase && isSupabaseConfigured) {
+      await supabase.from("express_requests").update({ consumed: true }).eq("id", req.id);
+      await reloadExpressRequests();
+    } else {
+      setExpressRequests((current) => current.map((r) => (r.id === req.id ? { ...r, consumed: true } : r)));
+    }
+  }
+
   const canManageExpress = currentUser.role === "Owner" || currentUser.role === "Manager";
+  const pendingExpressRequests = useMemo(
+    () => expressRequests.filter((req) => req.status === "pending"),
+    [expressRequests]
+  );
+  // คำขอด่วนของฉันที่อนุมัติแล้วและยังไม่ได้ใช้สร้างงาน (ปลดล็อกการติ๊ก "งานด่วน")
+  const myApprovedExpressRequest = useMemo(
+    () => expressRequests.find((req) => req.requestedById === currentUser.id && req.status === "approved" && !req.consumed),
+    [expressRequests, currentUser.id]
+  );
+  // คำขอด่วนล่าสุดของฉัน (ไว้แสดงสถานะปุ่มฝั่งเซลส์)
+  const myLatestExpressRequest = useMemo(
+    () => expressRequests.filter((req) => req.requestedById === currentUser.id)[0],
+    [expressRequests, currentUser.id]
+  );
+  // ติ๊กงานด่วนได้เมื่อ: เป็นผู้จัดการ/เจ้าของ หรือมีคำขอที่อนุมัติแล้ว
+  const canCreateExpress = canManageExpress || Boolean(myApprovedExpressRequest);
 
   // Realtime: รับแจ้งเตือน + สวิตช์งานด่วน + ซิงก์ลูกค้า/งานจากเซิร์ฟเวอร์กลาง (เฉพาะโหมด Supabase)
   useEffect(() => {
@@ -1106,6 +1252,18 @@ export default function Page() {
     document.addEventListener("mousedown", handleClickOutside);
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, [showNotifPanel]);
+
+  // ปิด express panel เมื่อคลิกนอกกล่อง
+  useEffect(() => {
+    if (!showExpressPanel) return;
+    function handleClickOutside(event: MouseEvent) {
+      if (expressPanelRef.current && !expressPanelRef.current.contains(event.target as Node)) {
+        setShowExpressPanel(false);
+      }
+    }
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, [showExpressPanel]);
 
   // เตือนงานของตัวเองที่ใกล้ถึงกำหนดส่ง (ภายใน 2 วัน หรือเลยกำหนด) วันละครั้งต่อหนึ่งงาน
   useEffect(() => {
@@ -1257,6 +1415,7 @@ export default function Page() {
       if (!notificationsResult.error) {
         setNotifications(((notificationsResult.data ?? []) as SupabaseNotificationRow[]).map(notifFromRow));
       }
+      void reloadExpressRequests();
       // คงงานที่กำลังเปิดดูไว้ ไม่ดีดออกเวลามีข้อมูลซิงก์เข้ามา
       setSelectedJobId((current) => (current && nextJobs.some((job) => job.id === current) ? current : nextJobs[0]?.id ?? ""));
     } catch (error) {
@@ -1859,6 +2018,10 @@ export default function Page() {
     }
     setJobs((current) => [job, ...current]);
     notifyAssignees("assigned", job, `ได้รับมอบหมายงาน ${job.id} – ${job.title}`);
+    // งานด่วนที่สร้างโดยเซลส์ (ไม่ใช่ผู้จัดการ) → ใช้สิทธิ์คำขอที่อนุมัติแล้ว 1 ครั้ง
+    if (job.isExpress && !canManageExpress) {
+      void consumeExpressRequest();
+    }
     setSelectedJobId(job.id);
     setActiveView("Detail");
     void appendAudit("created job", job.id);
@@ -2643,23 +2806,81 @@ export default function Page() {
                   />
                 </label>
 
-                {/* สวิตช์เปิดรับงานด่วน — เฉพาะผู้จัดการ/เจ้าของ */}
+                {/* งานด่วน — ผู้จัดการ/เจ้าของ: สวิตช์รับงานด่วน + อนุมัติคำขอ */}
                 {canManageExpress ? (
-                  <button
-                    onClick={toggleExpressOrders}
-                    className={`inline-flex items-center justify-center gap-2 rounded-2xl px-4 py-2.5 text-sm font-semibold shadow-sm transition ${
-                      expressOrdersEnabled ? "bg-rose-500 text-white shadow-rose-500/25" : "bg-white/70 text-k2-muted"
-                    }`}
-                    title={expressOrdersEnabled ? "ปิดรับงานด่วน" : "เปิดรับงานด่วน"}
-                  >
-                    <Zap className="h-4 w-4" />
-                    {expressOrdersEnabled ? "รับงานด่วน: เปิด" : "รับงานด่วน: ปิด"}
-                  </button>
-                ) : expressOrdersEnabled ? (
-                  <span className="inline-flex items-center gap-1.5 rounded-2xl bg-rose-100 px-3 py-2.5 text-sm font-bold text-rose-700">
-                    <Zap className="h-4 w-4" />
-                    รับงานด่วน
-                  </span>
+                  <>
+                    <button
+                      onClick={toggleExpressOrders}
+                      className={`inline-flex items-center justify-center gap-2 rounded-2xl px-4 py-2.5 text-sm font-semibold shadow-sm transition ${
+                        expressOrdersEnabled ? "bg-rose-500 text-white shadow-rose-500/25" : "bg-white/70 text-k2-muted"
+                      }`}
+                      title={expressOrdersEnabled ? "ปิดรับงานด่วน" : "เปิดรับงานด่วน"}
+                    >
+                      <Zap className="h-4 w-4" />
+                      {expressOrdersEnabled ? "รับงานด่วน: เปิด" : "รับงานด่วน: ปิด"}
+                    </button>
+                    {/* อนุมัติคำขอด่วน */}
+                    <div ref={expressPanelRef} className="relative">
+                      <button
+                        onClick={() => { setShowExpressPanel((prev) => !prev); void reloadExpressRequests(); }}
+                        className="relative inline-flex items-center gap-2 rounded-2xl bg-white/70 px-4 py-2.5 text-sm font-semibold text-k2-muted shadow-sm"
+                        title="คำขอสร้างงานด่วน"
+                      >
+                        <Zap className="h-4 w-4" />
+                        อนุมัติด่วน
+                        {pendingExpressRequests.length > 0 && (
+                          <span className="absolute -right-1 -top-1 flex h-5 w-5 items-center justify-center rounded-full bg-rose-500 text-[10px] font-bold text-white">
+                            {Math.min(pendingExpressRequests.length, 9)}{pendingExpressRequests.length > 9 ? "+" : ""}
+                          </span>
+                        )}
+                      </button>
+                      {showExpressPanel && (
+                        <div className="absolute right-0 top-12 z-50 w-80 overflow-hidden rounded-[1.25rem] border border-white/80 bg-white/97 shadow-2xl backdrop-blur-xl">
+                          <div className="border-b border-white/60 px-4 py-3 text-sm font-bold">คำขอสร้างงานด่วน</div>
+                          <div className="max-h-96 overflow-y-auto">
+                            {pendingExpressRequests.length === 0 ? (
+                              <p className="px-4 py-8 text-center text-sm font-semibold text-k2-muted">ไม่มีคำขอรออนุมัติ</p>
+                            ) : (
+                              pendingExpressRequests.map((req) => (
+                                <div key={req.id} className="flex flex-col gap-2 border-b border-white/40 px-4 py-3">
+                                  <div>
+                                    <p className="text-sm font-bold">{req.requestedByName || "พนักงาน"}</p>
+                                    <p className="text-xs text-k2-muted">{new Date(req.createdAt).toLocaleString("th-TH")}</p>
+                                  </div>
+                                  <div className="flex gap-2">
+                                    <button onClick={() => void decideExpress(req.id, "approved")} className="flex-1 rounded-xl bg-teal-500 px-3 py-2 text-xs font-extrabold text-white">อนุมัติ</button>
+                                    <button onClick={() => void decideExpress(req.id, "rejected")} className="flex-1 rounded-xl bg-white/70 px-3 py-2 text-xs font-extrabold text-rose-600 shadow-sm">ปฏิเสธ</button>
+                                  </div>
+                                </div>
+                              ))
+                            )}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  </>
+                ) : can("create_job") ? (
+                  /* เซลส์: ปุ่มขออนุมัติงานด่วน ตามสถานะคำขอ */
+                  myApprovedExpressRequest ? (
+                    <span className="inline-flex items-center gap-1.5 rounded-2xl bg-teal-100 px-3 py-2.5 text-sm font-bold text-teal-700" title="สร้างงานด่วนได้เลย">
+                      <Zap className="h-4 w-4" />
+                      อนุมัติด่วนแล้ว ✓
+                    </span>
+                  ) : myLatestExpressRequest?.status === "pending" ? (
+                    <span className="inline-flex items-center gap-1.5 rounded-2xl bg-amber-100 px-3 py-2.5 text-sm font-bold text-amber-700">
+                      <Zap className="h-4 w-4" />
+                      รออนุมัติด่วน...
+                    </span>
+                  ) : (
+                    <button
+                      onClick={() => void requestExpress()}
+                      className="inline-flex items-center justify-center gap-2 rounded-2xl bg-white/70 px-4 py-2.5 text-sm font-semibold text-rose-600 shadow-sm"
+                      title="ขออนุมัติสร้างงานด่วน"
+                    >
+                      <Zap className="h-4 w-4" />
+                      ขออนุมัติงานด่วน
+                    </button>
+                  )
                 ) : null}
 
                 {/* กระดิ่งแจ้งเตือน */}
@@ -2820,7 +3041,7 @@ export default function Page() {
             )}
             {activeView === "Create Job" && (
               <motion.div key="create" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}>
-                <CreateJobView customers={customerRecords} teamMembers={teamMembers} companyProfile={companyProfile} expressEnabled={expressOrdersEnabled} onCreate={createJob} />
+                <CreateJobView customers={customerRecords} teamMembers={teamMembers} companyProfile={companyProfile} expressEnabled={canCreateExpress} onCreate={createJob} />
               </motion.div>
             )}
             {activeView === "Customers" && (
@@ -4460,7 +4681,7 @@ function CreateJobView({
               <Zap className={`h-4 w-4 ${form.isExpress ? "text-rose-500" : "text-k2-muted"}`} />
               งานด่วน
               {!expressEnabled ? (
-                <span className="text-xs font-semibold text-k2-muted">(ผู้จัดการ/เจ้าของยังไม่เปิดรับงานด่วน)</span>
+                <span className="text-xs font-semibold text-k2-muted">(ต้องขออนุมัติงานด่วนจากผู้จัดการก่อน)</span>
               ) : (
                 <span className="text-xs font-semibold text-k2-muted">ระบุวันนัดส่งเองได้</span>
               )}
