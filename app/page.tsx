@@ -2840,7 +2840,7 @@ export default function Page() {
                 )}
               </motion.div>
             )}
-            {activeView === "HR" && (
+            {activeView === "HR" && can("manage_hr") && (
               <motion.div key="hr" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}>
                 <HRView teamMembers={teamMembers} records={hrRecords} canEdit={can("manage_hr")} onSave={saveHrRecord} branches={BRANCH_LIST} branchSettings={branchSettings} onSaveBranch={saveBranchSetting} holidays={holidays} onAddHoliday={addHoliday} onRemoveHoliday={removeHoliday} />
               </motion.div>
