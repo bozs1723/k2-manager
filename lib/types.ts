@@ -44,6 +44,10 @@ export type TeamMember = {
   avatarUrl?: string;
   username?: string;
   branch?: string;
+  nickname?: string;
+  avatarBorderColor?: string;
+  statusEmoji?: string;
+  statusText?: string;
 };
 
 export type Customer = {
