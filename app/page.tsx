@@ -388,7 +388,7 @@ const viewLabel: Record<string, string> = {
   HR: "ฝ่ายบุคคล (HR)",
   Attendance: "ลงเวลา",
   Leave: "การลา",
-  Detail: "รายละเอียดงาน",
+  Detail: "รายละเอียดออเดอร์",
   Audit: "ประวัติการแก้ไข"
 };
 
@@ -4178,7 +4178,7 @@ function QuoteDocumentPreview({
               <td className="border border-slate-300 px-3 py-3 text-center">1</td>
               <td className="border border-slate-300 px-3 py-3 text-center text-slate-400">-</td>
               <td className="min-w-64 border border-slate-300 px-3 py-3 text-left">
-                <p className="font-bold">รายละเอียดงาน :</p>
+                <p className="font-bold">รายละเอียดออเดอร์ :</p>
                 <p>{job.title}</p>
                 <p className="mt-1 text-sm text-slate-600">{job.description}</p>
               </td>
@@ -4447,7 +4447,8 @@ function CreateJobView({
     colorSpec: "",
     productionBranch: "พะเยา",
     deliveryMethod: "รับหน้าร้าน",
-    deliveryOther: ""
+    deliveryOther: "",
+    deliveryAddress: ""
   });
 
   const [formError, setFormError] = useState("");
@@ -4549,7 +4550,8 @@ function CreateJobView({
           `วัสดุ: ${form.materials.filter(Boolean).join(", ") || "-"}`,
           `สี / สเปกสี: ${form.colorSpec || "-"}`,
           `สาขาที่ผลิต: ${form.productionBranch || "-"}`,
-          `วิธีรับ/จัดส่ง: ${form.deliveryMethod === "ขนส่งอื่น ๆ" && form.deliveryOther ? `${form.deliveryMethod} (${form.deliveryOther})` : form.deliveryMethod || "-"}`
+          `วิธีรับ/จัดส่ง: ${form.deliveryMethod === "ขนส่งอื่น ๆ" && form.deliveryOther ? `${form.deliveryMethod} (${form.deliveryOther})` : form.deliveryMethod || "-"}`,
+          `ที่อยู่จัดส่ง: ${form.deliveryAddress.trim() || "-"}`
         ].join("\n");
         onCreate({
           ...form,
@@ -4845,6 +4847,15 @@ function CreateJobView({
                 />
               ) : null}
             </label>
+            <label className="space-y-2 md:col-span-2">
+              <span className="text-sm font-semibold text-k2-muted">ที่อยู่จัดส่ง</span>
+              <textarea
+                value={form.deliveryAddress}
+                onChange={(event) => setField("deliveryAddress", event.target.value)}
+                placeholder="ที่อยู่สำหรับจัดส่งสินค้า (ถ้ารับหน้าร้านเว้นว่างได้)"
+                className="min-h-20 w-full rounded-2xl border border-white/80 bg-white/80 px-4 py-3 outline-none"
+              />
+            </label>
           </div>
         </div>
 
@@ -4881,7 +4892,7 @@ function CreateJobView({
         </div>
 
         <label className="mt-4 block space-y-2">
-          <span className="text-sm font-semibold text-k2-muted">รายละเอียดงาน</span>
+          <span className="text-sm font-semibold text-k2-muted">รายละเอียดออเดอร์</span>
           <textarea
             value={form.description}
             onChange={(event) => setField("description", event.target.value)}
