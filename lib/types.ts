@@ -43,6 +43,7 @@ export type TeamMember = {
   avatar: string;
   avatarUrl?: string;
   username?: string;
+  phone?: string;
   branch?: string;
   nickname?: string;
   avatarBorderColor?: string;

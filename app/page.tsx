@@ -97,6 +97,8 @@ type SupabaseProfileRow = {
   full_name: string | null;
   role: Role | null;
   avatar_url?: string | null;
+  phone?: string | null;
+  branch?: string | null;
   is_active?: boolean | null;
 };
 
@@ -637,7 +639,7 @@ function memberDisplayName(member: TeamMember): string {
   return member.nickname?.trim() || member.name;
 }
 
-function profileToMember(profile: { id: string; email?: string | null; username?: string | null; full_name: string | null; role: Role | null; avatar_url?: string | null; branch?: string | null }): TeamMember {
+function profileToMember(profile: { id: string; email?: string | null; username?: string | null; full_name: string | null; role: Role | null; avatar_url?: string | null; phone?: string | null; branch?: string | null }): TeamMember {
   const name = profile.full_name || "K2 User";
   return {
     id: profile.id,
@@ -646,6 +648,7 @@ function profileToMember(profile: { id: string; email?: string | null; username?
     avatar: initialsFromName(name),
     avatarUrl: profile.avatar_url ?? undefined,
     username: profile.username || usernameFromEmail(profile.email),
+    phone: profile.phone ?? undefined,
     branch: profile.branch ?? undefined
   };
 }
@@ -910,6 +913,7 @@ export default function Page() {
   const [draggedJobId, setDraggedJobId] = useState<string | null>(null);
   const [personalizationVersion, setPersonalizationVersion] = useState(0);
   const [showPersonalization, setShowPersonalization] = useState(false);
+  const [showMyProfile, setShowMyProfile] = useState(false);
   // personalizationVersion is an intentional trigger: bumping it re-reads localStorage prefs.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const currentUserPrefs = useMemo(() => mergePersonalization(currentUser), [currentUser, personalizationVersion]);
@@ -959,11 +963,11 @@ export default function Page() {
         { label: "Attendance", icon: Clock3, visible: currentRolePermissions.includes("view_dashboard") },
         { label: "Leave", icon: CalendarDays, visible: currentRolePermissions.includes("view_dashboard") },
         { label: "HR", icon: UsersRound, visible: currentRolePermissions.includes("manage_hr") },
-        { label: "Settings", icon: Settings, visible: true },
+        { label: "Settings", icon: Settings, visible: currentUser.role === "Owner" },
         { label: "Detail", icon: FileImage, visible: currentRolePermissions.includes("view_dashboard") },
         { label: "Audit", icon: ShieldCheck, visible: currentRolePermissions.includes("view_audit_log") }
       ].filter((item) => item.visible),
-    [currentRolePermissions]
+    [currentRolePermissions, currentUser.role]
   );
 
   useEffect(() => {
@@ -973,7 +977,7 @@ export default function Page() {
     async function loadProfile(userId: string) {
       const { data, error } = await supabase!
         .from("profiles")
-        .select("id, email, full_name, role, avatar_url, branch")
+        .select("id, email, full_name, role, avatar_url, phone, branch")
         .eq("id", userId)
         .single();
       if (!isMounted || error || !data) return;
@@ -1191,7 +1195,7 @@ export default function Page() {
         shopStateResult,
         notificationsResult
       ] = await Promise.all([
-        supabase.from("profiles").select("id, email, full_name, role, avatar_url, branch, is_active").eq("is_active", true).order("created_at", { ascending: true }),
+        supabase.from("profiles").select("id, email, full_name, role, avatar_url, phone, branch, is_active").eq("is_active", true).order("created_at", { ascending: true }),
         supabase.from("company_settings").select("*").order("created_at", { ascending: true }).limit(1),
         supabase.from("customers").select("*").order("created_at", { ascending: false }),
         supabase.from("jobs").select("*").order("created_at", { ascending: false }),
@@ -1353,7 +1357,7 @@ export default function Page() {
         if (error) throw error;
         const { data: profile, error: profileError } = await supabase
           .from("profiles")
-          .select("id, email, full_name, role, avatar_url, branch")
+          .select("id, email, full_name, role, avatar_url, phone, branch")
           .eq("id", data.user.id)
           .single();
         if (profileError) throw profileError;
@@ -1911,7 +1915,7 @@ export default function Page() {
       const { data, error } = await supabase
         .from("profiles")
         .upsert({ id: profileId, email: authEmail, full_name: member.name, role: member.role, avatar_url: member.avatarUrl ?? null, branch: member.branch || null, is_active: true }, { onConflict: "id" })
-        .select("id, email, full_name, role, avatar_url, branch")
+        .select("id, email, full_name, role, avatar_url, phone, branch")
         .single();
       if (error) {
         setDataError(error.message);
@@ -2162,7 +2166,7 @@ export default function Page() {
     void appendAudit("updated salary", memberId, "employee_hr", memberId);
   }
 
-  async function updateTeamMember(memberId: string, updates: Pick<TeamMember, "name" | "role" | "branch">) {
+  async function updateTeamMember(memberId: string, updates: Pick<TeamMember, "name" | "role" | "branch"> & { phone?: string }) {
     const isOwnProfile = currentUser.id === memberId;
     if (!can("manage_users") && !isOwnProfile) {
       setDataError("บทบาทนี้ยังไม่มีสิทธิ์จัดการผู้ใช้");
@@ -2180,13 +2184,15 @@ export default function Page() {
     const nextBranch = nextRole === "Owner"
       ? ""
       : (can("manage_users") ? (updates.branch ?? existingMember.branch ?? "") : existingMember.branch ?? "");
+    const nextPhone = updates.phone !== undefined ? updates.phone.trim() : (existingMember.phone ?? "");
     const safeUpdates = {
       name: updates.name,
       role: nextRole,
-      branch: nextBranch
+      branch: nextBranch,
+      phone: nextPhone || undefined
     };
     if (supabase && uuidPattern.test(memberId)) {
-      const { error } = await supabase.from("profiles").update({ full_name: safeUpdates.name, role: safeUpdates.role, branch: safeUpdates.branch || null }).eq("id", memberId);
+      const { error } = await supabase.from("profiles").update({ full_name: safeUpdates.name, role: safeUpdates.role, branch: safeUpdates.branch || null, phone: nextPhone || null }).eq("id", memberId);
       if (error) {
         setDataError(error.message);
         return;
@@ -2217,6 +2223,25 @@ export default function Page() {
     setTeamMembers((current) => current.map((member) => (member.id === memberId ? updatedMember : member)));
     if (currentUser.id === memberId) setCurrentUser(updatedMember);
     void appendAudit(avatarUrl ? "updated profile image" : "removed profile image", existingMember.name, "profiles", memberId);
+  }
+
+  // เปลี่ยนรหัสผ่านของตัวเอง (ผ่าน Supabase Auth) — คืนค่า true ถ้าสำเร็จ
+  async function changeOwnPassword(newPassword: string): Promise<boolean> {
+    if (newPassword.length < 6) {
+      setDataError("รหัสผ่านต้องมีอย่างน้อย 6 ตัวอักษร");
+      return false;
+    }
+    if (!supabase || !isSupabaseConfigured) {
+      setDataError("เปลี่ยนรหัสผ่านได้เมื่อเชื่อมต่อ Supabase แล้วเท่านั้น");
+      return false;
+    }
+    const { error } = await supabase.auth.updateUser({ password: newPassword });
+    if (error) {
+      setDataError(error.message);
+      return false;
+    }
+    void appendAudit("changed own password", currentUser.name, "profiles", currentUser.id);
+    return true;
   }
 
   async function removeTeamMember(memberId: string) {
@@ -2701,6 +2726,16 @@ export default function Page() {
                   <Plus className="h-4 w-4" />
                   สร้างงาน
                 </button>
+                {/* โปรไฟล์ของฉัน — ไอคอนมุมขวาบน (เห็นทุกอุปกรณ์ รวมมือถือ) */}
+                <button
+                  onClick={() => setShowMyProfile(true)}
+                  className="inline-flex items-center gap-2 rounded-2xl bg-white/70 px-2.5 py-1.5 text-sm font-semibold text-k2-ink shadow-sm"
+                  title="โปรไฟล์ของฉัน"
+                  aria-label="โปรไฟล์ของฉัน"
+                >
+                  <MemberAvatar member={currentUserPrefs} className="h-8 w-8 rounded-xl text-xs" />
+                  <span className="hidden max-w-[8rem] truncate sm:inline">{currentUserPrefs.nickname || currentUser.name}</span>
+                </button>
                 <button
                   onClick={signOut}
                   className="inline-flex items-center justify-center gap-2 rounded-2xl bg-white/70 px-4 py-2.5 text-sm font-semibold text-k2-muted shadow-sm"
@@ -2813,7 +2848,7 @@ export default function Page() {
                 <ReportsView jobs={jobs} canSeeMoney={canSeeMoney} />
               </motion.div>
             )}
-            {activeView === "Settings" && (
+            {activeView === "Settings" && currentUser.role === "Owner" && (
               <motion.div key="settings" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}>
                 <SettingsView
                   currentUserId={currentUser.id}
@@ -2925,6 +2960,18 @@ export default function Page() {
         />
       ) : null}
 
+      {showMyProfile ? (
+        <MyProfileModal
+          currentUser={currentUserPrefs}
+          onSaveProfile={(name, phone) => updateTeamMember(currentUser.id, { name, role: currentUser.role, branch: currentUser.branch, phone })}
+          onUploadAvatar={(avatarUrl) => updateTeamMemberAvatar(currentUser.id, avatarUrl)}
+          onChangePassword={changeOwnPassword}
+          onOpenPersonalization={() => { setShowMyProfile(false); setShowPersonalization(true); }}
+          onSignOut={signOut}
+          onClose={() => setShowMyProfile(false)}
+        />
+      ) : null}
+
     </main>
   );
 }
@@ -3018,6 +3065,185 @@ function PersonalizationModal({
           type="button"
           onClick={onClose}
           className="mt-6 w-full rounded-2xl bg-k2-ink px-4 py-3 font-extrabold text-white"
+        >
+          เสร็จสิ้น
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function MyProfileModal({
+  currentUser,
+  onSaveProfile,
+  onUploadAvatar,
+  onChangePassword,
+  onOpenPersonalization,
+  onSignOut,
+  onClose
+}: {
+  currentUser: TeamMember;
+  onSaveProfile: (name: string, phone: string) => void;
+  onUploadAvatar: (avatarUrl: string) => void;
+  onChangePassword: (newPassword: string) => Promise<boolean>;
+  onOpenPersonalization: () => void;
+  onSignOut: () => void;
+  onClose: () => void;
+}) {
+  const [name, setName] = useState(currentUser.name);
+  const [phone, setPhone] = useState(currentUser.phone ?? "");
+  const [savedMsg, setSavedMsg] = useState("");
+  const [avatarError, setAvatarError] = useState("");
+  const [password, setPassword] = useState("");
+  const [passwordConfirm, setPasswordConfirm] = useState("");
+  const [pwMsg, setPwMsg] = useState("");
+  const [pwBusy, setPwBusy] = useState(false);
+
+  async function handleAvatar(file: File | null) {
+    if (!file) return;
+    setAvatarError("");
+    if (!file.type.startsWith("image/")) {
+      setAvatarError("กรุณาเลือกไฟล์รูปภาพเท่านั้น");
+      return;
+    }
+    if (file.size > 1_200_000) {
+      setAvatarError("รูปโปรไฟล์ต้องมีขนาดไม่เกิน 1.2 MB");
+      return;
+    }
+    const dataUrl = await readImageAsDataUrl(file);
+    onUploadAvatar(dataUrl);
+  }
+
+  function handleSaveProfile() {
+    if (!name.trim()) return;
+    onSaveProfile(name.trim(), phone.trim());
+    setSavedMsg("บันทึกแล้ว ✓");
+    setTimeout(() => setSavedMsg(""), 2500);
+  }
+
+  async function handleChangePassword() {
+    setPwMsg("");
+    if (password.length < 6) {
+      setPwMsg("รหัสผ่านต้องมีอย่างน้อย 6 ตัวอักษร");
+      return;
+    }
+    if (password !== passwordConfirm) {
+      setPwMsg("รหัสผ่านทั้งสองช่องไม่ตรงกัน");
+      return;
+    }
+    setPwBusy(true);
+    const ok = await onChangePassword(password);
+    setPwBusy(false);
+    if (ok) {
+      setPassword("");
+      setPasswordConfirm("");
+      setPwMsg("เปลี่ยนรหัสผ่านสำเร็จ ✓");
+      setTimeout(() => setPwMsg(""), 3000);
+    } else {
+      setPwMsg("เปลี่ยนรหัสผ่านไม่สำเร็จ (ดูข้อความแจ้งเตือนด้านบน)");
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4 backdrop-blur-sm" onClick={onClose}>
+      <div className="glass-solid max-h-[90vh] w-full max-w-md overflow-y-auto rounded-[1.6rem] p-6" onClick={(event) => event.stopPropagation()}>
+        <div className="mb-5 flex items-center gap-3">
+          <MemberAvatar member={currentUser} className="h-16 w-16 rounded-2xl text-lg" />
+          <div className="min-w-0">
+            <h3 className="text-xl font-extrabold text-k2-ink">โปรไฟล์ของฉัน</h3>
+            <p className="text-sm font-semibold text-k2-muted">{roleLabel[currentUser.role]}</p>
+          </div>
+        </div>
+
+        {/* รูปโปรไฟล์ */}
+        <div className="mb-5">
+          <p className="mb-1.5 text-sm font-bold text-k2-muted">รูปโปรไฟล์</p>
+          <label className="inline-flex cursor-pointer items-center gap-2 rounded-2xl bg-white/70 px-4 py-2.5 text-sm font-bold text-k2-ink shadow-sm">
+            <FileImage className="h-4 w-4" />
+            เปลี่ยนรูป
+            <input type="file" accept="image/*" className="hidden" onChange={(event) => handleAvatar(event.target.files?.[0] ?? null)} />
+          </label>
+          {avatarError ? <p className="mt-1.5 text-xs font-semibold text-rose-600">{avatarError}</p> : null}
+        </div>
+
+        {/* ชื่อ + เบอร์ */}
+        <label className="block">
+          <span className="mb-1.5 block text-sm font-bold text-k2-muted">ชื่อ</span>
+          <input
+            value={name}
+            onChange={(event) => setName(event.target.value)}
+            placeholder="ชื่อ-สกุล"
+            className="w-full rounded-2xl border border-white/80 bg-white/85 px-4 py-3 text-sm font-semibold outline-none"
+          />
+        </label>
+        <label className="mt-3 block">
+          <span className="mb-1.5 block text-sm font-bold text-k2-muted">เบอร์โทร</span>
+          <input
+            value={phone}
+            onChange={(event) => setPhone(event.target.value)}
+            placeholder="เช่น 081-234-5678"
+            inputMode="tel"
+            className="w-full rounded-2xl border border-white/80 bg-white/85 px-4 py-3 text-sm font-semibold outline-none"
+          />
+        </label>
+        <button
+          type="button"
+          onClick={handleSaveProfile}
+          className="mt-3 w-full rounded-2xl bg-k2-ink px-4 py-3 text-sm font-extrabold text-white"
+        >
+          บันทึกชื่อ/เบอร์
+        </button>
+        {savedMsg ? <p className="mt-2 text-center text-sm font-bold text-teal-600">{savedMsg}</p> : null}
+
+        {/* เปลี่ยนรหัสผ่าน */}
+        <div className="mt-6 border-t border-white/60 pt-5">
+          <p className="mb-2 text-sm font-bold text-k2-muted">เปลี่ยนรหัสผ่าน</p>
+          <input
+            type="password"
+            value={password}
+            onChange={(event) => setPassword(event.target.value)}
+            placeholder="รหัสผ่านใหม่ (อย่างน้อย 6 ตัว)"
+            className="w-full rounded-2xl border border-white/80 bg-white/85 px-4 py-3 text-sm font-semibold outline-none"
+          />
+          <input
+            type="password"
+            value={passwordConfirm}
+            onChange={(event) => setPasswordConfirm(event.target.value)}
+            placeholder="ยืนยันรหัสผ่านใหม่"
+            className="mt-2 w-full rounded-2xl border border-white/80 bg-white/85 px-4 py-3 text-sm font-semibold outline-none"
+          />
+          <button
+            type="button"
+            onClick={handleChangePassword}
+            disabled={pwBusy}
+            className="mt-3 w-full rounded-2xl bg-white/70 px-4 py-3 text-sm font-extrabold text-k2-ink shadow-sm disabled:opacity-50"
+          >
+            {pwBusy ? "กำลังเปลี่ยน..." : "เปลี่ยนรหัสผ่าน"}
+          </button>
+          {pwMsg ? <p className="mt-2 text-center text-sm font-bold text-k2-ink">{pwMsg}</p> : null}
+        </div>
+
+        {/* ปรับแต่ง (ชื่อเล่น/สี/สถานะ) + ออกจากระบบ */}
+        <div className="mt-6 grid grid-cols-2 gap-2">
+          <button
+            type="button"
+            onClick={onOpenPersonalization}
+            className="rounded-2xl bg-white/70 px-4 py-3 text-sm font-bold text-k2-ink shadow-sm"
+          >
+            ✨ ปรับแต่ง
+          </button>
+          <button
+            type="button"
+            onClick={onSignOut}
+            className="rounded-2xl bg-white/70 px-4 py-3 text-sm font-bold text-rose-600 shadow-sm"
+          >
+            ออกจากระบบ
+          </button>
+        </div>
+        <button
+          type="button"
+          onClick={onClose}
+          className="mt-3 w-full rounded-2xl bg-k2-ink px-4 py-3 font-extrabold text-white"
         >
           เสร็จสิ้น
         </button>
