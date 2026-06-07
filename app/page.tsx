@@ -86,7 +86,8 @@ type PermissionKey =
   | "manage_users"
   | "manage_permissions"
   | "manage_company_settings"
-  | "view_audit_log";
+  | "view_audit_log"
+  | "manage_hr";
 
 type SupabaseProfileRow = {
   id: string;
@@ -238,15 +239,17 @@ const statusDot: Record<JobStatus, string> = {
 const permissionGroups: Array<{ title: string; permissions: PermissionKey[] }> = [
   { title: "งานและคิวผลิต", permissions: ["view_dashboard", "create_job", "edit_job", "delete_job", "move_status", "assign_staff"] },
   { title: "ลูกค้าและบัญชี", permissions: ["create_customer", "edit_customer", "delete_customer", "view_finance", "edit_payment", "export_quote"] },
-  { title: "ผู้ใช้และระบบ", permissions: ["manage_users", "manage_permissions", "manage_company_settings", "view_audit_log"] }
+  { title: "ผู้ใช้และระบบ", permissions: ["manage_users", "manage_permissions", "manage_company_settings", "view_audit_log"] },
+  { title: "บุคคล (HR)", permissions: ["manage_hr"] }
 ];
 
 const allPermissionKeys = permissionGroups.flatMap((group) => group.permissions);
 
 const defaultRolePermissions: Record<Role, PermissionKey[]> = {
-  Owner: ["view_dashboard", "create_job", "edit_job", "delete_job", "move_status", "assign_staff", "view_finance", "edit_payment", "create_customer", "edit_customer", "delete_customer", "export_quote", "manage_users", "manage_permissions", "manage_company_settings", "view_audit_log"],
+  Owner: ["view_dashboard", "create_job", "edit_job", "delete_job", "move_status", "assign_staff", "view_finance", "edit_payment", "create_customer", "edit_customer", "delete_customer", "export_quote", "manage_users", "manage_permissions", "manage_company_settings", "view_audit_log", "manage_hr"],
   Manager: ["view_dashboard", "create_job", "edit_job", "move_status", "assign_staff", "view_finance", "edit_payment", "create_customer", "edit_customer", "export_quote", "view_audit_log"],
   Admin: ["view_dashboard", "create_job", "edit_job", "move_status", "assign_staff", "view_finance", "edit_payment", "create_customer", "edit_customer", "export_quote", "manage_users", "view_audit_log"],
+  HR: ["view_dashboard", "manage_hr"],
   Designer: ["view_dashboard", "edit_job", "move_status"],
   "Production Staff": ["view_dashboard", "edit_job", "move_status"],
   "Packing Staff": ["view_dashboard", "edit_job", "move_status"],
@@ -257,13 +260,14 @@ const roleSummaryPermissions: Record<Role, string[]> = {
   Owner: ["Full access", "Financials", "Audit log", "Team assignments"],
   Manager: ["Jobs", "Financials", "Assignments", "Reports"],
   Admin: ["Jobs", "Payments", "Assignments", "Audit log"],
+  HR: ["HR & payroll", "Salaries", "Attendance", "Leave"],
   Designer: ["Design queue", "Files", "Comments", "Approval status"],
   "Production Staff": ["Production queue", "QC", "Internal notes"],
   "Packing Staff": ["Packing", "Delivery status", "QC notes"],
   "Sales Staff": ["Orders", "Customers", "Payment intake"]
 };
 
-const roles: Role[] = ["Owner", "Manager", "Admin", "Designer", "Production Staff", "Packing Staff", "Sales Staff"];
+const roles: Role[] = ["Owner", "Manager", "Admin", "HR", "Designer", "Production Staff", "Packing Staff", "Sales Staff"];
 const jobTypes: JobType[] = ["DTG Shirt", "UV Print", "Laser Cut", "Signage", "3D Print", "Other"];
 const priorities: Priority[] = ["Normal", "Urgent", "Very Urgent", "Today"];
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -332,6 +336,7 @@ const viewLabel: Record<string, string> = {
   Payments: "การชำระเงิน",
   Reports: "รายงาน",
   Settings: "ตั้งค่า",
+  HR: "ฝ่ายบุคคล (HR)",
   Detail: "รายละเอียดงาน",
   Audit: "ประวัติการแก้ไข"
 };
@@ -361,6 +366,7 @@ const roleLabel: Record<Role, string> = {
   Owner: "เจ้าของ",
   Manager: "ผู้จัดการ",
   Admin: "แอดมิน",
+  HR: "ฝ่ายบุคคล (HR)",
   Designer: "ดีไซเนอร์",
   "Production Staff": "ฝ่ายผลิต",
   "Packing Staff": "ฝ่ายแพ็กของ",
@@ -406,6 +412,11 @@ const permissionLabel: Record<string, string> = {
   manage_permissions: "จัดการสิทธิ์",
   manage_company_settings: "ตั้งค่าบริษัท",
   view_audit_log: "ดูประวัติการแก้ไข",
+  manage_hr: "จัดการ HR / เงินเดือน",
+  "HR & payroll": "HR / เงินเดือน",
+  Salaries: "เงินเดือน",
+  Attendance: "ลงเวลา",
+  Leave: "การลา",
   "Full access": "เข้าถึงทั้งหมด",
   Financials: "ดูการเงิน",
   "Audit log": "ดูประวัติการแก้ไข",
@@ -791,6 +802,7 @@ export default function Page() {
   const [query, setQuery] = useState("");
   const [draggedJobId, setDraggedJobId] = useState<string | null>(null);
   const [pendingMove, setPendingMove] = useState<{ jobId: string; from: JobStatus; to: JobStatus } | null>(null);
+  const [hrRecords, setHrRecords] = useState<Record<string, { salary: number; position: string; startDate: string }>>({});
   const [notifications, setNotifications] = useState<AppNotification[]>([]);
   const [showNotifPanel, setShowNotifPanel] = useState(false);
   const notifPanelRef = useRef<HTMLDivElement>(null);
@@ -814,6 +826,7 @@ export default function Page() {
         { label: "Customers", icon: UsersRound, visible: currentRolePermissions.includes("create_customer") || currentRolePermissions.includes("edit_customer") || currentRolePermissions.includes("delete_customer") },
         { label: "Payments", icon: WalletCards, visible: currentRolePermissions.includes("view_finance") || currentRolePermissions.includes("edit_payment") },
         { label: "Reports", icon: BarChart3, visible: currentRolePermissions.includes("view_dashboard") },
+        { label: "HR", icon: UsersRound, visible: currentRolePermissions.includes("manage_hr") },
         { label: "Settings", icon: Settings, visible: true },
         { label: "Detail", icon: FileImage, visible: currentRolePermissions.includes("view_dashboard") },
         { label: "Audit", icon: ShieldCheck, visible: currentRolePermissions.includes("view_audit_log") }
@@ -1008,6 +1021,11 @@ export default function Page() {
     if (!isAuthed || navigationItems.some((item) => item.label === activeView)) return;
     setActiveView(navigationItems[0]?.label ?? "Dashboard");
   }, [activeView, isAuthed, navigationItems]);
+
+  useEffect(() => {
+    if (isAuthed && activeView === "HR") void loadHrRecords();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isAuthed, activeView]);
 
   async function refreshWorkspaceData(options?: { silent?: boolean }) {
     if (!supabase) return;
@@ -1763,6 +1781,39 @@ export default function Page() {
     void appendAudit("added team member", member.name, "profiles");
   }
 
+  // HR: โหลด/บันทึกข้อมูลเงินเดือน (เห็น/แก้ได้เฉพาะเจ้าของ + HR ผ่าน RLS)
+  async function loadHrRecords() {
+    if (!can("manage_hr") || !supabase) return;
+    const { data, error } = await supabase.from("employee_hr").select("id, monthly_salary, position, start_date");
+    if (error) {
+      setDataError(error.message);
+      return;
+    }
+    const map: Record<string, { salary: number; position: string; startDate: string }> = {};
+    ((data ?? []) as Array<{ id: string; monthly_salary: number | string | null; position: string | null; start_date: string | null }>).forEach((row) => {
+      map[row.id] = { salary: Number(row.monthly_salary ?? 0), position: row.position ?? "", startDate: row.start_date ?? "" };
+    });
+    setHrRecords(map);
+  }
+
+  async function saveHrRecord(memberId: string, record: { salary: number; position: string; startDate: string }) {
+    if (!can("manage_hr")) {
+      setDataError("เฉพาะเจ้าของหรือ HR เท่านั้นที่แก้ข้อมูลเงินเดือนได้");
+      return;
+    }
+    setHrRecords((current) => ({ ...current, [memberId]: record }));
+    if (supabase && uuidPattern.test(memberId)) {
+      const { error } = await supabase
+        .from("employee_hr")
+        .upsert({ id: memberId, monthly_salary: record.salary, position: record.position || null, start_date: record.startDate || null }, { onConflict: "id" });
+      if (error) {
+        setDataError(error.message);
+        return;
+      }
+    }
+    void appendAudit("updated salary", memberId, "employee_hr", memberId);
+  }
+
   async function updateTeamMember(memberId: string, updates: Pick<TeamMember, "name" | "role" | "branch">) {
     const isOwnProfile = currentUser.id === memberId;
     if (!can("manage_users") && !isOwnProfile) {
@@ -2421,6 +2472,11 @@ export default function Page() {
                 ) : (
                   <EmptyState title="ยังไม่มีงานในระบบ" text="เริ่มจากสร้างลูกค้าและสร้างงานแรกได้เลย" action={() => setActiveView("Create Job")} />
                 )}
+              </motion.div>
+            )}
+            {activeView === "HR" && (
+              <motion.div key="hr" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}>
+                <HRView teamMembers={teamMembers} records={hrRecords} canEdit={can("manage_hr")} onSave={saveHrRecord} />
               </motion.div>
             )}
             {activeView === "Audit" && (
@@ -4920,6 +4976,107 @@ function MiniStat({ label, value }: { label: string; value: string | number }) {
     <div className="rounded-2xl bg-white/65 p-3">
       <p className="text-xs font-bold uppercase tracking-[0.14em] text-k2-muted">{label}</p>
       <p className="mt-1 font-bold">{value}</p>
+    </div>
+  );
+}
+
+function HRView({
+  teamMembers,
+  records,
+  canEdit,
+  onSave
+}: {
+  teamMembers: TeamMember[];
+  records: Record<string, { salary: number; position: string; startDate: string }>;
+  canEdit: boolean;
+  onSave: (memberId: string, record: { salary: number; position: string; startDate: string }) => void;
+}) {
+  const [drafts, setDrafts] = useState<Record<string, { salary: string; position: string; startDate: string }>>({});
+  const staff = teamMembers.filter((member) => member.role !== "Owner");
+  const branches = Array.from(new Set(staff.map((member) => member.branch || "ยังไม่กำหนดสาขา")));
+  const totalPayroll = staff.reduce((sum, member) => sum + (records[member.id]?.salary ?? 0), 0);
+
+  function draftFor(member: TeamMember) {
+    const existing = drafts[member.id];
+    if (existing) return existing;
+    const record = records[member.id] ?? { salary: 0, position: "", startDate: "" };
+    return { salary: record.salary ? String(record.salary) : "", position: record.position, startDate: record.startDate };
+  }
+  function setDraft(member: TeamMember, patch: Partial<{ salary: string; position: string; startDate: string }>) {
+    const base = draftFor(member);
+    setDrafts((current) => ({ ...current, [member.id]: { ...base, ...patch } }));
+  }
+
+  return (
+    <div className="space-y-4">
+      <section className="glass rounded-[1.5rem] p-5">
+        <p className="text-sm font-semibold text-k2-muted">Human Resources</p>
+        <h3 className="text-2xl font-semibold">เงินเดือนพนักงาน</h3>
+        <p className="mt-2 text-sm font-semibold text-k2-muted">
+          เห็นและแก้ได้เฉพาะเจ้าของและ HR · รวมเงินเดือนทั้งหมด {money.format(totalPayroll)} / เดือน
+        </p>
+      </section>
+      {branches.map((branch) => (
+        <section key={branch} className="glass rounded-[1.5rem] p-5">
+          <h4 className="mb-4 text-lg font-extrabold">สาขา{branch}</h4>
+          <div className="space-y-3">
+            {staff
+              .filter((member) => (member.branch || "ยังไม่กำหนดสาขา") === branch)
+              .map((member) => {
+                const draft = draftFor(member);
+                return (
+                  <div key={member.id} className="grid gap-3 rounded-2xl bg-white/60 p-4 md:grid-cols-[1.1fr_1fr_1fr_1fr_auto] md:items-end">
+                    <div>
+                      <p className="font-bold">{member.name}</p>
+                      <p className="text-sm text-k2-muted">{roleLabel[member.role]}</p>
+                    </div>
+                    <label className="space-y-1">
+                      <span className="text-xs font-semibold text-k2-muted">ตำแหน่ง</span>
+                      <input
+                        value={draft.position}
+                        disabled={!canEdit}
+                        onChange={(event) => setDraft(member, { position: event.target.value })}
+                        className="w-full rounded-2xl border border-white/80 bg-white/85 px-3 py-2 text-sm outline-none disabled:opacity-60"
+                      />
+                    </label>
+                    <label className="space-y-1">
+                      <span className="text-xs font-semibold text-k2-muted">เงินเดือน (บาท/เดือน)</span>
+                      <input
+                        type="number"
+                        value={draft.salary}
+                        disabled={!canEdit}
+                        onChange={(event) => setDraft(member, { salary: event.target.value })}
+                        className="w-full rounded-2xl border border-white/80 bg-white/85 px-3 py-2 text-sm outline-none disabled:opacity-60"
+                      />
+                    </label>
+                    <label className="space-y-1">
+                      <span className="text-xs font-semibold text-k2-muted">วันเริ่มงาน</span>
+                      <input
+                        type="date"
+                        value={draft.startDate}
+                        disabled={!canEdit}
+                        onChange={(event) => setDraft(member, { startDate: event.target.value })}
+                        className="w-full rounded-2xl border border-white/80 bg-white/85 px-3 py-2 text-sm outline-none disabled:opacity-60"
+                      />
+                    </label>
+                    {canEdit ? (
+                      <button
+                        type="button"
+                        onClick={() => onSave(member.id, { salary: Number(draft.salary) || 0, position: draft.position, startDate: draft.startDate })}
+                        className="rounded-2xl bg-k2-ink px-4 py-2 text-sm font-bold text-white"
+                      >
+                        บันทึก
+                      </button>
+                    ) : null}
+                  </div>
+                );
+              })}
+            {staff.filter((member) => (member.branch || "ยังไม่กำหนดสาขา") === branch).length === 0 ? (
+              <p className="text-sm font-semibold text-k2-muted">ยังไม่มีพนักงานในสาขานี้</p>
+            ) : null}
+          </div>
+        </section>
+      ))}
     </div>
   );
 }

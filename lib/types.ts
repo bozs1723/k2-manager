@@ -12,6 +12,7 @@ export type Role =
   | "Owner"
   | "Manager"
   | "Admin"
+  | "HR"
   | "Designer"
   | "Production Staff"
   | "Packing Staff"
