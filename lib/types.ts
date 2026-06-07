@@ -65,6 +65,16 @@ export type Customer = {
   lastOrderDate: string;
 };
 
+export type BranchSetting = {
+  branch: string;
+  workStart: string;
+  workEnd: string;
+  lateGraceMinutes: number;
+  gpsLat: number | null;
+  gpsLng: number | null;
+  radiusM: number;
+};
+
 export type FileAsset = {
   id: string;
   name: string;

@@ -41,7 +41,7 @@ import {
 import type { LucideIcon } from "lucide-react";
 import { customers as initialCustomers, initialAuditLog, initialJobs, statuses, team as initialTeam } from "@/lib/mock-data";
 import { createSupabaseAuthWorker, isSupabaseConfigured, supabase } from "@/lib/supabase";
-import type { AppNotification, AuditEvent, Customer, Job, JobStatus, JobType, PaymentStatus, Priority, QuoteStatus, Role, TeamMember } from "@/lib/types";
+import type { AppNotification, AuditEvent, BranchSetting, Customer, Job, JobStatus, JobType, PaymentStatus, Priority, QuoteStatus, Role, TeamMember } from "@/lib/types";
 
 type ImportedCustomer = Pick<Customer, "name" | "phone" | "lineId" | "email"> & {
   notes: string;
@@ -268,6 +268,8 @@ const roleSummaryPermissions: Record<Role, string[]> = {
 };
 
 const roles: Role[] = ["Owner", "Manager", "Admin", "HR", "Designer", "Production Staff", "Packing Staff", "Sales Staff"];
+const BRANCH_LIST = ["พะเยา", "กรุงเทพ"];
+const defaultBranchSetting = (branch: string): BranchSetting => ({ branch, workStart: "09:00", workEnd: "18:00", lateGraceMinutes: 5, gpsLat: null, gpsLng: null, radiusM: 150 });
 const jobTypes: JobType[] = ["DTG Shirt", "UV Print", "Laser Cut", "Signage", "3D Print", "Other"];
 const priorities: Priority[] = ["Normal", "Urgent", "Very Urgent", "Today"];
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -803,6 +805,7 @@ export default function Page() {
   const [draggedJobId, setDraggedJobId] = useState<string | null>(null);
   const [pendingMove, setPendingMove] = useState<{ jobId: string; from: JobStatus; to: JobStatus } | null>(null);
   const [hrRecords, setHrRecords] = useState<Record<string, { salary: number; position: string; startDate: string }>>({});
+  const [branchSettings, setBranchSettings] = useState<Record<string, BranchSetting>>({});
   const [notifications, setNotifications] = useState<AppNotification[]>([]);
   const [showNotifPanel, setShowNotifPanel] = useState(false);
   const notifPanelRef = useRef<HTMLDivElement>(null);
@@ -1023,7 +1026,10 @@ export default function Page() {
   }, [activeView, isAuthed, navigationItems]);
 
   useEffect(() => {
-    if (isAuthed && activeView === "HR") void loadHrRecords();
+    if (isAuthed && activeView === "HR") {
+      void loadHrRecords();
+      void loadBranchSettings();
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isAuthed, activeView]);
 
@@ -1796,6 +1802,46 @@ export default function Page() {
     setHrRecords(map);
   }
 
+  async function loadBranchSettings() {
+    if (!supabase) return;
+    const { data, error } = await supabase.from("branch_settings").select("branch, work_start, work_end, late_grace_minutes, gps_lat, gps_lng, radius_m");
+    if (error) {
+      setDataError(error.message);
+      return;
+    }
+    const map: Record<string, BranchSetting> = {};
+    ((data ?? []) as Array<{ branch: string; work_start: string | null; work_end: string | null; late_grace_minutes: number | null; gps_lat: number | string | null; gps_lng: number | string | null; radius_m: number | null }>).forEach((row) => {
+      map[row.branch] = {
+        branch: row.branch,
+        workStart: row.work_start ?? "09:00",
+        workEnd: row.work_end ?? "18:00",
+        lateGraceMinutes: row.late_grace_minutes ?? 5,
+        gpsLat: row.gps_lat != null ? Number(row.gps_lat) : null,
+        gpsLng: row.gps_lng != null ? Number(row.gps_lng) : null,
+        radiusM: row.radius_m ?? 150
+      };
+    });
+    setBranchSettings(map);
+  }
+
+  async function saveBranchSetting(setting: BranchSetting) {
+    if (!can("manage_hr")) {
+      setDataError("เฉพาะเจ้าของหรือ HR เท่านั้นที่ตั้งค่าสาขาได้");
+      return;
+    }
+    setBranchSettings((current) => ({ ...current, [setting.branch]: setting }));
+    if (supabase) {
+      const { error } = await supabase
+        .from("branch_settings")
+        .upsert({ branch: setting.branch, work_start: setting.workStart, work_end: setting.workEnd, late_grace_minutes: setting.lateGraceMinutes, gps_lat: setting.gpsLat, gps_lng: setting.gpsLng, radius_m: setting.radiusM }, { onConflict: "branch" });
+      if (error) {
+        setDataError(error.message);
+        return;
+      }
+    }
+    void appendAudit("updated branch settings", setting.branch, "branch_settings", null);
+  }
+
   async function saveHrRecord(memberId: string, record: { salary: number; position: string; startDate: string }) {
     if (!can("manage_hr")) {
       setDataError("เฉพาะเจ้าของหรือ HR เท่านั้นที่แก้ข้อมูลเงินเดือนได้");
@@ -2481,7 +2527,7 @@ export default function Page() {
             )}
             {activeView === "HR" && (
               <motion.div key="hr" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}>
-                <HRView teamMembers={teamMembers} records={hrRecords} canEdit={can("manage_hr")} onSave={saveHrRecord} />
+                <HRView teamMembers={teamMembers} records={hrRecords} canEdit={can("manage_hr")} onSave={saveHrRecord} branches={BRANCH_LIST} branchSettings={branchSettings} onSaveBranch={saveBranchSetting} />
               </motion.div>
             )}
             {activeView === "Audit" && (
@@ -4986,20 +5032,97 @@ function MiniStat({ label, value }: { label: string; value: string | number }) {
   );
 }
 
+function BranchSettingsCard({
+  setting,
+  canEdit,
+  onSave
+}: {
+  setting: BranchSetting;
+  canEdit: boolean;
+  onSave: (setting: BranchSetting) => void;
+}) {
+  const [draft, setDraft] = useState<BranchSetting>(setting);
+  const [gpsMsg, setGpsMsg] = useState("");
+  useEffect(() => {
+    setDraft(setting);
+  }, [setting]);
+  function pickGps() {
+    if (!navigator.geolocation) {
+      setGpsMsg("เบราว์เซอร์ไม่รองรับ GPS");
+      return;
+    }
+    setGpsMsg("กำลังดึงพิกัด...");
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        setDraft((current) => ({ ...current, gpsLat: Number(pos.coords.latitude.toFixed(6)), gpsLng: Number(pos.coords.longitude.toFixed(6)) }));
+        setGpsMsg("ดึงพิกัดแล้ว");
+      },
+      () => setGpsMsg("ดึงพิกัดไม่สำเร็จ — อนุญาตตำแหน่งก่อน")
+    );
+  }
+  return (
+    <div className="rounded-2xl bg-white/60 p-4">
+      <div className="mb-3 flex items-center justify-between">
+        <h5 className="font-extrabold">สาขา{setting.branch}</h5>
+        {draft.gpsLat != null ? <span className="text-xs font-semibold text-emerald-700">มีพิกัดแล้ว</span> : <span className="text-xs font-semibold text-rose-600">ยังไม่ตั้งพิกัด</span>}
+      </div>
+      <div className="grid gap-3 md:grid-cols-3">
+        <label className="space-y-1">
+          <span className="text-xs font-semibold text-k2-muted">เวลาเข้างาน</span>
+          <input type="time" value={draft.workStart} disabled={!canEdit} onChange={(e) => setDraft((c) => ({ ...c, workStart: e.target.value }))} className="w-full rounded-2xl border border-white/80 bg-white/85 px-3 py-2 text-sm outline-none disabled:opacity-60" />
+        </label>
+        <label className="space-y-1">
+          <span className="text-xs font-semibold text-k2-muted">เวลาออกงาน</span>
+          <input type="time" value={draft.workEnd} disabled={!canEdit} onChange={(e) => setDraft((c) => ({ ...c, workEnd: e.target.value }))} className="w-full rounded-2xl border border-white/80 bg-white/85 px-3 py-2 text-sm outline-none disabled:opacity-60" />
+        </label>
+        <label className="space-y-1">
+          <span className="text-xs font-semibold text-k2-muted">สายได้ไม่เกิน (นาที)</span>
+          <input type="number" value={draft.lateGraceMinutes} disabled={!canEdit} onChange={(e) => setDraft((c) => ({ ...c, lateGraceMinutes: Number(e.target.value) || 0 }))} className="w-full rounded-2xl border border-white/80 bg-white/85 px-3 py-2 text-sm outline-none disabled:opacity-60" />
+        </label>
+        <label className="space-y-1">
+          <span className="text-xs font-semibold text-k2-muted">พิกัด Lat</span>
+          <input value={draft.gpsLat ?? ""} disabled={!canEdit} onChange={(e) => setDraft((c) => ({ ...c, gpsLat: e.target.value === "" ? null : Number(e.target.value) }))} className="w-full rounded-2xl border border-white/80 bg-white/85 px-3 py-2 text-sm outline-none disabled:opacity-60" />
+        </label>
+        <label className="space-y-1">
+          <span className="text-xs font-semibold text-k2-muted">พิกัด Lng</span>
+          <input value={draft.gpsLng ?? ""} disabled={!canEdit} onChange={(e) => setDraft((c) => ({ ...c, gpsLng: e.target.value === "" ? null : Number(e.target.value) }))} className="w-full rounded-2xl border border-white/80 bg-white/85 px-3 py-2 text-sm outline-none disabled:opacity-60" />
+        </label>
+        <label className="space-y-1">
+          <span className="text-xs font-semibold text-k2-muted">รัศมีอนุญาต (เมตร)</span>
+          <input type="number" value={draft.radiusM} disabled={!canEdit} onChange={(e) => setDraft((c) => ({ ...c, radiusM: Number(e.target.value) || 0 }))} className="w-full rounded-2xl border border-white/80 bg-white/85 px-3 py-2 text-sm outline-none disabled:opacity-60" />
+        </label>
+      </div>
+      {canEdit ? (
+        <div className="mt-3 flex items-center gap-3">
+          <button type="button" onClick={pickGps} className="rounded-2xl bg-k2-mint px-3 py-2 text-sm font-bold text-k2-ink">ดึงพิกัดปัจจุบัน</button>
+          <button type="button" onClick={() => onSave(draft)} className="rounded-2xl bg-k2-ink px-4 py-2 text-sm font-bold text-white">บันทึกสาขานี้</button>
+          {gpsMsg ? <span className="text-xs font-semibold text-k2-muted">{gpsMsg}</span> : null}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function HRView({
   teamMembers,
   records,
   canEdit,
-  onSave
+  onSave,
+  branches,
+  branchSettings,
+  onSaveBranch
 }: {
   teamMembers: TeamMember[];
   records: Record<string, { salary: number; position: string; startDate: string }>;
   canEdit: boolean;
   onSave: (memberId: string, record: { salary: number; position: string; startDate: string }) => void;
+  branches: string[];
+  branchSettings: Record<string, BranchSetting>;
+  onSaveBranch: (setting: BranchSetting) => void;
 }) {
   const [drafts, setDrafts] = useState<Record<string, { salary: string; position: string; startDate: string }>>({});
   const staff = teamMembers.filter((member) => member.role !== "Owner");
-  const branches = Array.from(new Set(staff.map((member) => member.branch || "ยังไม่กำหนดสาขา")));
+  const staffBranches = Array.from(new Set(staff.map((member) => member.branch || "ยังไม่กำหนดสาขา")));
   const totalPayroll = staff.reduce((sum, member) => sum + (records[member.id]?.salary ?? 0), 0);
 
   function draftFor(member: TeamMember) {
@@ -5022,9 +5145,25 @@ function HRView({
           เห็นและแก้ได้เฉพาะเจ้าของและ HR · รวมเงินเดือนทั้งหมด {money.format(totalPayroll)} / เดือน
         </p>
       </section>
-      {branches.map((branch) => (
+
+      <section className="glass rounded-[1.5rem] p-5">
+        <h4 className="text-lg font-extrabold">ตั้งค่าลงเวลาแต่ละสาขา</h4>
+        <p className="mb-4 mt-1 text-sm font-semibold text-k2-muted">เวลาเข้า-ออกงาน · สายได้ไม่เกินกี่นาที · จุดพิกัด GPS และรัศมีที่อนุญาตให้เช็คอิน</p>
+        <div className="space-y-3">
+          {branches.map((branch) => (
+            <BranchSettingsCard
+              key={branch}
+              setting={branchSettings[branch] ?? defaultBranchSetting(branch)}
+              canEdit={canEdit}
+              onSave={onSaveBranch}
+            />
+          ))}
+        </div>
+      </section>
+
+      {staffBranches.map((branch) => (
         <section key={branch} className="glass rounded-[1.5rem] p-5">
-          <h4 className="mb-4 text-lg font-extrabold">สาขา{branch}</h4>
+          <h4 className="mb-4 text-lg font-extrabold">เงินเดือน · สาขา{branch}</h4>
           <div className="space-y-3">
             {staff
               .filter((member) => (member.branch || "ยังไม่กำหนดสาขา") === branch)
