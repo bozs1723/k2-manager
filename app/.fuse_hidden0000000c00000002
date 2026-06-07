@@ -1028,7 +1028,7 @@ export default function Page() {
         shopStateResult,
         notificationsResult
       ] = await Promise.all([
-        supabase.from("profiles").select("id, email, full_name, role, avatar_url, branch, is_active").eq("is_active", true).order("created_at", { ascending: true }),
+        supabase.from("profiles").select("id, email, full_name, role, avatar_url, is_active").eq("is_active", true).order("created_at", { ascending: true }),
         supabase.from("company_settings").select("*").order("created_at", { ascending: true }).limit(1),
         supabase.from("customers").select("*").order("created_at", { ascending: false }),
         supabase.from("jobs").select("*").order("created_at", { ascending: false }),
@@ -1099,22 +1099,16 @@ export default function Page() {
     }
   }
 
-  // เจ้าของ/คนไม่มีสาขาประจำ → เห็นทุกสาขา; คนมีสาขา → เห็นเฉพาะงานสาขาตัวเอง + งานที่ยังไม่ระบุสาขา
-  const branchScopedJobs = useMemo(() => {
-    if (currentUser.role === "Owner" || !currentUser.branch) return jobs;
-    return jobs.filter((job) => !job.productionBranch || job.productionBranch === currentUser.branch);
-  }, [jobs, currentUser.role, currentUser.branch]);
-
   const filteredJobs = useMemo(() => {
     const normalized = query.trim().toLowerCase();
-    if (!normalized) return branchScopedJobs;
-    return branchScopedJobs.filter((job) =>
+    if (!normalized) return jobs;
+    return jobs.filter((job) =>
       [job.id, job.customerName, job.title, job.type, job.status, job.assignedDesigner, job.assignedProduction]
         .join(" ")
         .toLowerCase()
         .includes(normalized)
     );
-  }, [branchScopedJobs, query]);
+  }, [jobs, query]);
 
   const metrics = useMemo(() => {
     const monthKey = todayISO().slice(0, 7);
@@ -1303,22 +1297,16 @@ export default function Page() {
     setPendingMove({ jobId, from: job.status, to: nextStatus });
   }
 
-  // ยอมรับงานได้: เจ้าของ (ทุกสาขา) หรือ ผจก./แอดมิน เฉพาะสาขาประจำตัวเอง
-  function canAcceptJob(job: Job) {
-    if (currentUser.role === "Owner") return true;
-    if (currentUser.role === "Manager" || currentUser.role === "Admin") {
-      return !currentUser.branch || !job.productionBranch || job.productionBranch === currentUser.branch;
-    }
-    return false;
-  }
+  // ผู้จัดการ/เจ้าของ ยอมรับงานเข้าสาขา (เซลที่สร้างต้องรอยอมรับก่อน)
+  const canAcceptJobs = ["Owner", "Manager", "Admin"].includes(currentUser.role);
 
   async function acceptJob(jobId: string) {
-    const job = jobs.find((item) => item.id === jobId);
-    if (!job) return;
-    if (!canAcceptJob(job)) {
-      setDataError("เฉพาะผู้จัดการสาขานั้นหรือเจ้าของเท่านั้นที่ยอมรับงานได้");
+    if (!canAcceptJobs) {
+      setDataError("เฉพาะผู้จัดการหรือเจ้าของเท่านั้นที่ยอมรับงานได้");
       return;
     }
+    const job = jobs.find((item) => item.id === jobId);
+    if (!job) return;
     setJobs((current) => current.map((item) => (item.id === jobId ? { ...item, acceptance: "accepted", rejectReason: "" } : item)));
     if (supabase && job.dbId) {
       const { error } = await supabase.from("jobs").update({ acceptance: "accepted", reject_reason: null }).eq("id", job.dbId);
@@ -1332,12 +1320,12 @@ export default function Page() {
   }
 
   async function rejectJob(jobId: string, reason: string) {
-    const job = jobs.find((item) => item.id === jobId);
-    if (!job) return;
-    if (!canAcceptJob(job)) {
-      setDataError("เฉพาะผู้จัดการสาขานั้นหรือเจ้าของเท่านั้นที่ปฏิเสธงานได้");
+    if (!canAcceptJobs) {
+      setDataError("เฉพาะผู้จัดการหรือเจ้าของเท่านั้นที่ปฏิเสธงานได้");
       return;
     }
+    const job = jobs.find((item) => item.id === jobId);
+    if (!job) return;
     const cleanReason = reason.trim() || "ไม่ระบุเหตุผล";
     setJobs((current) => current.map((item) => (item.id === jobId ? { ...item, acceptance: "rejected", rejectReason: cleanReason } : item)));
     if (supabase && job.dbId) {
@@ -1763,7 +1751,7 @@ export default function Page() {
     void appendAudit("added team member", member.name, "profiles");
   }
 
-  async function updateTeamMember(memberId: string, updates: Pick<TeamMember, "name" | "role" | "branch">) {
+  async function updateTeamMember(memberId: string, updates: Pick<TeamMember, "name" | "role">) {
     const isOwnProfile = currentUser.id === memberId;
     if (!can("manage_users") && !isOwnProfile) {
       setDataError("บทบาทนี้ยังไม่มีสิทธิ์จัดการผู้ใช้");
@@ -1771,18 +1759,12 @@ export default function Page() {
     }
     const existingMember = teamMembers.find((member) => member.id === memberId);
     if (!existingMember) return;
-    const nextRole = can("manage_users") ? updates.role : existingMember.role;
-    // เจ้าของไม่มีสาขาประจำ (เห็นทุกสาขา); บทบาทอื่นกำหนดสาขาได้เฉพาะผู้มีสิทธิ์จัดการผู้ใช้
-    const nextBranch = nextRole === "Owner"
-      ? ""
-      : (can("manage_users") ? (updates.branch ?? existingMember.branch ?? "") : existingMember.branch ?? "");
     const safeUpdates = {
       name: updates.name,
-      role: nextRole,
-      branch: nextBranch
+      role: can("manage_users") ? updates.role : existingMember.role
     };
     if (supabase && uuidPattern.test(memberId)) {
-      const { error } = await supabase.from("profiles").update({ full_name: safeUpdates.name, role: safeUpdates.role, branch: safeUpdates.branch || null }).eq("id", memberId);
+      const { error } = await supabase.from("profiles").update({ full_name: safeUpdates.name, role: safeUpdates.role }).eq("id", memberId);
       if (error) {
         setDataError(error.message);
         return;
@@ -2350,7 +2332,7 @@ export default function Page() {
                   moveJob={requestMove}
                   onAccept={acceptJob}
                   onReject={rejectJob}
-                  canAccept={canAcceptJob}
+                  canAccept={canAcceptJobs}
                   onSelect={(id) => {
                     setSelectedJobId(id);
                     setActiveView("Detail");
@@ -2676,7 +2658,7 @@ function Board({
   moveJob: (jobId: string, status: JobStatus) => void;
   onAccept: (id: string) => void;
   onReject: (id: string, reason: string) => void;
-  canAccept: (job: Job) => boolean;
+  canAccept: boolean;
   onSelect: (id: string) => void;
 }) {
   const [rejectingId, setRejectingId] = useState<string | null>(null);
@@ -2756,7 +2738,7 @@ function Board({
                         <p className="rounded-lg bg-amber-100/80 px-2 py-1 text-[11px] font-bold text-amber-800">
                           รอผู้จัดการสาขายอมรับ{job.productionBranch ? ` · ${job.productionBranch}` : ""}
                         </p>
-                        {canAccept(job) ? (
+                        {canAccept ? (
                           rejectingId === job.id ? (
                             <div className="space-y-2">
                               <textarea
@@ -2783,7 +2765,7 @@ function Board({
                         <p className="rounded-lg bg-rose-100/80 px-2 py-1 text-[11px] font-bold text-rose-700">
                           ตีกลับ: {job.rejectReason || "ไม่ระบุเหตุผล"}
                         </p>
-                        {canAccept(job) ? (
+                        {canAccept ? (
                           <button type="button" onClick={() => onAccept(job.id)} className="w-full rounded-xl bg-emerald-500 px-2 py-2 text-xs font-bold text-white">ยอมรับเข้าคิว</button>
                         ) : null}
                       </div>
@@ -3977,7 +3959,7 @@ function SettingsView({
   companyProfile: CompanyProfile;
   onUpdateCompany: (profile: CompanyProfile) => void;
   onAddMember: (member: NewTeamMemberInput) => void;
-  onUpdateMember: (memberId: string, updates: Pick<TeamMember, "name" | "role" | "branch">) => void;
+  onUpdateMember: (memberId: string, updates: Pick<TeamMember, "name" | "role">) => void;
   onUpdateMemberAvatar: (memberId: string, avatarUrl: string) => void;
   onRemoveMember: (memberId: string) => void;
   permissionMatrix: Record<Role, PermissionKey[]>;
@@ -3990,8 +3972,7 @@ function SettingsView({
   const canManageCompany = currentPermissions.includes("manage_company_settings");
   const [newMember, setNewMember] = useState({ name: "", username: "", password: "", role: "Designer" as Role });
   const [editingId, setEditingId] = useState<string | null>(null);
-  const [editingMember, setEditingMember] = useState({ name: "", role: "Designer" as Role, branch: "" });
-  const memberBranchOptions = ["พะเยา", "กรุงเทพ"];
+  const [editingMember, setEditingMember] = useState({ name: "", role: "Designer" as Role });
   const [companyDraft, setCompanyDraft] = useState(companyProfile);
   const [facebookPageName, setFacebookPageName] = useState("");
   const [avatarError, setAvatarError] = useState("");
@@ -4002,7 +3983,7 @@ function SettingsView({
 
   function startEditing(member: TeamMember) {
     setEditingId(member.id);
-    setEditingMember({ name: member.name, role: member.role, branch: member.branch ?? "" });
+    setEditingMember({ name: member.name, role: member.role });
   }
 
   function submitNewMember() {
@@ -4014,7 +3995,7 @@ function SettingsView({
 
   function submitEdit(memberId: string) {
     if (!editingMember.name.trim() || (!canManageTeam && memberId !== currentUserId)) return;
-    onUpdateMember(memberId, { name: editingMember.name.trim(), role: editingMember.role, branch: editingMember.branch });
+    onUpdateMember(memberId, { name: editingMember.name.trim(), role: editingMember.role });
     setEditingId(null);
   }
 
@@ -4228,28 +4209,12 @@ function SettingsView({
                           <option key={role} value={role}>{roleLabel[role]}</option>
                         ))}
                       </select>
-                      {editingMember.role !== "Owner" ? (
-                        <select
-                          value={editingMember.branch}
-                          onChange={(event) => setEditingMember((current) => ({ ...current, branch: event.target.value }))}
-                          disabled={!canManageTeam}
-                          className="rounded-2xl border border-white/80 bg-white/85 px-4 py-3 text-sm font-semibold outline-none disabled:opacity-60 md:col-span-2"
-                        >
-                          <option value="">— เลือกสาขาประจำ —</option>
-                          {memberBranchOptions.map((branch) => (
-                            <option key={branch} value={branch}>{branch}</option>
-                          ))}
-                        </select>
-                      ) : null}
                     </div>
                   ) : (
                     <div>
                       <p className="font-extrabold">{member.name}</p>
                       {member.username ? <p className="mt-1 text-xs font-extrabold text-teal-600">@{member.username}</p> : null}
-                      <p className="mt-1 text-sm font-semibold text-k2-muted">
-                        {roleLabel[member.role]}
-                        {member.role !== "Owner" && member.branch ? ` · สาขา${member.branch}` : ""}
-                      </p>
+                      <p className="mt-1 text-sm font-semibold text-k2-muted">{roleLabel[member.role]}</p>
                     </div>
                   )}
                   <div className="flex items-center gap-2">
