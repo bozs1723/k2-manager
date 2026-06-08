@@ -42,7 +42,7 @@ import {
 import type { LucideIcon } from "lucide-react";
 import { customers as initialCustomers, initialAuditLog, initialJobs, statuses, team as initialTeam } from "@/lib/mock-data";
 import { createSupabaseAuthWorker, isSupabaseConfigured, supabase } from "@/lib/supabase";
-import type { AppNotification, Attendance, AuditEvent, BranchSetting, Customer, ExpressRequest, Holiday, Job, JobStatus, JobType, LeaveRequest, PaymentStatus, Priority, QuoteStatus, Role, TeamMember } from "@/lib/types";
+import type { AppNotification, Attendance, AuditEvent, BranchSetting, Customer, ExpressRequest, Holiday, Job, JobStatus, JobType, LeaveRequest, PaymentStatus, Priority, Quotation, QuoteStatus, Role, TeamMember } from "@/lib/types";
 
 type ImportedCustomer = Pick<Customer, "name" | "phone" | "lineId" | "email"> & {
   notes: string;
@@ -204,6 +204,38 @@ type SupabaseExpressRequestRow = {
   consumed: boolean | null;
   created_at: string;
 };
+
+type SupabaseQuotationRow = {
+  id: string;
+  quote_number: string | null;
+  customer_id: string | null;
+  customer_name: string | null;
+  customer_phone: string | null;
+  title: string;
+  description: string | null;
+  amount: number | string | null;
+  status: string | null;
+  created_by_name: string | null;
+  converted_job_id: string | null;
+  created_at: string;
+};
+
+function quotationRowToQuotation(row: SupabaseQuotationRow): Quotation {
+  return {
+    id: row.id,
+    quoteNumber: row.quote_number ?? undefined,
+    customerId: row.customer_id ?? undefined,
+    customerName: row.customer_name ?? "",
+    customerPhone: row.customer_phone ?? "",
+    title: row.title,
+    description: row.description ?? "",
+    amount: Number(row.amount ?? 0),
+    status: (row.status as Quotation["status"]) ?? "draft",
+    createdByName: row.created_by_name ?? undefined,
+    convertedJobId: row.converted_job_id ?? undefined,
+    createdAt: row.created_at
+  };
+}
 
 function expressRowToRequest(row: SupabaseExpressRequestRow): ExpressRequest {
   return {
@@ -384,6 +416,7 @@ const viewLabel: Record<string, string> = {
   Dashboard: "แดชบอร์ด",
   "My Jobs": "งานของฉัน",
   Board: "บอร์ดคิวงาน",
+  Quotations: "ใบเสนอราคา",
   "Create Job": "สร้างงาน",
   Calendar: "ปฏิทิน",
   Customers: "ลูกค้า",
@@ -974,6 +1007,9 @@ export default function Page() {
   const [showNotifPanel, setShowNotifPanel] = useState(false);
   const notifPanelRef = useRef<HTMLDivElement>(null);
   const [expressOrdersEnabled, setExpressOrdersEnabled] = useState(false);
+  const [quotations, setQuotations] = useState<Quotation[]>([]);
+  const [createJobPrefill, setCreateJobPrefill] = useState<Partial<Job> | null>(null);
+  const [createJobNonce, setCreateJobNonce] = useState(0);
   const [expressRequests, setExpressRequests] = useState<ExpressRequest[]>([]);
   const [showExpressPanel, setShowExpressPanel] = useState(false);
   const expressPanelRef = useRef<HTMLDivElement>(null);
@@ -992,6 +1028,7 @@ export default function Page() {
         { label: "Dashboard", icon: LayoutDashboard, visible: currentRolePermissions.includes("view_dashboard") },
         { label: "My Jobs", icon: ListTodo, visible: true },
         { label: "Board", icon: ClipboardList, visible: currentRolePermissions.includes("view_dashboard") },
+        { label: "Quotations", icon: ReceiptText, visible: currentRolePermissions.includes("create_job") },
         { label: "Create Job", icon: ClipboardPlus, visible: currentRolePermissions.includes("create_job") },
         { label: "Calendar", icon: CalendarDays, visible: currentRolePermissions.includes("view_dashboard") },
         { label: "Customers", icon: UsersRound, visible: currentRolePermissions.includes("create_customer") || currentRolePermissions.includes("edit_customer") || currentRolePermissions.includes("delete_customer") },
@@ -1189,6 +1226,77 @@ export default function Page() {
     } else {
       setExpressRequests((current) => current.map((r) => (r.id === req.id ? { ...r, consumed: true } : r)));
     }
+  }
+
+  // ===== ใบเสนอราคา (Quotation) =====
+  async function reloadQuotations() {
+    if (!supabase || !isSupabaseConfigured) return;
+    const { data, error } = await supabase
+      .from("quotations")
+      .select("id, quote_number, customer_id, customer_name, customer_phone, title, description, amount, status, created_by_name, converted_job_id, created_at")
+      .order("created_at", { ascending: false })
+      .limit(200);
+    if (error) return;
+    setQuotations(((data ?? []) as SupabaseQuotationRow[]).map(quotationRowToQuotation));
+  }
+
+  async function createQuotation(input: { customerId?: string; customerName: string; customerPhone: string; title: string; description: string; amount: number }) {
+    if (!can("create_job")) {
+      setDataError("บทบาทนี้ยังไม่มีสิทธิ์สร้างใบเสนอราคา");
+      return;
+    }
+    if (!input.title.trim() || !input.customerName.trim()) {
+      setDataError("กรุณากรอกชื่อลูกค้าและชื่องาน");
+      return;
+    }
+    if (supabase && isSupabaseConfigured) {
+      const { error } = await supabase.from("quotations").insert({
+        customer_id: input.customerId && uuidPattern.test(input.customerId) ? input.customerId : null,
+        customer_name: input.customerName.trim(),
+        customer_phone: input.customerPhone.trim(),
+        title: input.title.trim(),
+        description: input.description.trim(),
+        amount: input.amount,
+        status: "draft",
+        created_by: uuidPattern.test(currentUser.id) ? currentUser.id : null,
+        created_by_name: currentUser.name
+      });
+      if (error) { setDataError(error.message); return; }
+      void appendAudit("created quotation", input.title.trim(), "quotations", null);
+      await reloadQuotations();
+    } else {
+      setQuotations((current) => [
+        { id: crypto.randomUUID(), customerId: input.customerId, customerName: input.customerName, customerPhone: input.customerPhone, title: input.title, description: input.description, amount: input.amount, status: "draft", createdByName: currentUser.name, createdAt: new Date().toISOString() },
+        ...current
+      ]);
+    }
+  }
+
+  async function updateQuotationStatus(id: string, status: Quotation["status"]) {
+    if (!can("create_job")) return;
+    const patch: Record<string, unknown> = { status };
+    if (status === "approved") patch.approved_at = new Date().toISOString();
+    setQuotations((current) => current.map((q) => (q.id === id ? { ...q, status } : q)));
+    if (supabase && isSupabaseConfigured) {
+      const { error } = await supabase.from("quotations").update(patch).eq("id", id);
+      if (error) { setDataError(error.message); void reloadQuotations(); return; }
+    }
+    void appendAudit(`quotation ${status}`, id, "quotations", id);
+  }
+
+  // แปลงใบเสนอราคา → เด้งไปหน้าสร้างงาน พร้อมเติมข้อมูลให้ (เซลส์แนบสลิปแล้วสร้างใบงานตามระบบเดิม)
+  function convertQuotationToJob(quotation: Quotation) {
+    setCreateJobPrefill({
+      customerId: quotation.customerId ?? "new",
+      customerName: quotation.customerName,
+      phone: quotation.customerPhone,
+      title: quotation.title,
+      description: quotation.description,
+      price: quotation.amount
+    });
+    setCreateJobNonce((n) => n + 1);
+    setActiveView("Create Job");
+    void updateQuotationStatus(quotation.id, "converted");
   }
 
   const canManageExpress = currentUser.role === "Owner" || currentUser.role === "Manager";
@@ -1426,6 +1534,7 @@ export default function Page() {
         setNotifications(((notificationsResult.data ?? []) as SupabaseNotificationRow[]).map(notifFromRow));
       }
       void reloadExpressRequests();
+      void reloadQuotations();
       // คงงานที่กำลังเปิดดูไว้ ไม่ดีดออกเวลามีข้อมูลซิงก์เข้ามา
       setSelectedJobId((current) => (current && nextJobs.some((job) => job.id === current) ? current : nextJobs[0]?.id ?? ""));
     } catch (error) {
@@ -3094,7 +3203,19 @@ export default function Page() {
             )}
             {activeView === "Create Job" && (
               <motion.div key="create" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}>
-                <CreateJobView customers={customerRecords} teamMembers={teamMembers} companyProfile={companyProfile} expressEnabled={canCreateExpress} onCreate={createJob} />
+                <CreateJobView key={createJobNonce} prefill={createJobPrefill} customers={customerRecords} teamMembers={teamMembers} companyProfile={companyProfile} expressEnabled={canCreateExpress} onCreate={createJob} />
+              </motion.div>
+            )}
+            {activeView === "Quotations" && (
+              <motion.div key="quotations" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}>
+                <QuotationsView
+                  quotations={quotations}
+                  customers={customerRecords}
+                  canSeeMoney={canSeeMoney}
+                  onCreate={createQuotation}
+                  onSetStatus={updateQuotationStatus}
+                  onConvert={convertQuotationToJob}
+                />
               </motion.div>
             )}
             {activeView === "Customers" && (
@@ -4501,17 +4622,128 @@ function CustomerPicker({
   );
 }
 
+const quotationStatusInfo: Record<Quotation["status"], { label: string; cls: string }> = {
+  draft: { label: "ฉบับร่าง", cls: "bg-slate-100 text-slate-600" },
+  sent: { label: "ส่งให้ลูกค้าแล้ว", cls: "bg-sky-100 text-sky-700" },
+  approved: { label: "ลูกค้าอนุมัติ", cls: "bg-teal-100 text-teal-700" },
+  rejected: { label: "ปฏิเสธ", cls: "bg-rose-100 text-rose-700" },
+  converted: { label: "แปลงเป็นใบงานแล้ว", cls: "bg-violet-100 text-violet-700" }
+};
+
+function QuotationsView({
+  quotations,
+  customers,
+  canSeeMoney,
+  onCreate,
+  onSetStatus,
+  onConvert
+}: {
+  quotations: Quotation[];
+  customers: Customer[];
+  canSeeMoney: boolean;
+  onCreate: (input: { customerId?: string; customerName: string; customerPhone: string; title: string; description: string; amount: number }) => void;
+  onSetStatus: (id: string, status: Quotation["status"]) => void;
+  onConvert: (q: Quotation) => void;
+}) {
+  const [form, setForm] = useState({ customerId: "new", customerName: "", customerPhone: "", title: "", description: "", amount: 0 });
+
+  function pickCustomer(customer: Customer) {
+    setForm((c) => ({ ...c, customerId: customer.id, customerName: customer.name, customerPhone: customer.phone }));
+  }
+  function pickNew() {
+    setForm((c) => ({ ...c, customerId: "new", customerName: "", customerPhone: "" }));
+  }
+  function submit() {
+    if (!form.customerName.trim() || !form.title.trim()) return;
+    onCreate({ customerId: form.customerId, customerName: form.customerName, customerPhone: form.customerPhone, title: form.title, description: form.description, amount: form.amount });
+    setForm({ customerId: "new", customerName: "", customerPhone: "", title: "", description: "", amount: 0 });
+  }
+
+  return (
+    <div className="grid gap-4 xl:grid-cols-[0.85fr_1.15fr]">
+      {/* ฟอร์มสร้างใบเสนอราคา */}
+      <section className="glass rounded-[1.5rem] p-5">
+        <div className="mb-4">
+          <p className="text-sm font-semibold text-k2-muted">ใบเสนอราคา</p>
+          <h3 className="text-2xl font-semibold">สร้างใบเสนอราคาใหม่</h3>
+          <p className="mt-1 text-sm font-semibold text-k2-muted">เสนอราคา → ส่งให้ลูกค้า → ลูกค้าอนุมัติ → แปลงเป็นใบงาน</p>
+        </div>
+        <div className="space-y-3">
+          <label className="block space-y-2">
+            <span className="text-sm font-semibold text-k2-muted">ลูกค้า</span>
+            <CustomerPicker customers={customers} selectedId={form.customerId} selectedName={form.customerName} onPickNew={pickNew} onPickCustomer={pickCustomer} />
+          </label>
+          <TextField label={form.customerId === "new" ? "ชื่อลูกค้าใหม่" : "ชื่อลูกค้า"} value={form.customerName} onChange={(v) => setForm((c) => ({ ...c, customerName: v }))} />
+          <TextField label="เบอร์โทร" value={form.customerPhone} onChange={(v) => setForm((c) => ({ ...c, customerPhone: v }))} />
+          <TextField label="ชื่องาน / หัวข้อ" value={form.title} onChange={(v) => setForm((c) => ({ ...c, title: v }))} />
+          <label className="block space-y-2">
+            <span className="text-sm font-semibold text-k2-muted">รายละเอียด</span>
+            <textarea value={form.description} onChange={(e) => setForm((c) => ({ ...c, description: e.target.value }))} className="min-h-24 w-full rounded-2xl border border-white/80 bg-white/80 px-4 py-3 outline-none" />
+          </label>
+          <NumberField label="ราคาเสนอ (บาท)" value={form.amount} onChange={(v) => setForm((c) => ({ ...c, amount: v }))} />
+          <button type="button" onClick={submit} className="w-full rounded-2xl bg-k2-ink px-5 py-3.5 font-semibold text-white shadow-lg shadow-slate-900/15">
+            สร้างใบเสนอราคา
+          </button>
+        </div>
+      </section>
+
+      {/* รายการใบเสนอราคา */}
+      <section className="glass rounded-[1.5rem] p-5">
+        <h4 className="mb-4 text-xl font-semibold">รายการใบเสนอราคา ({quotations.length})</h4>
+        {quotations.length === 0 ? (
+          <p className="rounded-2xl bg-white/60 px-4 py-8 text-center text-sm font-semibold text-k2-muted">ยังไม่มีใบเสนอราคา</p>
+        ) : (
+          <div className="space-y-3">
+            {quotations.map((q) => (
+              <div key={q.id} className="rounded-2xl border border-white/70 bg-white/55 p-4">
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <p className="font-bold leading-5">{q.title}</p>
+                    <p className="text-sm text-k2-muted">{q.customerName}{q.customerPhone ? ` · ${q.customerPhone}` : ""}</p>
+                  </div>
+                  <span className={`shrink-0 rounded-full px-3 py-1 text-[11px] font-bold ${quotationStatusInfo[q.status].cls}`}>{quotationStatusInfo[q.status].label}</span>
+                </div>
+                {q.description ? <p className="mt-2 whitespace-pre-wrap text-sm text-k2-muted">{q.description}</p> : null}
+                {canSeeMoney ? <p className="mt-2 text-sm font-extrabold text-k2-ink">{money.format(q.amount)}</p> : null}
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {q.status === "draft" ? (
+                    <button type="button" onClick={() => onSetStatus(q.id, "sent")} className="rounded-xl bg-sky-500 px-3 py-2 text-xs font-extrabold text-white">ส่งให้ลูกค้า</button>
+                  ) : null}
+                  {q.status === "sent" ? (
+                    <>
+                      <button type="button" onClick={() => onSetStatus(q.id, "approved")} className="rounded-xl bg-teal-500 px-3 py-2 text-xs font-extrabold text-white">ลูกค้าอนุมัติ</button>
+                      <button type="button" onClick={() => onSetStatus(q.id, "rejected")} className="rounded-xl bg-white/70 px-3 py-2 text-xs font-extrabold text-rose-600 shadow-sm">ปฏิเสธ</button>
+                    </>
+                  ) : null}
+                  {q.status === "approved" ? (
+                    <button type="button" onClick={() => onConvert(q)} className="rounded-xl bg-k2-ink px-3 py-2 text-xs font-extrabold text-white">→ แปลงเป็นใบงาน (รับมัดจำ)</button>
+                  ) : null}
+                  {q.status === "rejected" ? (
+                    <button type="button" onClick={() => onSetStatus(q.id, "draft")} className="rounded-xl bg-white/70 px-3 py-2 text-xs font-extrabold text-k2-muted shadow-sm">กลับเป็นร่าง</button>
+                  ) : null}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </section>
+    </div>
+  );
+}
+
 function CreateJobView({
   customers,
   teamMembers,
   companyProfile,
   expressEnabled,
+  prefill,
   onCreate
 }: {
   customers: Customer[];
   teamMembers: TeamMember[];
   companyProfile: CompanyProfile;
   expressEnabled: boolean;
+  prefill?: Partial<Job> | null;
   onCreate: (job: Partial<Job>) => void;
 }) {
   const designerOptions = useMemo(() => teamMembers.filter((member) => ["Designer", "Admin", "Owner"].includes(member.role)), [teamMembers]);
@@ -4520,9 +4752,9 @@ function CreateJobView({
   const defaultProduction = productionOptions[0]?.name ?? "Unassigned";
   // ฟอร์มสร้างงานเริ่มจากค่าว่างเสมอ เพื่อไม่ให้ข้อมูลจากงานก่อนหน้าค้างมาทำให้สร้างออเดอร์ผิด/ซ้ำ
   const [form, setForm] = useState({
-    customerId: "new",
-    customerName: "",
-    phone: "",
+    customerId: prefill?.customerId ?? "new",
+    customerName: prefill?.customerName ?? "",
+    phone: prefill?.phone ?? "",
     lineId: "",
     companyName: "",
     taxId: "",
@@ -4530,9 +4762,9 @@ function CreateJobView({
     billingAddress: "",
     accountingEmail: "",
     requiresInvoice: false,
-    title: "",
+    title: prefill?.title ?? "",
     type: "DTG Shirt" as JobType,
-    description: "",
+    description: prefill?.description ?? "",
     quantity: 1,
     orderDate: todayISO(),
     dueDate: addDaysISO(todayISO(), DEFAULT_LEAD_TIME_DAYS),
@@ -4540,7 +4772,7 @@ function CreateJobView({
     priority: "Normal" as Priority,
     assignedDesigner: defaultDesigner,
     assignedProduction: defaultProduction,
-    price: 0,
+    price: prefill?.price ?? 0,
     deposit: 0,
     depositReceivedDate: todayISO(),
     depositSlip: "",

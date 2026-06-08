@@ -51,6 +51,21 @@ export type TeamMember = {
   statusText?: string;
 };
 
+export type Quotation = {
+  id: string;
+  quoteNumber?: string;
+  customerId?: string;
+  customerName: string;
+  customerPhone: string;
+  title: string;
+  description: string;
+  amount: number;
+  status: "draft" | "sent" | "approved" | "rejected" | "converted";
+  createdByName?: string;
+  convertedJobId?: string;
+  createdAt: string;
+};
+
 export type ExpressRequest = {
   id: string;
   requestedById: string;
