@@ -115,6 +115,8 @@ type SupabaseCustomerRow = {
   billing_address: string | null;
   accounting_email: string | null;
   requires_invoice: boolean;
+  source_channel: string | null;
+  source_page: string | null;
   created_at: string;
 };
 
@@ -799,6 +801,8 @@ function customerFromRow(row: SupabaseCustomerRow, jobs: SupabaseJobRow[]): Cust
     billingAddress: row.billing_address ?? "",
     accountingEmail: row.accounting_email ?? "",
     requiresInvoice: row.requires_invoice,
+    sourceChannel: row.source_channel ?? "",
+    sourcePage: row.source_page ?? "",
     totalOrders: customerJobs.length,
     lifetimeValue: customerJobs.reduce((sum, job) => sum + Number(job.price), 0),
     lastOrderDate: customerJobs[0]?.order_date ?? "-"
@@ -941,7 +945,9 @@ function customerInsertPayload(customer: Omit<Customer, "id" | "totalOrders" | "
     branch: customer.branch ?? "",
     billing_address: customer.billingAddress ?? "",
     accounting_email: customer.accountingEmail ?? "",
-    requires_invoice: customer.requiresInvoice ?? false
+    requires_invoice: customer.requiresInvoice ?? false,
+    source_channel: customer.sourceChannel ?? "",
+    source_page: customer.sourcePage ?? ""
   };
 }
 
@@ -2617,7 +2623,7 @@ export default function Page() {
     void appendAudit("created customer", nextCustomer.name, "customers");
   }
 
-  async function updateCustomer(customerId: string, updates: Pick<Customer, "name" | "phone" | "lineId" | "email" | "companyName" | "taxId" | "branch" | "billingAddress" | "accountingEmail" | "requiresInvoice" | "notes">) {
+  async function updateCustomer(customerId: string, updates: Pick<Customer, "name" | "phone" | "lineId" | "email" | "companyName" | "taxId" | "branch" | "billingAddress" | "accountingEmail" | "requiresInvoice" | "notes" | "sourceChannel" | "sourcePage">) {
     if (!can("edit_customer")) {
       setDataError("บทบาทนี้ยังไม่มีสิทธิ์แก้ไขลูกค้า");
       return;
@@ -6121,13 +6127,14 @@ function CustomersView({
   jobs: Job[];
   canDelete: boolean;
   onAddCustomer: (customer: Omit<Customer, "id" | "totalOrders" | "lifetimeValue" | "lastOrderDate">) => void;
-  onUpdateCustomer: (customerId: string, updates: Pick<Customer, "name" | "phone" | "lineId" | "email" | "companyName" | "taxId" | "branch" | "billingAddress" | "accountingEmail" | "requiresInvoice" | "notes">) => void;
+  onUpdateCustomer: (customerId: string, updates: Pick<Customer, "name" | "phone" | "lineId" | "email" | "companyName" | "taxId" | "branch" | "billingAddress" | "accountingEmail" | "requiresInvoice" | "notes" | "sourceChannel" | "sourcePage">) => void;
   onRemoveCustomer: (customerId: string) => void;
 }) {
   const [customerQuery, setCustomerQuery] = useState("");
   const [editingId, setEditingId] = useState<string | null>(null);
-  const [newCustomer, setNewCustomer] = useState({ name: "", phone: "", lineId: "", email: "", companyName: "", taxId: "", branch: "สำนักงานใหญ่", billingAddress: "", accountingEmail: "", requiresInvoice: false });
-  const [editingCustomer, setEditingCustomer] = useState({ name: "", phone: "", lineId: "", email: "", companyName: "", taxId: "", branch: "สำนักงานใหญ่", billingAddress: "", accountingEmail: "", requiresInvoice: false, notes: "" });
+  const [newCustomer, setNewCustomer] = useState({ name: "", phone: "", lineId: "", email: "", companyName: "", taxId: "", branch: "สำนักงานใหญ่", billingAddress: "", accountingEmail: "", requiresInvoice: false, sourceChannel: "", sourcePage: "" });
+  const [editingCustomer, setEditingCustomer] = useState({ name: "", phone: "", lineId: "", email: "", companyName: "", taxId: "", branch: "สำนักงานใหญ่", billingAddress: "", accountingEmail: "", requiresInvoice: false, notes: "", sourceChannel: "", sourcePage: "" });
+  const sourceChannelOptions = ["", "Facebook", "LINE", "หน้าร้าน", "TikTok", "Website", "Shopee", "อื่น ๆ"];
   const [importRows, setImportRows] = useState<ImportedCustomer[]>([]);
   const [importFileName, setImportFileName] = useState("");
   const [importError, setImportError] = useState("");
@@ -6154,7 +6161,9 @@ function CustomersView({
       billingAddress: customer.billingAddress ?? "",
       accountingEmail: customer.accountingEmail ?? "",
       requiresInvoice: customer.requiresInvoice ?? false,
-      notes: customer.notes ?? ""
+      notes: customer.notes ?? "",
+      sourceChannel: customer.sourceChannel ?? "",
+      sourcePage: customer.sourcePage ?? ""
     });
   }
 
@@ -6170,9 +6179,11 @@ function CustomersView({
       branch: newCustomer.branch.trim(),
       billingAddress: newCustomer.billingAddress.trim(),
       accountingEmail: newCustomer.accountingEmail.trim(),
-      requiresInvoice: newCustomer.requiresInvoice
+      requiresInvoice: newCustomer.requiresInvoice,
+      sourceChannel: newCustomer.sourceChannel,
+      sourcePage: newCustomer.sourcePage.trim()
     });
-    setNewCustomer({ name: "", phone: "", lineId: "", email: "", companyName: "", taxId: "", branch: "สำนักงานใหญ่", billingAddress: "", accountingEmail: "", requiresInvoice: false });
+    setNewCustomer({ name: "", phone: "", lineId: "", email: "", companyName: "", taxId: "", branch: "สำนักงานใหญ่", billingAddress: "", accountingEmail: "", requiresInvoice: false, sourceChannel: "", sourcePage: "" });
   }
 
   async function handleImportFile(file: File | null) {
@@ -6235,7 +6246,9 @@ function CustomersView({
       billingAddress: editingCustomer.billingAddress.trim(),
       accountingEmail: editingCustomer.accountingEmail.trim(),
       requiresInvoice: editingCustomer.requiresInvoice,
-      notes: editingCustomer.notes.trim()
+      notes: editingCustomer.notes.trim(),
+      sourceChannel: editingCustomer.sourceChannel,
+      sourcePage: editingCustomer.sourcePage.trim()
     });
     setEditingId(null);
   }
@@ -6331,6 +6344,21 @@ function CustomersView({
             />
             ออกใบกำกับ
           </label>
+          <select
+            value={newCustomer.sourceChannel}
+            onChange={(event) => setNewCustomer((current) => ({ ...current, sourceChannel: event.target.value }))}
+            className="rounded-2xl border border-white/80 bg-white/80 px-4 py-3 text-sm font-semibold outline-none"
+          >
+            {sourceChannelOptions.map((c) => (
+              <option key={c} value={c}>{c || "แหล่งที่มา (ไม่ระบุ)"}</option>
+            ))}
+          </select>
+          <input
+            value={newCustomer.sourcePage}
+            onChange={(event) => setNewCustomer((current) => ({ ...current, sourcePage: event.target.value }))}
+            placeholder="ชื่อเพจ/ไลน์ เช่น K2Sign, @k2sign"
+            className="rounded-2xl border border-white/80 bg-white/80 px-4 py-3 text-sm font-semibold outline-none"
+          />
           <textarea
             value={newCustomer.billingAddress}
             onChange={(event) => setNewCustomer((current) => ({ ...current, billingAddress: event.target.value }))}
@@ -6492,6 +6520,21 @@ function CustomersView({
                       />
                       ลูกค้าต้องออกใบกำกับ / ใบเสร็จ
                     </label>
+                    <select
+                      value={editingCustomer.sourceChannel}
+                      onChange={(event) => setEditingCustomer((current) => ({ ...current, sourceChannel: event.target.value }))}
+                      className="rounded-2xl border border-white/80 bg-white/85 px-4 py-3 text-sm font-semibold outline-none"
+                    >
+                      {sourceChannelOptions.map((c) => (
+                        <option key={c} value={c}>{c || "แหล่งที่มา (ไม่ระบุ)"}</option>
+                      ))}
+                    </select>
+                    <input
+                      value={editingCustomer.sourcePage}
+                      onChange={(event) => setEditingCustomer((current) => ({ ...current, sourcePage: event.target.value }))}
+                      placeholder="ชื่อเพจ/ไลน์ เช่น K2Sign, @k2sign"
+                      className="rounded-2xl border border-white/80 bg-white/85 px-4 py-3 text-sm font-semibold outline-none"
+                    />
                     <textarea
                       value={editingCustomer.notes}
                       onChange={(event) => setEditingCustomer((current) => ({ ...current, notes: event.target.value }))}
@@ -6513,6 +6556,9 @@ function CustomersView({
                     <p className="mt-2 rounded-2xl bg-white/55 px-3 py-2 text-sm font-semibold text-k2-muted">
                       {customer.companyName || "ยังไม่มีข้อมูลบริษัท"} {customer.taxId ? `| Tax ID ${customer.taxId}` : ""} {customer.requiresInvoice ? "| ต้องออกเอกสาร" : ""}
                     </p>
+                    {customer.sourceChannel || customer.sourcePage ? (
+                      <p className="mt-2 text-sm font-semibold text-k2-muted">📍 มาจาก: {customer.sourceChannel || "-"}{customer.sourcePage ? ` · ${customer.sourcePage}` : ""}</p>
+                    ) : null}
                     {customer.notes ? (
                       <p className="mt-2 rounded-2xl bg-amber-50 px-3 py-2 text-sm font-semibold text-amber-700">📝 {customer.notes}</p>
                     ) : null}

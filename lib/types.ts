@@ -91,6 +91,8 @@ export type Customer = {
   billingAddress?: string;
   accountingEmail?: string;
   requiresInvoice?: boolean;
+  sourceChannel?: string;
+  sourcePage?: string;
   totalOrders: number;
   lifetimeValue: number;
   lastOrderDate: string;

@@ -2,7 +2,7 @@
 -- K2 Manager — ไฟล์ติดตั้งฐานข้อมูลครบในไฟล์เดียว (รันรอบเดียวจบ)
 -- วิธีใช้: Supabase → SQL Editor → New query → วางทั้งหมด → Run
 -- ปลอดภัย/รันซ้ำได้ (idempotent) — ไม่ลบข้อมูลเดิม
--- สร้างจาก: setup_safe.sql + migrations ทั้งหมดถึง 2026-06-07 (quotations)
+-- สร้างจาก: setup_safe.sql + migrations ทั้งหมดถึง 2026-06-07 (customer source)
 -- ============================================================
 
 -- ===== [1] schema หลัก (ตาราง/สิทธิ์/seed) =====
@@ -1016,3 +1016,12 @@ begin
     alter publication supabase_realtime add table public.quotations;
   end if;
 end $$;
+
+-- ============================================================
+-- ===== migration: 20260607100000_customer_source =====
+-- ============================================================
+-- CRM: แหล่งที่มาลูกค้า + ชื่อเพจ/ชื่อไลน์
+-- ปลอดภัย/รันซ้ำได้ (idempotent)
+
+alter table public.customers add column if not exists source_channel text;   -- Facebook | LINE | หน้าร้าน | TikTok | Website | Shopee | อื่น ๆ
+alter table public.customers add column if not exists source_page text;       -- ชื่อเพจ/ชื่อไลน์ เช่น K2Sign, @k2sign
