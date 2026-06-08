@@ -187,6 +187,7 @@ export type Job = {
   depositReceivedDate?: string;
   depositConfirmed?: boolean;
   depositConfirmedBy?: string;
+  depositWaived?: boolean;
   remainingBalance: number;
   paymentStatus: PaymentStatus;
   internalNotes: string;

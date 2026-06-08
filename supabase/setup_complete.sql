@@ -2,7 +2,7 @@
 -- K2 Manager — ไฟล์ติดตั้งฐานข้อมูลครบในไฟล์เดียว (รันรอบเดียวจบ)
 -- วิธีใช้: Supabase → SQL Editor → New query → วางทั้งหมด → Run
 -- ปลอดภัย/รันซ้ำได้ (idempotent) — ไม่ลบข้อมูลเดิม
--- สร้างจาก: setup_safe.sql + migrations ทั้งหมดถึง 2026-06-07 (deposit slip)
+-- สร้างจาก: setup_safe.sql + migrations ทั้งหมดถึง 2026-06-07 (deposit waiver)
 -- ============================================================
 
 -- ===== [1] schema หลัก (ตาราง/สิทธิ์/seed) =====
@@ -957,3 +957,11 @@ alter table public.jobs add column if not exists deposit_received_date date;    
 alter table public.jobs add column if not exists deposit_confirmed boolean not null default false;  -- ผู้จัดการยืนยันยอดแล้ว
 alter table public.jobs add column if not exists deposit_confirmed_by uuid references public.profiles(id);
 alter table public.jobs add column if not exists deposit_confirmed_at timestamptz;
+
+-- ============================================================
+-- ===== migration: 20260607080000_deposit_waiver =====
+-- ============================================================
+-- ข้อยกเว้นมัดจำ: เจ้าของอนุมัติให้ลูกค้าบางรายไม่ต้องมัดจำ (ต้องเจ้าของอนุมัติก่อนเข้าผลิต)
+-- ปลอดภัย/รันซ้ำได้ (idempotent)
+
+alter table public.jobs add column if not exists deposit_waived boolean not null default false;

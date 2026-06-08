@@ -156,6 +156,7 @@ type SupabaseJobRow = {
   deposit_received_date?: string | null;
   deposit_confirmed?: boolean | null;
   deposit_confirmed_by?: string | null;
+  deposit_waived?: boolean | null;
   created_at: string;
 };
 
@@ -821,6 +822,7 @@ function jobFromRow(
     depositReceivedDate: row.deposit_received_date ?? undefined,
     depositConfirmed: Boolean(row.deposit_confirmed),
     depositConfirmedBy: row.deposit_confirmed_by ? profileNames.get(row.deposit_confirmed_by) ?? undefined : undefined,
+    depositWaived: Boolean(row.deposit_waived),
     remainingBalance: Number(row.remaining_balance),
     paymentStatus: row.payment_status,
     internalNotes: row.internal_notes ?? "",
@@ -1441,7 +1443,7 @@ export default function Page() {
     // ฝ่ายผลิต (ดีไซเนอร์/ผลิต/แพ็ก) เห็นเฉพาะงานที่ยืนยันมัดจำแล้ว
     // งานเก่าที่ไม่มีสลิป (ก่อนมีระบบนี้) ไม่ถูกกั้น เพื่อไม่ให้งานเดิมหายจากคิว
     if (["Designer", "Production Staff", "Packing Staff"].includes(currentUser.role)) {
-      return byBranch.filter((job) => job.depositConfirmed || !job.depositSlip);
+      return byBranch.filter((job) => job.depositConfirmed || (!job.depositSlip && !job.depositWaived));
     }
     return byBranch;
   }, [jobs, currentUser.role, currentUser.branch]);
@@ -1768,13 +1770,19 @@ export default function Page() {
   }
 
   // ผู้จัดการ/แอดมิน ยืนยันยอดมัดจำ → ปลดล็อกให้งานเข้าคิวผลิต
+  // เคสยกเว้นมัดจำ (deposit_waived) ต้องเป็น "เจ้าของ" เท่านั้นที่อนุมัติได้
   async function confirmDeposit(jobId: string) {
-    if (!["Owner", "Manager", "Admin"].includes(currentUser.role)) {
+    const existingJob = jobs.find((job) => job.id === jobId);
+    if (!existingJob) return;
+    if (existingJob.depositWaived) {
+      if (currentUser.role !== "Owner") {
+        setDataError("เฉพาะเจ้าของเท่านั้นที่อนุมัติยกเว้นมัดจำได้");
+        return;
+      }
+    } else if (!["Owner", "Manager", "Admin"].includes(currentUser.role)) {
       setDataError("เฉพาะเจ้าของ/ผู้จัดการ/แอดมินเท่านั้นที่ยืนยันยอดมัดจำได้");
       return;
     }
-    const existingJob = jobs.find((job) => job.id === jobId);
-    if (!existingJob) return;
     setJobs((current) => current.map((job) => (job.id === jobId ? { ...job, depositConfirmed: true, depositConfirmedBy: currentUser.name } : job)));
     if (supabase && existingJob.dbId) {
       const { error } = await supabase
@@ -1944,6 +1952,7 @@ export default function Page() {
               is_express: input?.isExpress ?? false,
               deposit_slip: input?.depositSlip ?? null,
               deposit_received_date: input?.depositReceivedDate || null,
+              deposit_waived: input?.depositWaived ?? false,
               production_branch: input?.productionBranch ?? null,
               acceptance: jobAcceptance,
               reject_reason: null,
@@ -2020,6 +2029,7 @@ export default function Page() {
       depositSlip: input?.depositSlip ?? undefined,
       depositReceivedDate: input?.depositReceivedDate ?? undefined,
       depositConfirmed: false,
+      depositWaived: input?.depositWaived ?? false,
       productionBranch: input?.productionBranch ?? "",
       acceptance: jobAcceptance,
       rejectReason: "",
@@ -3133,7 +3143,7 @@ export default function Page() {
             {activeView === "Detail" && (
               <motion.div key="detail" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}>
                 {selectedJob ? (
-                  <JobDetail job={selectedJob} companyProfile={companyProfile} canSeeMoney={canSeeMoney} canDeleteJob={can("delete_job")} canConfirmDeposit={["Owner", "Manager", "Admin"].includes(currentUser.role)} onPayment={updatePayment} onConfirmDeposit={confirmDeposit} onComment={addComment} onMove={requestMove} onDelete={removeJob} />
+                  <JobDetail job={selectedJob} companyProfile={companyProfile} canSeeMoney={canSeeMoney} canDeleteJob={can("delete_job")} canConfirmDeposit={["Owner", "Manager", "Admin"].includes(currentUser.role)} canApproveWaiver={currentUser.role === "Owner"} onPayment={updatePayment} onConfirmDeposit={confirmDeposit} onComment={addComment} onMove={requestMove} onDelete={removeJob} />
                 ) : (
                   <EmptyState title="ยังไม่มีงานในระบบ" text="เริ่มจากสร้างลูกค้าและสร้างงานแรกได้เลย" action={() => setActiveView("Create Job")} />
                 )}
@@ -3872,8 +3882,8 @@ function Board({
                     </div>
                     <p className="font-semibold leading-5">{job.title}</p>
                     <p className="mt-1 text-sm text-k2-muted">{job.customerName}</p>
-                    {!job.depositConfirmed && job.depositSlip ? (
-                      <span className="mt-2 inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-bold text-amber-700">รอยืนยันมัดจำ</span>
+                    {!job.depositConfirmed && (job.depositSlip || job.depositWaived) ? (
+                      <span className="mt-2 inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-bold text-amber-700">{job.depositWaived ? "รอเจ้าของอนุมัติ" : "รอยืนยันมัดจำ"}</span>
                     ) : null}
                     <div className="mt-4 flex items-center justify-between gap-2 text-xs font-semibold text-k2-muted">
                       <span>{jobTypeLabel[job.type]}</span>
@@ -3959,6 +3969,7 @@ function JobDetail({
   canSeeMoney,
   canDeleteJob,
   canConfirmDeposit,
+  canApproveWaiver,
   onPayment,
   onConfirmDeposit,
   onComment,
@@ -3970,6 +3981,7 @@ function JobDetail({
   canSeeMoney: boolean;
   canDeleteJob: boolean;
   canConfirmDeposit: boolean;
+  canApproveWaiver: boolean;
   onPayment: (jobId: string, deposit: number) => void;
   onConfirmDeposit: (jobId: string) => void;
   onComment: (jobId: string, text: string) => void;
@@ -4086,37 +4098,45 @@ function JobDetail({
             <span className="rounded-full bg-k2-mint px-3 py-1 text-xs font-bold text-emerald-800">{paymentLabel[job.paymentStatus]}</span>
           </div>
 
-          {/* มัดจำ: วันที่รับเงิน + สลิป + ยืนยันยอด */}
+          {/* มัดจำ: วันที่รับเงิน + สลิป + ยืนยันยอด (หรือเคสยกเว้นมัดจำ — เจ้าของอนุมัติ) */}
           <div className="mt-4 rounded-2xl border border-white/70 bg-white/55 p-3">
             <div className="flex items-center justify-between">
-              <span className="font-semibold">มัดจำ</span>
+              <span className="font-semibold">{job.depositWaived ? "ยกเว้นมัดจำ" : "มัดจำ"}</span>
               {job.depositConfirmed ? (
                 <span className="inline-flex items-center gap-1 rounded-full bg-teal-100 px-3 py-1 text-xs font-bold text-teal-700">
-                  <CheckCircle2 className="h-3.5 w-3.5" /> ยืนยันยอดแล้ว{job.depositConfirmedBy ? ` · ${job.depositConfirmedBy}` : ""}
+                  <CheckCircle2 className="h-3.5 w-3.5" /> {job.depositWaived ? "เจ้าของอนุมัติแล้ว" : "ยืนยันยอดแล้ว"}{job.depositConfirmedBy ? ` · ${job.depositConfirmedBy}` : ""}
                 </span>
               ) : (
-                <span className="rounded-full bg-amber-100 px-3 py-1 text-xs font-bold text-amber-700">รอยืนยันยอด</span>
+                <span className="rounded-full bg-amber-100 px-3 py-1 text-xs font-bold text-amber-700">{job.depositWaived ? "รอเจ้าของอนุมัติ" : "รอยืนยันยอด"}</span>
               )}
             </div>
-            {job.depositReceivedDate ? (
-              <p className="mt-2 text-sm font-semibold text-k2-muted">วันที่รับเงิน: {job.depositReceivedDate}</p>
-            ) : null}
-            {job.depositSlip ? (
-              <a href={job.depositSlip} target="_blank" rel="noreferrer" className="mt-2 inline-block">
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img src={job.depositSlip} alt="สลิปมัดจำ" className="h-28 w-auto rounded-xl object-cover ring-1 ring-white/80" />
-              </a>
+            {job.depositWaived ? (
+              <p className="mt-2 text-sm font-semibold text-amber-700">ลูกค้าไม่ต้องมัดจำ — ต้องให้เจ้าของอนุมัติก่อนเข้าคิวผลิต</p>
             ) : (
-              <p className="mt-2 text-sm font-semibold text-k2-muted">— ไม่มีรูปสลิป —</p>
+              <>
+                {job.depositReceivedDate ? (
+                  <p className="mt-2 text-sm font-semibold text-k2-muted">วันที่รับเงิน: {job.depositReceivedDate}</p>
+                ) : null}
+                {job.depositSlip ? (
+                  <a href={job.depositSlip} target="_blank" rel="noreferrer" className="mt-2 inline-block">
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img src={job.depositSlip} alt="สลิปมัดจำ" className="h-28 w-auto rounded-xl object-cover ring-1 ring-white/80" />
+                  </a>
+                ) : (
+                  <p className="mt-2 text-sm font-semibold text-k2-muted">— ไม่มีรูปสลิป —</p>
+                )}
+              </>
             )}
-            {!job.depositConfirmed && canConfirmDeposit ? (
+            {!job.depositConfirmed && (job.depositWaived ? canApproveWaiver : canConfirmDeposit) ? (
               <button
                 type="button"
                 onClick={() => onConfirmDeposit(job.id)}
                 className="mt-3 w-full rounded-2xl bg-teal-500 px-4 py-3 text-sm font-extrabold text-white"
               >
-                ✓ ยืนยันยอดมัดจำ (ปลดล็อกเข้าคิวผลิต)
+                {job.depositWaived ? "✓ อนุมัติยกเว้นมัดจำ (เจ้าของ)" : "✓ ยืนยันยอดมัดจำ"} (ปลดล็อกเข้าคิวผลิต)
               </button>
+            ) : !job.depositConfirmed && job.depositWaived ? (
+              <p className="mt-3 text-center text-xs font-semibold text-k2-muted">รอเจ้าของกดอนุมัติ</p>
             ) : null}
           </div>
           {canSeeMoney && (
@@ -4524,6 +4544,7 @@ function CreateJobView({
     deposit: 0,
     depositReceivedDate: todayISO(),
     depositSlip: "",
+    depositWaived: false,
     internalNotes: "",
     fileName: "",
     sourceChannel: "LINE",
@@ -4645,17 +4666,20 @@ function CreateJobView({
           return;
         }
         // บังคับแนบสลิปมัดจำ: ต้องมียอดมัดจำ + วันที่รับเงิน + รูปสลิป
-        if (form.deposit <= 0) {
-          setFormError("กรุณาระบุยอดเงินมัดจำก่อนสร้างงาน");
-          return;
-        }
-        if (!form.depositReceivedDate) {
-          setFormError("กรุณาระบุวันที่รับเงินมัดจำ");
-          return;
-        }
-        if (!form.depositSlip) {
-          setFormError("กรุณาแนบรูปสลิปมัดจำก่อนสร้างงาน");
-          return;
+        // ยกเว้น: เคส "ไม่ต้องมัดจำ (ขออนุมัติเจ้าของ)" ข้ามการบังคับสลิป
+        if (!form.depositWaived) {
+          if (form.deposit <= 0) {
+            setFormError("กรุณาระบุยอดเงินมัดจำ หรือเลือก 'ไม่ต้องมัดจำ (ขออนุมัติเจ้าของ)'");
+            return;
+          }
+          if (!form.depositReceivedDate) {
+            setFormError("กรุณาระบุวันที่รับเงินมัดจำ");
+            return;
+          }
+          if (!form.depositSlip) {
+            setFormError("กรุณาแนบรูปสลิปมัดจำก่อนสร้างงาน");
+            return;
+          }
         }
         setFormError("");
         const workOrderSpec = [
@@ -4890,29 +4914,47 @@ function CreateJobView({
             onChange={(value) => setField("depositReceivedDate", value)}
           />
           <TextField label="ไฟล์ / รูปแนบ" value={form.fileName} onChange={(value) => setField("fileName", value)} />
-          {/* สลิปมัดจำ — บังคับแนบก่อนสร้างงาน */}
-          <div className="space-y-2 md:col-span-2 rounded-2xl border border-rose-200 bg-rose-50/60 p-4">
-            <span className="flex items-center gap-2 text-sm font-extrabold text-k2-ink">
-              <WalletCards className="h-4 w-4 text-rose-500" />
-              สลิปมัดจำ <span className="text-xs font-bold text-rose-600">* บังคับแนบก่อนสร้างงาน</span>
-            </span>
-            <div className="flex flex-wrap items-center gap-3">
-              <label className="inline-flex cursor-pointer items-center gap-2 rounded-2xl bg-white px-4 py-2.5 text-sm font-bold text-k2-ink shadow-sm">
-                <FileImage className="h-4 w-4" />
-                {form.depositSlip ? "เปลี่ยนรูปสลิป" : "แนบรูปสลิป"}
-                <input type="file" accept="image/*" className="hidden" onChange={(event) => void handleSlipUpload(event.target.files?.[0] ?? null)} />
-              </label>
-              {form.depositSlip ? (
-                <div className="flex items-center gap-2">
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img src={form.depositSlip} alt="สลิปมัดจำ" className="h-16 w-16 rounded-xl object-cover ring-1 ring-rose-200" />
-                  <button type="button" onClick={() => setField("depositSlip", "")} className="text-xs font-bold text-rose-600">ลบรูป</button>
+          {/* สลิปมัดจำ — บังคับแนบก่อนสร้างงาน (ยกเว้นเคสไม่ต้องมัดจำที่เจ้าของอนุมัติ) */}
+          <div className={`space-y-3 md:col-span-2 rounded-2xl border p-4 ${form.depositWaived ? "border-amber-200 bg-amber-50/60" : "border-rose-200 bg-rose-50/60"}`}>
+            <label className="flex items-center justify-between gap-3">
+              <span className="flex items-center gap-2 text-sm font-extrabold text-k2-ink">
+                <ShieldCheck className="h-4 w-4 text-amber-600" />
+                ไม่ต้องมัดจำ (ขออนุมัติเจ้าของ)
+              </span>
+              <input
+                type="checkbox"
+                checked={form.depositWaived}
+                onChange={(event) => setField("depositWaived", event.target.checked)}
+                className="h-5 w-5 accent-amber-500"
+              />
+            </label>
+            {form.depositWaived ? (
+              <p className="text-xs font-semibold text-amber-700">งานนี้จะถูกสร้างโดยไม่ต้องแนบสลิป แต่จะ<strong>ยังไม่เข้าคิวผลิตจนกว่าเจ้าของจะอนุมัติ</strong></p>
+            ) : (
+              <>
+                <span className="flex items-center gap-2 text-sm font-extrabold text-k2-ink">
+                  <WalletCards className="h-4 w-4 text-rose-500" />
+                  สลิปมัดจำ <span className="text-xs font-bold text-rose-600">* บังคับแนบก่อนสร้างงาน</span>
+                </span>
+                <div className="flex flex-wrap items-center gap-3">
+                  <label className="inline-flex cursor-pointer items-center gap-2 rounded-2xl bg-white px-4 py-2.5 text-sm font-bold text-k2-ink shadow-sm">
+                    <FileImage className="h-4 w-4" />
+                    {form.depositSlip ? "เปลี่ยนรูปสลิป" : "แนบรูปสลิป"}
+                    <input type="file" accept="image/*" className="hidden" onChange={(event) => void handleSlipUpload(event.target.files?.[0] ?? null)} />
+                  </label>
+                  {form.depositSlip ? (
+                    <div className="flex items-center gap-2">
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img src={form.depositSlip} alt="สลิปมัดจำ" className="h-16 w-16 rounded-xl object-cover ring-1 ring-rose-200" />
+                      <button type="button" onClick={() => setField("depositSlip", "")} className="text-xs font-bold text-rose-600">ลบรูป</button>
+                    </div>
+                  ) : (
+                    <span className="text-xs font-semibold text-k2-muted">ยังไม่ได้แนบสลิป</span>
+                  )}
                 </div>
-              ) : (
-                <span className="text-xs font-semibold text-k2-muted">ยังไม่ได้แนบสลิป</span>
-              )}
-            </div>
-            {slipError ? <p className="text-xs font-semibold text-rose-600">{slipError}</p> : null}
+                {slipError ? <p className="text-xs font-semibold text-rose-600">{slipError}</p> : null}
+              </>
+            )}
           </div>
         </div>
 
