@@ -5956,38 +5956,150 @@ function SettingsView({
 }
 
 function CalendarView({ jobs, onSelect }: { jobs: Job[]; onSelect: (id: string) => void }) {
-  const grouped = statuses
-    .flatMap(() => jobs)
-    .filter((job, index, all) => all.findIndex((item) => item.id === job.id) === index)
-    .sort((a, b) => a.dueDate.localeCompare(b.dueDate))
-    .reduce<Record<string, Job[]>>((acc, job) => {
-      acc[job.dueDate] = [...(acc[job.dueDate] ?? []), job];
-      return acc;
-    }, {});
+  const [modalJob, setModalJob] = useState<Job | null>(null);
+
+  const grouped = useMemo(
+    () =>
+      jobs
+        .slice()
+        .sort((a, b) => a.dueDate.localeCompare(b.dueDate))
+        .reduce<Record<string, Job[]>>((acc, job) => {
+          acc[job.dueDate] = [...(acc[job.dueDate] ?? []), job];
+          return acc;
+        }, {}),
+    [jobs]
+  );
+
+  // พื้นหลังคนละสีตามวันในสัปดาห์ (จ.-อา.)
+  const dayBg = ["bg-rose-50/70", "bg-amber-50/70", "bg-emerald-50/70", "bg-sky-50/70", "bg-violet-50/70", "bg-teal-50/70", "bg-orange-50/70"];
+
+  function deadlineStyle(dueDate: string) {
+    const d = daysFromToday(dueDate);
+    if (d <= 0) return { dot: "bg-rose-500", text: "text-rose-600", label: d < 0 ? `เลยกำหนด ${Math.abs(d)} วัน` : "ครบกำหนดวันนี้", blink: true };
+    if (d <= 1) return { dot: "bg-rose-500", text: "text-rose-600", label: `เหลือ ${d} วัน`, blink: false };
+    if (d <= 5) return { dot: "bg-amber-400", text: "text-amber-600", label: `เหลือ ${d} วัน`, blink: false };
+    return { dot: "bg-emerald-500", text: "text-emerald-600", label: `เหลือ ${d} วัน`, blink: false };
+  }
+
+  function formatDay(date: string) {
+    try {
+      return new Date(`${date}T00:00:00`).toLocaleDateString("th-TH", { weekday: "long", day: "numeric", month: "long" });
+    } catch {
+      return date;
+    }
+  }
 
   return (
-    <div className="grid gap-4 lg:grid-cols-2 xl:grid-cols-3">
-      {Object.entries(grouped).map(([date, dateJobs]) => (
-        <section key={date} className="glass rounded-[1.5rem] p-5">
-          <div className="mb-4 flex items-center justify-between">
-            <h3 className="text-xl font-semibold">{date}</h3>
-            <span className="rounded-full bg-white px-3 py-1 text-xs font-bold">{dateJobs.length} งาน</span>
+    <>
+      {/* คำอธิบายสี */}
+      <div className="mb-4 flex flex-wrap items-center gap-3 rounded-2xl bg-white/60 px-4 py-2 text-xs font-bold text-k2-muted">
+        <span className="flex items-center gap-1"><span className="h-2.5 w-2.5 rounded-full bg-emerald-500" /> เหลือ &gt;5 วัน</span>
+        <span className="flex items-center gap-1"><span className="h-2.5 w-2.5 rounded-full bg-amber-400" /> เหลือ 2-5 วัน</span>
+        <span className="flex items-center gap-1"><span className="h-2.5 w-2.5 rounded-full bg-rose-500" /> เหลือ &lt;2 วัน</span>
+        <span className="flex items-center gap-1"><span className="h-2.5 w-2.5 animate-pulse rounded-full bg-rose-500 ring-2 ring-rose-300" /> ใกล้ส่ง (กระพริบ)</span>
+      </div>
+
+      <div className="grid gap-4 lg:grid-cols-2 xl:grid-cols-3">
+        {Object.keys(grouped).length === 0 ? (
+          <p className="rounded-2xl bg-white/60 px-4 py-8 text-center text-sm font-semibold text-k2-muted">ยังไม่มีงานในปฏิทิน</p>
+        ) : null}
+        {Object.entries(grouped).map(([date, dateJobs]) => {
+          const weekday = (new Date(`${date}T00:00:00`).getDay() + 6) % 7; // จันทร์=0
+          return (
+            <section key={date} className={`rounded-[1.5rem] border border-white/70 ${dayBg[weekday]} p-5 shadow-sm`}>
+              <div className="mb-4 flex items-center justify-between">
+                <h3 className="text-lg font-semibold leading-tight">{formatDay(date)}</h3>
+                <span className="shrink-0 rounded-full bg-white px-3 py-1 text-xs font-bold">{dateJobs.length} งาน</span>
+              </div>
+              <div className="space-y-3">
+                {dateJobs.map((job) => {
+                  const dl = deadlineStyle(job.dueDate);
+                  const team = [job.assignedDesigner, job.assignedProduction].filter((n) => n && n !== "Unassigned");
+                  return (
+                    <button
+                      key={job.id}
+                      onClick={() => setModalJob(job)}
+                      className={`w-full rounded-2xl bg-white/85 p-4 text-left shadow-sm transition hover:bg-white ${dl.blink ? "animate-pulse ring-2 ring-rose-400" : ""}`}
+                    >
+                      <div className="mb-1.5 flex items-center justify-between gap-2">
+                        <span className="flex items-center gap-2 font-bold">
+                          <span className={`h-2.5 w-2.5 shrink-0 rounded-full ${dl.dot}`} />
+                          {job.isExpress ? <Zap className="h-3.5 w-3.5 text-rose-500" /> : null}
+                          {job.id}
+                        </span>
+                        <span className={`shrink-0 rounded-full px-2 py-1 text-[11px] font-bold ${priorityClass[job.priority]}`}>{priorityLabel[job.priority]}</span>
+                      </div>
+                      <p className="font-semibold leading-5">{job.title}</p>
+                      <p className="mt-0.5 text-sm text-k2-muted">🧑 {job.customerName}</p>
+                      <p className="text-sm text-k2-muted">📦 {jobTypeLabel[job.type]}</p>
+                      {team.length ? (
+                        <div className="mt-1.5 flex flex-wrap gap-1">
+                          {team.map((n) => (
+                            <span key={n} className="rounded-full bg-k2-mint/70 px-2 py-0.5 text-[11px] font-bold text-k2-ink">👤 {n}</span>
+                          ))}
+                        </div>
+                      ) : null}
+                      <p className={`mt-2 text-xs font-extrabold ${dl.text}`}>⏰ {dl.label} · {statusLabel[job.status]}</p>
+                    </button>
+                  );
+                })}
+              </div>
+            </section>
+          );
+        })}
+      </div>
+
+      {/* Modal รายละเอียดงาน */}
+      {modalJob ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4 backdrop-blur-sm" onClick={() => setModalJob(null)}>
+          <div className="glass-solid max-h-[88vh] w-full max-w-lg overflow-y-auto rounded-[1.6rem] p-6" onClick={(e) => e.stopPropagation()}>
+            <div className="mb-3 flex items-start justify-between gap-3">
+              <div>
+                <p className="text-sm font-bold text-k2-muted">{modalJob.id}{modalJob.isExpress ? " · ⚡ ด่วน" : ""}</p>
+                <h3 className="text-xl font-extrabold text-k2-ink">{modalJob.title}</h3>
+              </div>
+              <button type="button" onClick={() => setModalJob(null)} className="shrink-0 rounded-full bg-white/70 px-3 py-1 text-sm font-bold text-k2-muted">✕</button>
+            </div>
+
+            <div className="space-y-2 text-sm">
+              <p><span className="font-bold text-k2-muted">สถานะ:</span> {statusLabel[modalJob.status]}</p>
+              <p><span className="font-bold text-k2-muted">สินค้า:</span> 📦 {jobTypeLabel[modalJob.type]} · จำนวน {modalJob.quantity}</p>
+              <p><span className="font-bold text-k2-muted">ลูกค้า:</span> 🧑 {modalJob.customerName}</p>
+              {modalJob.phone ? <p><span className="font-bold text-k2-muted">เบอร์โทร:</span> {modalJob.phone}</p> : null}
+              {modalJob.billingAddress ? <p><span className="font-bold text-k2-muted">ที่อยู่:</span> {modalJob.billingAddress}</p> : null}
+              <p><span className="font-bold text-k2-muted">ผู้รับผิดชอบ:</span> {[modalJob.assignedDesigner, modalJob.assignedProduction].filter((n) => n && n !== "Unassigned").join(", ") || "ยังไม่มอบหมาย"}</p>
+              <p><span className="font-bold text-k2-muted">กำหนดส่ง:</span> {modalJob.dueDate} ({deadlineStyle(modalJob.dueDate).label})</p>
+              {modalJob.description ? <p className="whitespace-pre-wrap"><span className="font-bold text-k2-muted">รายละเอียด:</span> {modalJob.description}</p> : null}
+              {modalJob.files.length ? (
+                <p><span className="font-bold text-k2-muted">ไฟล์แนบ:</span> {modalJob.files.map((f) => f.name).join(", ")}</p>
+              ) : null}
+            </div>
+
+            {/* ปุ่มติดต่อด่วน */}
+            <div className="mt-4 flex flex-wrap gap-2">
+              {modalJob.phone ? (
+                <a href={`tel:${modalJob.phone}`} className="inline-flex items-center gap-1.5 rounded-2xl bg-teal-500 px-4 py-2.5 text-sm font-extrabold text-white">
+                  <Phone className="h-4 w-4" /> โทร
+                </a>
+              ) : null}
+              {modalJob.lineId ? (
+                <a href={`https://line.me/ti/p/~${encodeURIComponent(modalJob.lineId)}`} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1.5 rounded-2xl bg-green-500 px-4 py-2.5 text-sm font-extrabold text-white">
+                  💬 LINE
+                </a>
+              ) : null}
+            </div>
+
+            <button
+              type="button"
+              onClick={() => { const id = modalJob.id; setModalJob(null); onSelect(id); }}
+              className="mt-4 w-full rounded-2xl bg-k2-ink px-4 py-3 font-extrabold text-white"
+            >
+              เปิดรายละเอียดเต็ม →
+            </button>
           </div>
-          <div className="space-y-3">
-            {dateJobs.map((job) => (
-              <button key={job.id} onClick={() => onSelect(job.id)} className="w-full rounded-2xl bg-white/65 p-4 text-left hover:bg-white">
-                <div className="mb-2 flex items-center justify-between">
-                  <span className="font-bold">{job.id}</span>
-                  <span className={`rounded-full px-2 py-1 text-[11px] font-bold ${priorityClass[job.priority]}`}>{priorityLabel[job.priority]}</span>
-                </div>
-                <p className="font-semibold">{job.title}</p>
-                <p className="text-sm text-k2-muted">{job.customerName} - {statusLabel[job.status]}</p>
-              </button>
-            ))}
-          </div>
-        </section>
-      ))}
-    </div>
+        </div>
+      ) : null}
+    </>
   );
 }
 
