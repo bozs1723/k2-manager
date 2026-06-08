@@ -149,6 +149,11 @@ type SupabaseJobRow = {
   production_branch?: string | null;
   acceptance?: "pending" | "accepted" | "rejected" | null;
   reject_reason?: string | null;
+  handoff_status?: string | null;
+  handoff_gate?: string | null;
+  handoff_from_user?: string | null;
+  handoff_from_status?: JobStatus | null;
+  handoff_note?: string | null;
   assigned_designer: string | null;
   assigned_production: string | null;
   price: number | string;
@@ -604,6 +609,34 @@ const FINISHED_STATUSES: JobStatus[] = ["Delivered / Picked Up", "Completed", "C
 // ด่านการเงิน (ก่อนเข้าผลิต) — ต้องผ่าน "มัดจำแล้ว" ก่อนงานจึงเข้าสู่ขั้นผลิตได้
 const FINANCE_PHASE: JobStatus[] = ["Quotation", "Waiting Deposit", "Verifying Payment", "Deposit Confirmed"];
 
+// ด่านส่ง–รับงาน (handoff): ผู้ส่งกดส่ง → งานไปสถานะ "รอตรวจรับ" → ผู้รับ รับ(ผ่าน) หรือ ตีกลับ(พร้อมเหตุผล)
+type HandoffGate = {
+  id: string;
+  label: string;
+  fromStatus: JobStatus;
+  reviewStatus: JobStatus;
+  approveStatus: JobStatus;
+  rejectStatus: JobStatus;
+  senderRoles: Role[];
+  reviewerRoles: Role[];
+};
+const HANDOFF_GATES: HandoffGate[] = [
+  {
+    id: "design_review",
+    label: "ส่งแบบให้ตรวจ",
+    fromStatus: "Designing",
+    reviewStatus: "Waiting for Customer Approval",
+    approveStatus: "Ready for Production",
+    rejectStatus: "Designing",
+    senderRoles: ["Designer"],
+    reviewerRoles: ["Sales Staff", "Manager", "Admin"]
+  }
+];
+const gateById = (id?: string) => HANDOFF_GATES.find((gate) => gate.id === id);
+const gateFromStatus = (status: JobStatus) => HANDOFF_GATES.find((gate) => gate.fromStatus === status);
+const userHasRole = (member: TeamMember, role: Role) => member.role === role || (member.roles ?? []).includes(role);
+const userHasAnyRole = (member: TeamMember, list: Role[]) => list.some((role) => userHasRole(member, role));
+
 type DueUrgency = { days: number; label: string; tone: string; dot: string };
 
 // คำนวณความเร่งด่วนจากจำนวนวันที่เหลือถึงกำหนดส่ง เพื่อแสดงสีและเตือนกันพลาด
@@ -875,6 +908,11 @@ function jobFromRow(
     productionBranch: row.production_branch ?? "",
     acceptance: row.acceptance ?? "accepted",
     rejectReason: row.reject_reason ?? "",
+    handoffStatus: row.handoff_status === "pending" || row.handoff_status === "accepted" ? row.handoff_status : undefined,
+    handoffGate: row.handoff_gate ?? undefined,
+    handoffFromUser: row.handoff_from_user ?? undefined,
+    handoffFromStatus: row.handoff_from_status ?? undefined,
+    handoffNote: row.handoff_note ?? undefined,
     status: row.status,
     assignedDesigner: row.assigned_designer ? profileNames.get(row.assigned_designer) ?? "Unassigned" : "Unassigned",
     assignedProduction: row.assigned_production ? profileNames.get(row.assigned_production) ?? "Unassigned" : "Unassigned",
@@ -1800,6 +1838,16 @@ export default function Page() {
       setDataError("งานนี้รอผู้จัดการสาขายอมรับก่อน จึงจะย้ายสถานะได้");
       return;
     }
+    // ด่านส่ง–รับงาน: งานที่รอตรวจรับอยู่ ห้ามย้ายตรงๆ ต้องให้ผู้ตรวจรับ/ตีกลับก่อน
+    if (job.handoffStatus === "pending") {
+      setDataError("งานนี้กำลังรอตรวจรับ — ให้ผู้ตรวจกดรับหรือตีกลับก่อน");
+      return;
+    }
+    const sendGate = gateFromStatus(job.status);
+    if (sendGate && nextStatus === sendGate.approveStatus) {
+      setDataError(`ต้องส่งตรวจผ่านปุ่ม "${sendGate.label}" ก่อน (กันงานข้ามขั้น)`);
+      return;
+    }
     // ด่านการเงิน 1: ยืนยันมัดจำ ทำได้เฉพาะฝ่ายการเงิน/เจ้าของ
     if (nextStatus === "Deposit Confirmed" && !can("manage_finance")) {
       setDataError("เฉพาะฝ่ายการเงิน (หรือเจ้าของ) เท่านั้นที่ยืนยันมัดจำได้");
@@ -1860,6 +1908,90 @@ export default function Page() {
       }
     }
     void appendAudit("rejected job", job.id, "jobs", job.dbId ?? null);
+  }
+
+  // ===== ด่านส่ง–รับงาน (handoff) =====
+  async function submitHandoff(jobId: string) {
+    const job = jobs.find((item) => item.id === jobId);
+    if (!job) return;
+    const gate = gateFromStatus(job.status);
+    if (!gate) {
+      setDataError("ขั้นตอนนี้ยังไม่มีด่านส่งงาน");
+      return;
+    }
+    if (job.handoffStatus === "pending") {
+      setDataError("งานนี้ส่งตรวจไปแล้ว");
+      return;
+    }
+    if (currentUser.role !== "Owner" && !userHasAnyRole(currentUser, gate.senderRoles)) {
+      setDataError("คุณไม่มีสิทธิ์ส่งงานในขั้นตอนนี้");
+      return;
+    }
+    setJobs((current) => current.map((item) => (item.id === jobId ? { ...item, handoffStatus: "pending", handoffGate: gate.id, handoffFromUser: currentUser.id, handoffFromStatus: job.status, handoffNote: undefined, status: gate.reviewStatus } : item)));
+    if (supabase && job.dbId) {
+      const { error } = await supabase.from("jobs").update({ status: gate.reviewStatus, handoff_status: "pending", handoff_gate: gate.id, handoff_from_user: uuidPattern.test(currentUser.id) ? currentUser.id : null, handoff_from_status: job.status, handoff_note: null }).eq("id", job.dbId);
+      if (error) {
+        setDataError(error.message);
+        void refreshWorkspaceData();
+        return;
+      }
+    }
+    void appendAudit(`submitted handoff ${gate.id}`, job.id, "jobs", job.dbId ?? null);
+    notifyAssignees("status_moved", job, `งาน ${job.id} ส่งตรวจ "${gate.label}" แล้ว`);
+  }
+
+  async function acceptHandoff(jobId: string) {
+    const job = jobs.find((item) => item.id === jobId);
+    if (!job || job.handoffStatus !== "pending") return;
+    const gate = gateById(job.handoffGate);
+    if (!gate) return;
+    if (currentUser.role !== "Owner" && !userHasAnyRole(currentUser, gate.reviewerRoles)) {
+      setDataError("คุณไม่มีสิทธิ์ตรวจรับงานในขั้นตอนนี้");
+      return;
+    }
+    if (currentUser.role !== "Owner" && job.handoffFromUser && job.handoffFromUser === currentUser.id) {
+      setDataError("ผู้ส่งกับผู้รับต้องเป็นคนละคน (กฎกันพลาด)");
+      return;
+    }
+    setJobs((current) => current.map((item) => (item.id === jobId ? { ...item, handoffStatus: undefined, handoffGate: undefined, handoffFromUser: undefined, handoffFromStatus: undefined, handoffNote: undefined, status: gate.approveStatus } : item)));
+    if (supabase && job.dbId) {
+      const { error } = await supabase.from("jobs").update({ status: gate.approveStatus, handoff_status: null, handoff_gate: null, handoff_from_user: null, handoff_from_status: null, handoff_note: null }).eq("id", job.dbId);
+      if (error) {
+        setDataError(error.message);
+        void refreshWorkspaceData();
+        return;
+      }
+    }
+    void appendAudit(`accepted handoff ${gate.id}`, job.id, "jobs", job.dbId ?? null);
+    notifyAssignees("status_moved", job, `งาน ${job.id} ผ่านการตรวจ → "${statusLabel[gate.approveStatus]}"`);
+  }
+
+  async function rejectHandoff(jobId: string, reason: string) {
+    const job = jobs.find((item) => item.id === jobId);
+    if (!job || job.handoffStatus !== "pending") return;
+    const gate = gateById(job.handoffGate);
+    if (!gate) return;
+    if (currentUser.role !== "Owner" && !userHasAnyRole(currentUser, gate.reviewerRoles)) {
+      setDataError("คุณไม่มีสิทธิ์ตรวจรับงานในขั้นตอนนี้");
+      return;
+    }
+    if (currentUser.role !== "Owner" && job.handoffFromUser && job.handoffFromUser === currentUser.id) {
+      setDataError("ผู้ส่งกับผู้รับต้องเป็นคนละคน (กฎกันพลาด)");
+      return;
+    }
+    const cleanReason = reason.trim() || "ไม่ระบุเหตุผล";
+    const bounceTo = job.handoffFromStatus ?? gate.rejectStatus;
+    setJobs((current) => current.map((item) => (item.id === jobId ? { ...item, handoffStatus: undefined, handoffGate: undefined, handoffFromUser: undefined, handoffFromStatus: undefined, handoffNote: cleanReason, status: bounceTo } : item)));
+    if (supabase && job.dbId) {
+      const { error } = await supabase.from("jobs").update({ status: bounceTo, handoff_status: null, handoff_gate: null, handoff_from_user: null, handoff_from_status: null, handoff_note: cleanReason }).eq("id", job.dbId);
+      if (error) {
+        setDataError(error.message);
+        void refreshWorkspaceData();
+        return;
+      }
+    }
+    void appendAudit(`rejected handoff ${gate.id}`, job.id, "jobs", job.dbId ?? null);
+    notifyAssignees("status_moved", job, `งาน ${job.id} ถูกตีกลับ: ${cleanReason}`);
   }
 
   async function moveJob(jobId: string, nextStatus: JobStatus) {
@@ -3379,7 +3511,10 @@ export default function Page() {
             {activeView === "Detail" && (
               <motion.div key="detail" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}>
                 {selectedJob ? (
+                  <>
+                  <HandoffPanel job={selectedJob} currentUser={currentUser} onSubmit={submitHandoff} onAccept={acceptHandoff} onReject={rejectHandoff} />
                   <JobDetail job={selectedJob} companyProfile={companyProfile} canSeeMoney={canSeeMoney} canEditPayment={can("edit_payment")} canDeleteJob={can("delete_job")} canConfirmDeposit={["Owner", "Manager", "Admin"].includes(currentUser.role)} canApproveWaiver={currentUser.role === "Owner"} onPayment={updatePayment} onConfirmDeposit={confirmDeposit} onReceiveBalance={receiveBalance} onComment={addComment} onMove={requestMove} onDelete={removeJob} />
+                  </>
                 ) : (
                   <EmptyState title="ยังไม่มีงานในระบบ" text="เริ่มจากสร้างลูกค้าและสร้างงานแรกได้เลย" action={() => setActiveView("Create Job")} />
                 )}
@@ -4208,6 +4343,64 @@ function Board({
         );
       })}
     </div>
+  );
+}
+
+function HandoffPanel({ job, currentUser, onSubmit, onAccept, onReject }: {
+  job: Job;
+  currentUser: TeamMember;
+  onSubmit: (jobId: string) => void;
+  onAccept: (jobId: string) => void;
+  onReject: (jobId: string, reason: string) => void;
+}) {
+  const [reason, setReason] = useState("");
+  const [rejecting, setRejecting] = useState(false);
+  const isOwner = currentUser.role === "Owner";
+  const pending = job.handoffStatus === "pending";
+  const pendingGate = pending ? gateById(job.handoffGate) : undefined;
+  const sendGate = !pending ? gateFromStatus(job.status) : undefined;
+  const canSend = Boolean(sendGate) && (isOwner || (sendGate ? userHasAnyRole(currentUser, sendGate.senderRoles) : false));
+  const isReviewer = Boolean(pendingGate) && (isOwner || (pendingGate ? userHasAnyRole(currentUser, pendingGate.reviewerRoles) : false));
+  const isSubmitter = Boolean(job.handoffFromUser) && job.handoffFromUser === currentUser.id;
+  const canReview = pending && isReviewer && (isOwner || !isSubmitter);
+  if (!pending && !canSend && !job.handoffNote) return null;
+  return (
+    <section className="glass mb-4 rounded-[1.5rem] p-5">
+      <p className="text-sm font-semibold text-k2-muted">ส่ง–รับงาน</p>
+      {pending && pendingGate ? (
+        <div className="mt-2">
+          <p className="text-lg font-extrabold text-amber-700">⏳ รอตรวจรับ · {pendingGate.label}</p>
+          <p className="text-sm font-semibold text-k2-muted">ผู้ตรวจ: {pendingGate.reviewerRoles.map((role) => roleLabel[role]).join(" / ")}</p>
+          {canReview ? (
+            rejecting ? (
+              <div className="mt-3 space-y-2">
+                <input value={reason} onChange={(event) => setReason(event.target.value)} placeholder="เหตุผลที่ตีกลับ (ให้ผู้ส่งแก้)" className="w-full rounded-xl border border-white/80 bg-white/85 px-3 py-2 text-sm outline-none" />
+                <div className="flex gap-2">
+                  <button type="button" onClick={() => { onReject(job.id, reason); setRejecting(false); setReason(""); }} className="flex-1 rounded-xl bg-rose-500 px-3 py-2 text-sm font-bold text-white">ยืนยันตีกลับ</button>
+                  <button type="button" onClick={() => setRejecting(false)} className="flex-1 rounded-xl bg-white/80 px-3 py-2 text-sm font-bold text-k2-muted">ยกเลิก</button>
+                </div>
+              </div>
+            ) : (
+              <div className="mt-3 flex gap-2">
+                <button type="button" onClick={() => onAccept(job.id)} className="flex-1 rounded-xl bg-emerald-500 px-3 py-2 text-sm font-bold text-white">รับงาน (ผ่าน)</button>
+                <button type="button" onClick={() => setRejecting(true)} className="flex-1 rounded-xl bg-rose-100 px-3 py-2 text-sm font-bold text-rose-700">ตีกลับ</button>
+              </div>
+            )
+          ) : isReviewer && isSubmitter ? (
+            <p className="mt-3 rounded-xl bg-amber-50 px-3 py-2 text-sm font-semibold text-amber-700">คุณเป็นผู้ส่งงานนี้ — ให้คนอื่นเป็นผู้ตรวจรับ (กฎกันพลาด)</p>
+          ) : (
+            <p className="mt-3 text-sm font-semibold text-k2-muted">รอผู้มีสิทธิ์ตรวจรับ</p>
+          )}
+        </div>
+      ) : canSend && sendGate ? (
+        <div className="mt-2">
+          {job.handoffNote ? <p className="mb-2 rounded-xl bg-rose-50 px-3 py-2 text-sm font-semibold text-rose-700">↩︎ ถูกตีกลับล่าสุด: {job.handoffNote}</p> : null}
+          <button type="button" onClick={() => onSubmit(job.id)} className="rounded-2xl bg-k2-ink px-5 py-3 text-sm font-bold text-white">{sendGate.label}</button>
+        </div>
+      ) : job.handoffNote ? (
+        <p className="mt-2 rounded-xl bg-rose-50 px-3 py-2 text-sm font-semibold text-rose-700">↩︎ ถูกตีกลับล่าสุด: {job.handoffNote}</p>
+      ) : null}
+    </section>
   );
 }
 

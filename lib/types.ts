@@ -201,6 +201,11 @@ export type Job = {
   productionBranch?: string;
   acceptance?: "pending" | "accepted" | "rejected";
   rejectReason?: string;
+  handoffStatus?: "pending" | "accepted";
+  handoffGate?: string;
+  handoffFromUser?: string;
+  handoffFromStatus?: JobStatus;
+  handoffNote?: string;
   status: JobStatus;
   assignedDesigner: string;
   assignedProduction: string;
