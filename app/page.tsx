@@ -88,7 +88,8 @@ type PermissionKey =
   | "manage_permissions"
   | "manage_company_settings"
   | "view_audit_log"
-  | "manage_hr";
+  | "manage_hr"
+  | "manage_finance";
 
 type SupabaseProfileRow = {
   id: string;
@@ -210,6 +211,10 @@ const priorityClass: Record<Priority, string> = {
 };
 
 const statusTint: Record<JobStatus, string> = {
+  Quotation: "bg-slate-100 text-slate-600",
+  "Waiting Deposit": "bg-amber-100 text-amber-700",
+  "Verifying Payment": "bg-yellow-100 text-yellow-700",
+  "Deposit Confirmed": "bg-teal-100 text-teal-700",
   "New Order": "bg-sky-100 text-sky-700",
   "Waiting for File": "bg-slate-100 text-slate-600",
   Designing: "bg-violet-100 text-violet-700",
@@ -224,6 +229,10 @@ const statusTint: Record<JobStatus, string> = {
 };
 
 const statusDot: Record<JobStatus, string> = {
+  Quotation: "bg-slate-400",
+  "Waiting Deposit": "bg-amber-400",
+  "Verifying Payment": "bg-yellow-400",
+  "Deposit Confirmed": "bg-teal-400",
   "New Order": "bg-sky-400",
   "Waiting for File": "bg-slate-400",
   Designing: "bg-violet-400",
@@ -239,7 +248,7 @@ const statusDot: Record<JobStatus, string> = {
 
 const permissionGroups: Array<{ title: string; permissions: PermissionKey[] }> = [
   { title: "งานและคิวผลิต", permissions: ["view_dashboard", "create_job", "edit_job", "delete_job", "move_status", "assign_staff"] },
-  { title: "ลูกค้าและบัญชี", permissions: ["create_customer", "edit_customer", "delete_customer", "view_finance", "edit_payment", "export_quote"] },
+  { title: "ลูกค้าและบัญชี", permissions: ["create_customer", "edit_customer", "delete_customer", "view_finance", "edit_payment", "export_quote", "manage_finance"] },
   { title: "ผู้ใช้และระบบ", permissions: ["manage_users", "manage_permissions", "manage_company_settings", "view_audit_log"] },
   { title: "บุคคล (HR)", permissions: ["manage_hr"] }
 ];
@@ -247,10 +256,11 @@ const permissionGroups: Array<{ title: string; permissions: PermissionKey[] }> =
 const allPermissionKeys = permissionGroups.flatMap((group) => group.permissions);
 
 const defaultRolePermissions: Record<Role, PermissionKey[]> = {
-  Owner: ["view_dashboard", "create_job", "edit_job", "delete_job", "move_status", "assign_staff", "view_finance", "edit_payment", "create_customer", "edit_customer", "delete_customer", "export_quote", "manage_users", "manage_permissions", "manage_company_settings", "view_audit_log", "manage_hr"],
+  Owner: ["view_dashboard", "create_job", "edit_job", "delete_job", "move_status", "assign_staff", "view_finance", "edit_payment", "create_customer", "edit_customer", "delete_customer", "export_quote", "manage_users", "manage_permissions", "manage_company_settings", "view_audit_log", "manage_hr", "manage_finance"],
   Manager: ["view_dashboard", "create_job", "edit_job", "move_status", "assign_staff", "view_finance", "edit_payment", "create_customer", "edit_customer", "export_quote", "view_audit_log"],
   Admin: ["view_dashboard", "create_job", "edit_job", "move_status", "assign_staff", "view_finance", "edit_payment", "create_customer", "edit_customer", "export_quote", "manage_users", "view_audit_log"],
   HR: ["view_dashboard", "manage_hr", "manage_users"],
+  Accounting: ["view_dashboard", "move_status", "view_finance", "edit_payment", "manage_finance", "export_quote"],
   Designer: ["view_dashboard", "edit_job", "move_status"],
   "Production Staff": ["view_dashboard", "edit_job", "move_status"],
   "Packing Staff": ["view_dashboard", "edit_job", "move_status"],
@@ -262,13 +272,14 @@ const roleSummaryPermissions: Record<Role, string[]> = {
   Manager: ["Jobs", "Financials", "Assignments", "Reports"],
   Admin: ["Jobs", "Payments", "Assignments", "Audit log"],
   HR: ["HR & payroll", "Salaries", "Attendance", "Leave"],
+  Accounting: ["Payments", "Financials", "manage_finance", "export_quote"],
   Designer: ["Design queue", "Files", "Comments", "Approval status"],
   "Production Staff": ["Production queue", "QC", "Internal notes"],
   "Packing Staff": ["Packing", "Delivery status", "QC notes"],
   "Sales Staff": ["Orders", "Customers", "Payment intake"]
 };
 
-const roles: Role[] = ["Owner", "Manager", "Admin", "HR", "Designer", "Production Staff", "Packing Staff", "Sales Staff"];
+const roles: Role[] = ["Owner", "Manager", "Admin", "HR", "Accounting", "Designer", "Production Staff", "Packing Staff", "Sales Staff"];
 const BRANCH_LIST = ["พะเยา", "กรุงเทพ"];
 
 // ระยะห่างระหว่างพิกัด (เมตร) — สูตร haversine
@@ -362,11 +373,16 @@ const viewLabel: Record<string, string> = {
   HR: "ฝ่ายบุคคล (HR)",
   Attendance: "ลงเวลา",
   Leave: "การลา",
+  Payroll: "เงินเดือน / สลิป",
   Detail: "รายละเอียดงาน",
   Audit: "ประวัติการแก้ไข"
 };
 
 const statusLabel: Record<JobStatus, string> = {
+  Quotation: "รอเสนอราคา",
+  "Waiting Deposit": "รอมัดจำ",
+  "Verifying Payment": "รอตรวจสอบยอด",
+  "Deposit Confirmed": "มัดจำแล้ว",
   "New Order": "รับงานใหม่",
   "Waiting for File": "รอไฟล์",
   Designing: "กำลังออกแบบ",
@@ -392,6 +408,7 @@ const roleLabel: Record<Role, string> = {
   Manager: "ผู้จัดการ",
   Admin: "แอดมิน",
   HR: "ฝ่ายบุคคล (HR)",
+  Accounting: "ฝ่ายการเงิน",
   Designer: "ดีไซเนอร์",
   "Production Staff": "ฝ่ายผลิต",
   "Packing Staff": "ฝ่ายแพ็กของ",
@@ -438,6 +455,7 @@ const permissionLabel: Record<string, string> = {
   manage_company_settings: "ตั้งค่าบริษัท",
   view_audit_log: "ดูประวัติการแก้ไข",
   manage_hr: "จัดการ HR / เงินเดือน",
+  manage_finance: "ยืนยันมัดจำ / การเงิน",
   "HR & payroll": "HR / เงินเดือน",
   Salaries: "เงินเดือน",
   Attendance: "ลงเวลา",
@@ -514,6 +532,8 @@ function addDaysISO(isoDate: string, days: number) {
 
 // สถานะที่ถือว่างานจบแล้ว ไม่ต้องเตือน/แสดงสีเร่งด่วน
 const FINISHED_STATUSES: JobStatus[] = ["Delivered / Picked Up", "Completed", "Cancelled"];
+// ด่านการเงิน (ก่อนเข้าผลิต) — ต้องผ่าน "มัดจำแล้ว" ก่อนงานจึงเข้าสู่ขั้นผลิตได้
+const FINANCE_PHASE: JobStatus[] = ["Quotation", "Waiting Deposit", "Verifying Payment", "Deposit Confirmed"];
 
 type DueUrgency = { days: number; label: string; tone: string; dot: string };
 
@@ -932,6 +952,8 @@ export default function Page() {
   const [allAttendance, setAllAttendance] = useState<Attendance[]>([]);
   const [leaveRequests, setLeaveRequests] = useState<LeaveRequest[]>([]);
   const [holidays, setHolidays] = useState<Holiday[]>([]);
+  const [payrollMonth, setPayrollMonth] = useState(todayISO().slice(0, 7));
+  const [payrollSummary, setPayrollSummary] = useState<Record<string, { present: number; late: number; lateMin: number; leaveDays: number }>>({});
   const [notifications, setNotifications] = useState<AppNotification[]>([]);
   const [showNotifPanel, setShowNotifPanel] = useState(false);
   const notifPanelRef = useRef<HTMLDivElement>(null);
@@ -959,6 +981,7 @@ export default function Page() {
         { label: "Attendance", icon: Clock3, visible: currentRolePermissions.includes("view_dashboard") },
         { label: "Leave", icon: CalendarDays, visible: currentRolePermissions.includes("view_dashboard") },
         { label: "HR", icon: UsersRound, visible: currentRolePermissions.includes("manage_hr") },
+        { label: "Payroll", icon: WalletCards, visible: currentRolePermissions.includes("manage_hr") },
         { label: "Settings", icon: Settings, visible: true },
         { label: "Detail", icon: FileImage, visible: currentRolePermissions.includes("view_dashboard") },
         { label: "Audit", icon: ShieldCheck, visible: currentRolePermissions.includes("view_audit_log") }
@@ -1169,8 +1192,16 @@ export default function Page() {
       void loadLeaves();
       void loadHolidays();
     }
+    if (activeView === "Payroll") {
+      void loadHrRecords();
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isAuthed, activeView]);
+
+  useEffect(() => {
+    if (isAuthed && activeView === "Payroll") void loadPayroll(payrollMonth);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isAuthed, activeView, payrollMonth]);
 
   async function refreshWorkspaceData(options?: { silent?: boolean }) {
     if (!supabase) return;
@@ -1463,6 +1494,17 @@ export default function Page() {
       setDataError("งานนี้รอผู้จัดการสาขายอมรับก่อน จึงจะย้ายสถานะได้");
       return;
     }
+    // ด่านการเงิน 1: ยืนยันมัดจำ ทำได้เฉพาะฝ่ายการเงิน/เจ้าของ
+    if (nextStatus === "Deposit Confirmed" && !can("manage_finance")) {
+      setDataError("เฉพาะฝ่ายการเงิน (หรือเจ้าของ) เท่านั้นที่ยืนยันมัดจำได้");
+      return;
+    }
+    // ด่านการเงิน 2: ห้ามข้ามเข้าขั้นผลิต จนกว่าฝ่ายการเงินจะยืนยันมัดจำ (สถานะต้องถึง "มัดจำแล้ว" ก่อน)
+    const movingIntoProduction = !FINANCE_PHASE.includes(nextStatus) && nextStatus !== "Cancelled";
+    if (movingIntoProduction && FINANCE_PHASE.includes(job.status) && job.status !== "Deposit Confirmed") {
+      setDataError("ต้องผ่านการยืนยันมัดจำจากฝ่ายการเงินก่อน จึงจะเข้าสู่ขั้นผลิตได้");
+      return;
+    }
     setPendingMove({ jobId, from: job.status, to: nextStatus });
   }
 
@@ -1744,7 +1786,7 @@ export default function Page() {
               production_branch: input?.productionBranch ?? null,
               acceptance: jobAcceptance,
               reject_reason: null,
-              status: "New Order",
+              status: "Quotation",
               assigned_designer: teamIdByName(teamMembers, input?.assignedDesigner),
               assigned_production: teamIdByName(teamMembers, input?.assignedProduction),
               price,
@@ -1765,7 +1807,7 @@ export default function Page() {
           await supabase.from("job_status_history").insert({
             job_id: insertedJob.id,
             from_status: null,
-            to_status: "New Order",
+            to_status: "Quotation",
             changed_by: currentUser.id
           });
         }
@@ -1817,7 +1859,7 @@ export default function Page() {
       productionBranch: input?.productionBranch ?? "",
       acceptance: jobAcceptance,
       rejectReason: "",
-      status: "New Order",
+      status: "Quotation",
       assignedDesigner: input?.assignedDesigner ?? "Beam S.",
       assignedProduction: input?.assignedProduction ?? "Unassigned",
       price,
@@ -1826,7 +1868,7 @@ export default function Page() {
       paymentStatus: getPaymentStatus(price, deposit),
       internalNotes: input?.internalNotes ?? "สร้างจากฟอร์มสร้างงาน",
       comments: [],
-      statusHistory: [{ id: crypto.randomUUID(), from: "Created", to: "New Order", by: currentUser.name, at: new Date().toLocaleString("en-GB") }]
+      statusHistory: [{ id: crypto.randomUUID(), from: "Created", to: "Quotation", by: currentUser.name, at: new Date().toLocaleString("en-GB") }]
     };
     if (isNewCustomer) {
       setCustomerRecords((current) => [
@@ -2142,6 +2184,36 @@ export default function Page() {
     if (supabase && uuidPattern.test(id)) {
       await supabase.from("holidays").delete().eq("id", id);
     }
+  }
+
+  // HR-4: ดึงข้อมูลลงเวลา + ลา ของเดือนที่เลือก มาสรุปต่อพนักงาน (ใช้คำนวณเงินเดือน)
+  async function loadPayroll(month: string) {
+    if (!can("manage_hr") || !supabase) return;
+    const start = `${month}-01`;
+    const [year, mon] = month.split("-").map(Number);
+    const lastDay = new Date(year, mon, 0).getDate();
+    const end = `${month}-${String(lastDay).padStart(2, "0")}`;
+    const [attRes, leaveRes] = await Promise.all([
+      supabase.from("attendance").select("profile_id, status, late_minutes, check_in_at").gte("work_date", start).lte("work_date", end),
+      supabase.from("leave_requests").select("profile_id, start_date, end_date, status").eq("status", "approved").lte("start_date", end).gte("end_date", start)
+    ]);
+    const summary: Record<string, { present: number; late: number; lateMin: number; leaveDays: number }> = {};
+    const ensure = (id: string) => (summary[id] = summary[id] ?? { present: 0, late: 0, lateMin: 0, leaveDays: 0 });
+    ((attRes.data ?? []) as Array<{ profile_id: string; status: string | null; late_minutes: number | null; check_in_at: string | null }>).forEach((row) => {
+      const s = ensure(row.profile_id);
+      if (row.check_in_at) s.present += 1;
+      if (row.status === "late") {
+        s.late += 1;
+        s.lateMin += row.late_minutes ?? 0;
+      }
+    });
+    ((leaveRes.data ?? []) as Array<{ profile_id: string; start_date: string; end_date: string }>).forEach((row) => {
+      const s = ensure(row.profile_id);
+      const ls = new Date(row.start_date > start ? row.start_date : start);
+      const le = new Date(row.end_date < end ? row.end_date : end);
+      s.leaveDays += Math.max(0, Math.round((le.getTime() - ls.getTime()) / 86400000) + 1);
+    });
+    setPayrollSummary(summary);
   }
 
   async function saveHrRecord(memberId: string, record: { salary: number; position: string; startDate: string }) {
@@ -2693,14 +2765,15 @@ export default function Page() {
                   )}
                 </div>
 
-                <button
-                  onClick={() => setActiveView("Create Job")}
-                  disabled={!can("create_job")}
-                  className="inline-flex items-center justify-center gap-2 rounded-2xl bg-k2-ink px-4 py-2.5 text-sm font-semibold text-white shadow-lg shadow-slate-900/15"
-                >
-                  <Plus className="h-4 w-4" />
-                  สร้างงาน
-                </button>
+                {can("create_job") ? (
+                  <button
+                    onClick={() => setActiveView("Create Job")}
+                    className="inline-flex items-center justify-center gap-2 rounded-2xl bg-k2-ink px-4 py-2.5 text-sm font-semibold text-white shadow-lg shadow-slate-900/15"
+                  >
+                    <Plus className="h-4 w-4" />
+                    สร้างงาน
+                  </button>
+                ) : null}
                 <button
                   onClick={signOut}
                   className="inline-flex items-center justify-center gap-2 rounded-2xl bg-white/70 px-4 py-2.5 text-sm font-semibold text-k2-muted shadow-sm"
@@ -2869,6 +2942,18 @@ export default function Page() {
                   isHr={can("manage_hr")}
                   onSubmit={submitLeave}
                   onReview={reviewLeave}
+                />
+              </motion.div>
+            )}
+            {activeView === "Payroll" && (
+              <motion.div key="payroll" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}>
+                <PayrollView
+                  teamMembers={teamMembers}
+                  records={hrRecords}
+                  summary={payrollSummary}
+                  month={payrollMonth}
+                  onMonthChange={setPayrollMonth}
+                  companyName={companyProfile.legalName || companyProfile.name}
                 />
               </motion.div>
             )}
@@ -4457,7 +4542,7 @@ function CreateJobView({
           <div className="mt-4 space-y-3">
             <MiniStat label="ยอดคงเหลือ" value={money.format(Math.max(form.price - form.deposit, 0))} />
             <MiniStat label="สถานะชำระเงิน" value={paymentLabel[getPaymentStatus(form.price, form.deposit)]} />
-            <MiniStat label="สถานะแรก" value={statusLabel["New Order"]} />
+            <MiniStat label="สถานะแรก" value={statusLabel["Quotation"]} />
           </div>
           {formError ? (
             <p className="mt-4 rounded-2xl bg-amber-50 px-4 py-3 text-sm font-bold text-amber-700">{formError}</p>
@@ -5585,6 +5670,117 @@ function MiniStat({ label, value }: { label: string; value: string | number }) {
 const leaveTypeLabel: Record<LeaveRequest["leaveType"], string> = { sick: "ลาป่วย", personal: "ลากิจ", vacation: "ลาพักร้อน" };
 const leaveStatusLabel: Record<LeaveRequest["status"], string> = { pending: "รออนุมัติ", approved: "อนุมัติแล้ว", rejected: "ไม่อนุมัติ" };
 const leaveStatusTone: Record<LeaveRequest["status"], string> = { pending: "bg-amber-100 text-amber-800", approved: "bg-emerald-100 text-emerald-700", rejected: "bg-rose-100 text-rose-700" };
+
+function PayrollView({
+  teamMembers,
+  records,
+  summary,
+  month,
+  onMonthChange,
+  companyName
+}: {
+  teamMembers: TeamMember[];
+  records: Record<string, { salary: number; position: string; startDate: string }>;
+  summary: Record<string, { present: number; late: number; lateMin: number; leaveDays: number }>;
+  month: string;
+  onMonthChange: (month: string) => void;
+  companyName: string;
+}) {
+  const [deductions, setDeductions] = useState<Record<string, string>>({});
+  const [bonuses, setBonuses] = useState<Record<string, string>>({});
+  const staff = teamMembers.filter((member) => member.role !== "Owner");
+  const netPay = (id: string, base: number) => Math.max(0, base - (Number(deductions[id]) || 0) + (Number(bonuses[id]) || 0));
+
+  function printSlip(member: TeamMember, base: number) {
+    const s = summary[member.id] ?? { present: 0, late: 0, lateMin: 0, leaveDays: 0 };
+    const ded = Number(deductions[member.id]) || 0;
+    const bon = Number(bonuses[member.id]) || 0;
+    const net = netPay(member.id, base);
+    const baht = (value: number) => value.toLocaleString("th-TH", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    const win = window.open("", "_blank", "width=520,height=720");
+    if (!win) return;
+    win.document.write(
+      `<!doctype html><html><head><meta charset="utf-8"><title>สลิปเงินเดือน ${member.name}</title>` +
+        `<style>body{font-family:'Sarabun','Noto Sans Thai',sans-serif;padding:28px;color:#1f2a3d}h1{font-size:18px;margin:0}h2{font-size:15px;margin:18px 0 6px}table{width:100%;border-collapse:collapse;font-size:14px}td{padding:6px 0}td:last-child{text-align:right}.tot{border-top:2px solid #333;font-weight:700;font-size:16px}.muted{color:#637f82;font-size:13px}</style></head><body>` +
+        `<h1>${companyName}</h1><p class="muted">สลิปเงินเดือน · ประจำเดือน ${month}</p>` +
+        `<h2>${member.name} · ${records[member.id]?.position || roleLabel[member.role]}</h2>` +
+        `<table>` +
+        `<tr><td>วันมาทำงาน</td><td>${s.present} วัน</td></tr>` +
+        `<tr><td>มาสาย</td><td>${s.late} วัน (${s.lateMin} นาที)</td></tr>` +
+        `<tr><td>ลา (อนุมัติ)</td><td>${s.leaveDays} วัน</td></tr>` +
+        `<tr><td>เงินเดือนฐาน</td><td>${baht(base)} บาท</td></tr>` +
+        `<tr><td>หักเงิน</td><td>- ${baht(ded)} บาท</td></tr>` +
+        `<tr><td>โบนัส/เพิ่ม</td><td>+ ${baht(bon)} บาท</td></tr>` +
+        `<tr class="tot"><td>เงินสุทธิ</td><td>${baht(net)} บาท</td></tr>` +
+        `</table><p class="muted" style="margin-top:24px">ออกโดยระบบ K2Smart</p></body></html>`
+    );
+    win.document.close();
+    win.focus();
+    win.print();
+  }
+
+  return (
+    <div className="space-y-4">
+      <section className="glass rounded-[1.5rem] p-5">
+        <p className="text-sm font-semibold text-k2-muted">เงินเดือน / สลิป</p>
+        <h3 className="text-2xl font-semibold">คำนวณเงินเดือนรายเดือน</h3>
+        <div className="mt-3 flex flex-wrap items-center gap-3">
+          <input type="month" value={month} onChange={(event) => onMonthChange(event.target.value)} className="rounded-2xl border border-white/80 bg-white/85 px-3 py-2 text-sm outline-none" />
+          <span className="text-sm font-semibold text-k2-muted">ระบบดึงวันมาทำงาน/สาย/ลา อัตโนมัติ — กรอก "หักเงิน/โบนัส" ตามนโยบาย แล้วพิมพ์สลิป</span>
+        </div>
+      </section>
+
+      <section className="glass soft-scrollbar overflow-x-auto rounded-[1.5rem] p-5">
+        <table className="w-full min-w-[820px] text-sm">
+          <thead className="text-xs uppercase tracking-wide text-k2-muted">
+            <tr className="text-left">
+              <th className="pb-3">พนักงาน</th>
+              <th className="pb-3">มาทำงาน</th>
+              <th className="pb-3">สาย</th>
+              <th className="pb-3">ลา</th>
+              <th className="pb-3">เงินเดือนฐาน</th>
+              <th className="pb-3">หักเงิน</th>
+              <th className="pb-3">โบนัส</th>
+              <th className="pb-3">เงินสุทธิ</th>
+              <th className="pb-3">สลิป</th>
+            </tr>
+          </thead>
+          <tbody>
+            {staff.map((member) => {
+              const base = records[member.id]?.salary ?? 0;
+              const s = summary[member.id] ?? { present: 0, late: 0, lateMin: 0, leaveDays: 0 };
+              return (
+                <tr key={member.id} className="border-t border-white/60">
+                  <td className="py-3">
+                    <p className="font-bold">{member.name}</p>
+                    <p className="text-xs text-k2-muted">{member.branch ? `สาขา${member.branch}` : "-"}</p>
+                  </td>
+                  <td className="py-3">{s.present} วัน</td>
+                  <td className="py-3">{s.late} วัน{s.lateMin ? ` (${s.lateMin} น.)` : ""}</td>
+                  <td className="py-3">{s.leaveDays} วัน</td>
+                  <td className="py-3">{money.format(base)}</td>
+                  <td className="py-3">
+                    <input type="number" value={deductions[member.id] ?? ""} onChange={(event) => setDeductions((current) => ({ ...current, [member.id]: event.target.value }))} className="w-24 rounded-xl border border-white/80 bg-white/85 px-2 py-1 outline-none" placeholder="0" />
+                  </td>
+                  <td className="py-3">
+                    <input type="number" value={bonuses[member.id] ?? ""} onChange={(event) => setBonuses((current) => ({ ...current, [member.id]: event.target.value }))} className="w-24 rounded-xl border border-white/80 bg-white/85 px-2 py-1 outline-none" placeholder="0" />
+                  </td>
+                  <td className="py-3 font-extrabold">{money.format(netPay(member.id, base))}</td>
+                  <td className="py-3">
+                    <button type="button" onClick={() => printSlip(member, base)} className="rounded-xl bg-k2-ink px-3 py-2 text-xs font-bold text-white">พิมพ์</button>
+                  </td>
+                </tr>
+              );
+            })}
+            {staff.length === 0 ? (
+              <tr><td colSpan={9} className="py-4 text-center text-sm font-semibold text-k2-muted">ยังไม่มีพนักงาน</td></tr>
+            ) : null}
+          </tbody>
+        </table>
+      </section>
+    </div>
+  );
+}
 
 function LeaveView({
   currentUser,

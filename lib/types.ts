@@ -13,6 +13,7 @@ export type Role =
   | "Manager"
   | "Admin"
   | "HR"
+  | "Accounting"
   | "Designer"
   | "Production Staff"
   | "Packing Staff"
@@ -24,6 +25,10 @@ export type PaymentStatus = "unpaid" | "partial" | "paid";
 export type QuoteStatus = "draft" | "sent" | "approved" | "expired";
 
 export type JobStatus =
+  | "Quotation"
+  | "Waiting Deposit"
+  | "Verifying Payment"
+  | "Deposit Confirmed"
   | "New Order"
   | "Waiting for File"
   | "Designing"

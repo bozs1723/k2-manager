@@ -1,6 +1,10 @@
 import type { AuditEvent, Customer, Job, JobStatus, TeamMember } from "./types";
 
 export const statuses: JobStatus[] = [
+  "Quotation",
+  "Waiting Deposit",
+  "Verifying Payment",
+  "Deposit Confirmed",
   "New Order",
   "Waiting for File",
   "Designing",
