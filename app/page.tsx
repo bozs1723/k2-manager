@@ -1435,8 +1435,15 @@ export default function Page() {
 
   // เจ้าของ/คนไม่มีสาขาประจำ → เห็นทุกสาขา; คนมีสาขา → เห็นเฉพาะงานสาขาตัวเอง + งานที่ยังไม่ระบุสาขา
   const branchScopedJobs = useMemo(() => {
-    if (currentUser.role === "Owner" || !currentUser.branch) return jobs;
-    return jobs.filter((job) => !job.productionBranch || job.productionBranch === currentUser.branch);
+    const byBranch = (currentUser.role === "Owner" || !currentUser.branch)
+      ? jobs
+      : jobs.filter((job) => !job.productionBranch || job.productionBranch === currentUser.branch);
+    // ฝ่ายผลิต (ดีไซเนอร์/ผลิต/แพ็ก) เห็นเฉพาะงานที่ยืนยันมัดจำแล้ว
+    // งานเก่าที่ไม่มีสลิป (ก่อนมีระบบนี้) ไม่ถูกกั้น เพื่อไม่ให้งานเดิมหายจากคิว
+    if (["Designer", "Production Staff", "Packing Staff"].includes(currentUser.role)) {
+      return byBranch.filter((job) => job.depositConfirmed || !job.depositSlip);
+    }
+    return byBranch;
   }, [jobs, currentUser.role, currentUser.branch]);
 
   const filteredJobs = useMemo(() => {
@@ -3865,6 +3872,9 @@ function Board({
                     </div>
                     <p className="font-semibold leading-5">{job.title}</p>
                     <p className="mt-1 text-sm text-k2-muted">{job.customerName}</p>
+                    {!job.depositConfirmed && job.depositSlip ? (
+                      <span className="mt-2 inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-bold text-amber-700">รอยืนยันมัดจำ</span>
+                    ) : null}
                     <div className="mt-4 flex items-center justify-between gap-2 text-xs font-semibold text-k2-muted">
                       <span>{jobTypeLabel[job.type]}</span>
                       {urgency ? (
