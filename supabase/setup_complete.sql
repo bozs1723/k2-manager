@@ -2,7 +2,7 @@
 -- K2 Manager — ไฟล์ติดตั้งฐานข้อมูลครบในไฟล์เดียว (รันรอบเดียวจบ)
 -- วิธีใช้: Supabase → SQL Editor → New query → วางทั้งหมด → Run
 -- ปลอดภัย/รันซ้ำได้ (idempotent) — ไม่ลบข้อมูลเดิม
--- สร้างจาก: setup_safe.sql + migrations ทั้งหมดถึง 2026-06-07 (customer source)
+-- สร้างจาก: setup_safe.sql + migrations ทั้งหมดถึง 2026-06-07 (balance payment)
 -- ============================================================
 
 -- ===== [1] schema หลัก (ตาราง/สิทธิ์/seed) =====
@@ -1025,3 +1025,12 @@ end $$;
 
 alter table public.customers add column if not exists source_channel text;   -- Facebook | LINE | หน้าร้าน | TikTok | Website | Shopee | อื่น ๆ
 alter table public.customers add column if not exists source_page text;       -- ชื่อเพจ/ชื่อไลน์ เช่น K2Sign, @k2sign
+
+-- ============================================================
+-- ===== migration: 20260607110000_balance_payment =====
+-- ============================================================
+-- รับเงินส่วนที่เหลือ (ยอดคงเหลือ) + สลิป ตอนปิดงาน
+-- ปลอดภัย/รันซ้ำได้ (idempotent)
+
+alter table public.jobs add column if not exists balance_slip text;            -- รูปสลิปยอดคงเหลือ (data URL)
+alter table public.jobs add column if not exists balance_received_date date;   -- วันที่รับเงินส่วนที่เหลือ
