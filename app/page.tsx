@@ -2617,7 +2617,7 @@ export default function Page() {
     void appendAudit("created customer", nextCustomer.name, "customers");
   }
 
-  async function updateCustomer(customerId: string, updates: Pick<Customer, "name" | "phone" | "lineId" | "email" | "companyName" | "taxId" | "branch" | "billingAddress" | "accountingEmail" | "requiresInvoice">) {
+  async function updateCustomer(customerId: string, updates: Pick<Customer, "name" | "phone" | "lineId" | "email" | "companyName" | "taxId" | "branch" | "billingAddress" | "accountingEmail" | "requiresInvoice" | "notes">) {
     if (!can("edit_customer")) {
       setDataError("บทบาทนี้ยังไม่มีสิทธิ์แก้ไขลูกค้า");
       return;
@@ -6103,6 +6103,12 @@ function CalendarView({ jobs, onSelect }: { jobs: Job[]; onSelect: (id: string) 
   );
 }
 
+function loyaltyBadge(orders: number, ltv: number): { label: string; emoji: string; cls: string } {
+  if (orders >= 10 || ltv >= 100000) return { label: "VIP", emoji: "🥇", cls: "bg-amber-100 text-amber-700" };
+  if (orders >= 3) return { label: "ลูกค้าประจำ", emoji: "🥈", cls: "bg-sky-100 text-sky-700" };
+  return { label: "ลูกค้าใหม่", emoji: "🥉", cls: "bg-orange-100 text-orange-700" };
+}
+
 function CustomersView({
   customers,
   jobs,
@@ -6115,13 +6121,13 @@ function CustomersView({
   jobs: Job[];
   canDelete: boolean;
   onAddCustomer: (customer: Omit<Customer, "id" | "totalOrders" | "lifetimeValue" | "lastOrderDate">) => void;
-  onUpdateCustomer: (customerId: string, updates: Pick<Customer, "name" | "phone" | "lineId" | "email" | "companyName" | "taxId" | "branch" | "billingAddress" | "accountingEmail" | "requiresInvoice">) => void;
+  onUpdateCustomer: (customerId: string, updates: Pick<Customer, "name" | "phone" | "lineId" | "email" | "companyName" | "taxId" | "branch" | "billingAddress" | "accountingEmail" | "requiresInvoice" | "notes">) => void;
   onRemoveCustomer: (customerId: string) => void;
 }) {
   const [customerQuery, setCustomerQuery] = useState("");
   const [editingId, setEditingId] = useState<string | null>(null);
   const [newCustomer, setNewCustomer] = useState({ name: "", phone: "", lineId: "", email: "", companyName: "", taxId: "", branch: "สำนักงานใหญ่", billingAddress: "", accountingEmail: "", requiresInvoice: false });
-  const [editingCustomer, setEditingCustomer] = useState({ name: "", phone: "", lineId: "", email: "", companyName: "", taxId: "", branch: "สำนักงานใหญ่", billingAddress: "", accountingEmail: "", requiresInvoice: false });
+  const [editingCustomer, setEditingCustomer] = useState({ name: "", phone: "", lineId: "", email: "", companyName: "", taxId: "", branch: "สำนักงานใหญ่", billingAddress: "", accountingEmail: "", requiresInvoice: false, notes: "" });
   const [importRows, setImportRows] = useState<ImportedCustomer[]>([]);
   const [importFileName, setImportFileName] = useState("");
   const [importError, setImportError] = useState("");
@@ -6147,7 +6153,8 @@ function CustomersView({
       branch: customer.branch ?? "สำนักงานใหญ่",
       billingAddress: customer.billingAddress ?? "",
       accountingEmail: customer.accountingEmail ?? "",
-      requiresInvoice: customer.requiresInvoice ?? false
+      requiresInvoice: customer.requiresInvoice ?? false,
+      notes: customer.notes ?? ""
     });
   }
 
@@ -6227,7 +6234,8 @@ function CustomersView({
       branch: editingCustomer.branch.trim(),
       billingAddress: editingCustomer.billingAddress.trim(),
       accountingEmail: editingCustomer.accountingEmail.trim(),
-      requiresInvoice: editingCustomer.requiresInvoice
+      requiresInvoice: editingCustomer.requiresInvoice,
+      notes: editingCustomer.notes.trim()
     });
     setEditingId(null);
   }
@@ -6484,15 +6492,30 @@ function CustomersView({
                       />
                       ลูกค้าต้องออกใบกำกับ / ใบเสร็จ
                     </label>
+                    <textarea
+                      value={editingCustomer.notes}
+                      onChange={(event) => setEditingCustomer((current) => ({ ...current, notes: event.target.value }))}
+                      placeholder="โน้ตลูกค้า เช่น ชอบงานด่วน · จ่ายเงินเร็ว · ชอบแก้หลายรอบ · ลูกค้าประจำ"
+                      className="min-h-20 rounded-2xl border border-amber-200 bg-amber-50/60 px-4 py-3 text-sm font-semibold outline-none md:col-span-2"
+                    />
                   </div>
                 ) : (
                   <>
-                    <h3 className="break-words text-2xl font-semibold">{customer.name}</h3>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <h3 className="break-words text-2xl font-semibold">{customer.name}</h3>
+                      {(() => {
+                        const badge = loyaltyBadge(customer.totalOrders, customer.lifetimeValue);
+                        return <span className={`rounded-full px-2.5 py-1 text-xs font-bold ${badge.cls}`}>{badge.emoji} {badge.label}</span>;
+                      })()}
+                    </div>
                     <p className="mt-1 text-k2-muted">{customer.phone || "ไม่มีเบอร์โทร"} - LINE {customer.lineId || "-"}</p>
                     <p className="text-k2-muted">{customer.email || "ยังไม่มีอีเมล"}</p>
                     <p className="mt-2 rounded-2xl bg-white/55 px-3 py-2 text-sm font-semibold text-k2-muted">
                       {customer.companyName || "ยังไม่มีข้อมูลบริษัท"} {customer.taxId ? `| Tax ID ${customer.taxId}` : ""} {customer.requiresInvoice ? "| ต้องออกเอกสาร" : ""}
                     </p>
+                    {customer.notes ? (
+                      <p className="mt-2 rounded-2xl bg-amber-50 px-3 py-2 text-sm font-semibold text-amber-700">📝 {customer.notes}</p>
+                    ) : null}
                   </>
                 )}
               </div>
@@ -6531,24 +6554,48 @@ function CustomersView({
                 ) : null}
               </div>
             </div>
-            <div className="mt-5 grid grid-cols-3 gap-3">
+            <div className="mt-5 grid grid-cols-2 gap-3 sm:grid-cols-4">
               <MiniStat label="ออเดอร์" value={customer.totalOrders} />
-              <MiniStat label="มูลค่า" value={money.format(customer.lifetimeValue)} />
+              <MiniStat label="มูลค่าสะสม" value={money.format(customer.lifetimeValue)} />
               <MiniStat label="งานเปิด" value={customerJobs.filter((job) => !["Completed", "Cancelled"].includes(job.status)).length} />
+              <MiniStat label="ไฟล์งาน" value={customerJobs.reduce((sum, job) => sum + job.files.length, 0)} />
             </div>
-            <div className="mt-5 space-y-3">
-              {customerJobs.map((job) => (
-                <div key={job.id} className="rounded-2xl bg-white/65 p-3">
-                  <p className="font-semibold">{job.id} - {job.title}</p>
-                  <p className="text-sm text-k2-muted">{statusLabel[job.status]} - กำหนดส่ง {job.dueDate}</p>
-                </div>
-              ))}
-              {customerJobs.length === 0 ? (
-                <div className="rounded-2xl border border-dashed border-white/90 bg-white/45 p-3 text-sm font-semibold text-k2-muted">
-                  ยังไม่มีประวัติงานของลูกค้าคนนี้
-                </div>
-              ) : null}
+
+            {/* ประวัติออเดอร์ย้อนหลัง */}
+            <div className="mt-5">
+              <p className="mb-2 text-sm font-bold text-k2-muted">ประวัติออเดอร์ ({customerJobs.length})</p>
+              <div className="space-y-2">
+                {customerJobs.map((job) => (
+                  <div key={job.id} className="flex items-start justify-between gap-3 rounded-2xl bg-white/65 p-3">
+                    <div className="min-w-0">
+                      <p className="font-semibold leading-5">{job.id} · {job.title}</p>
+                      <p className="text-sm text-k2-muted">{statusLabel[job.status]} · สั่ง {job.orderDate} · ส่ง {job.dueDate}</p>
+                    </div>
+                    <span className="shrink-0 text-sm font-extrabold text-k2-ink">{money.format(job.price)}</span>
+                  </div>
+                ))}
+                {customerJobs.length === 0 ? (
+                  <div className="rounded-2xl border border-dashed border-white/90 bg-white/45 p-3 text-sm font-semibold text-k2-muted">
+                    ยังไม่มีประวัติงานของลูกค้าคนนี้
+                  </div>
+                ) : null}
+              </div>
             </div>
+
+            {/* สลิปมัดจำย้อนหลัง */}
+            {customerJobs.some((job) => job.depositSlip) ? (
+              <div className="mt-5">
+                <p className="mb-2 text-sm font-bold text-k2-muted">สลิปมัดจำย้อนหลัง</p>
+                <div className="flex flex-wrap gap-2">
+                  {customerJobs.filter((job) => job.depositSlip).map((job) => (
+                    <a key={job.id} href={job.depositSlip} target="_blank" rel="noreferrer" title={`${job.id} · ${money.format(job.deposit)}`}>
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img src={job.depositSlip} alt={`สลิป ${job.id}`} className="h-20 w-20 rounded-xl object-cover ring-1 ring-white/80" />
+                    </a>
+                  ))}
+                </div>
+              </div>
+            ) : null}
           </section>
         );
       })}
