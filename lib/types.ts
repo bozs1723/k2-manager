@@ -45,6 +45,7 @@ export type TeamMember = {
   id: string;
   name: string;
   role: Role;
+  roles?: Role[];
   avatar: string;
   avatarUrl?: string;
   username?: string;

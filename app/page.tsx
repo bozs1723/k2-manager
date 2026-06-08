@@ -97,6 +97,7 @@ type SupabaseProfileRow = {
   username?: string | null;
   full_name: string | null;
   role: Role | null;
+  extra_roles?: Role[] | null;
   avatar_url?: string | null;
   is_active?: boolean | null;
 };
@@ -657,12 +658,14 @@ function memberDisplayName(member: TeamMember): string {
   return member.nickname?.trim() || member.name;
 }
 
-function profileToMember(profile: { id: string; email?: string | null; username?: string | null; full_name: string | null; role: Role | null; avatar_url?: string | null; branch?: string | null }): TeamMember {
+function profileToMember(profile: { id: string; email?: string | null; username?: string | null; full_name: string | null; role: Role | null; extra_roles?: Role[] | null; avatar_url?: string | null; branch?: string | null }): TeamMember {
   const name = profile.full_name || "K2 User";
+  const extra = (profile.extra_roles ?? []).filter((value): value is Role => roles.includes(value as Role));
   return {
     id: profile.id,
     name,
     role: profile.role ?? "Sales Staff",
+    roles: extra.length ? extra : undefined,
     avatar: initialsFromName(name),
     avatarUrl: profile.avatar_url ?? undefined,
     username: profile.username || usernameFromEmail(profile.email),
@@ -960,10 +963,14 @@ export default function Page() {
   const [expressOrdersEnabled, setExpressOrdersEnabled] = useState(false);
 
   const selectedJob = jobs.find((job) => job.id === selectedJobId) ?? jobs[0] ?? null;
-  const currentRolePermissions = useMemo(
-    () => permissionMatrix[currentUser.role] ?? [],
-    [permissionMatrix, currentUser.role]
-  );
+  const currentRolePermissions = useMemo(() => {
+    const activeRoles = [currentUser.role, ...(currentUser.roles ?? [])];
+    const merged = new Set<PermissionKey>();
+    for (const activeRole of activeRoles) {
+      for (const permission of permissionMatrix[activeRole] ?? []) merged.add(permission);
+    }
+    return Array.from(merged);
+  }, [permissionMatrix, currentUser.role, currentUser.roles]);
   const can = (permission: PermissionKey) => currentRolePermissions.includes(permission);
   const canSeeMoney = can("view_finance");
   const activeJobs = jobs.filter((job) => !["Completed", "Cancelled"].includes(job.status));
@@ -996,7 +1003,7 @@ export default function Page() {
     async function loadProfile(userId: string) {
       const { data, error } = await supabase!
         .from("profiles")
-        .select("id, email, full_name, role, avatar_url, branch")
+        .select("id, email, full_name, role, extra_roles, avatar_url, branch")
         .eq("id", userId)
         .single();
       if (!isMounted || error || !data) return;
@@ -1222,7 +1229,7 @@ export default function Page() {
         shopStateResult,
         notificationsResult
       ] = await Promise.all([
-        supabase.from("profiles").select("id, email, full_name, role, avatar_url, branch, is_active").eq("is_active", true).order("created_at", { ascending: true }),
+        supabase.from("profiles").select("id, email, full_name, role, extra_roles, avatar_url, branch, is_active").eq("is_active", true).order("created_at", { ascending: true }),
         supabase.from("company_settings").select("*").order("created_at", { ascending: true }).limit(1),
         supabase.from("customers").select("*").order("created_at", { ascending: false }),
         supabase.from("jobs").select("*").order("created_at", { ascending: false }),
@@ -1384,7 +1391,7 @@ export default function Page() {
         if (error) throw error;
         const { data: profile, error: profileError } = await supabase
           .from("profiles")
-          .select("id, email, full_name, role, avatar_url, branch")
+          .select("id, email, full_name, role, extra_roles, avatar_url, branch")
           .eq("id", data.user.id)
           .single();
         if (profileError) throw profileError;
@@ -1953,7 +1960,7 @@ export default function Page() {
       const { data, error } = await supabase
         .from("profiles")
         .upsert({ id: profileId, email: authEmail, full_name: member.name, role: member.role, avatar_url: member.avatarUrl ?? null, branch: member.branch || null, is_active: true }, { onConflict: "id" })
-        .select("id, email, full_name, role, avatar_url, branch")
+        .select("id, email, full_name, role, extra_roles, avatar_url, branch")
         .single();
       if (error) {
         setDataError(error.message);
@@ -2234,7 +2241,7 @@ export default function Page() {
     void appendAudit("updated salary", memberId, "employee_hr", memberId);
   }
 
-  async function updateTeamMember(memberId: string, updates: Pick<TeamMember, "name" | "role" | "branch">) {
+  async function updateTeamMember(memberId: string, updates: Pick<TeamMember, "name" | "role" | "branch"> & { roles?: Role[] }) {
     const isOwnProfile = currentUser.id === memberId;
     if (!can("manage_users") && !isOwnProfile) {
       setDataError("บทบาทนี้ยังไม่มีสิทธิ์จัดการผู้ใช้");
@@ -2248,6 +2255,9 @@ export default function Page() {
       return;
     }
     const nextRole = can("manage_users") ? updates.role : existingMember.role;
+    // บทบาทเสริม (multi-role): แก้ได้เฉพาะผู้มีสิทธิ์จัดการผู้ใช้ · ไม่ซ้ำกับบทบาทหลัก · กรองค่าที่ไม่ถูกต้อง
+    const requestedRoles = can("manage_users") ? (updates.roles ?? existingMember.roles ?? []) : (existingMember.roles ?? []);
+    const nextRoles = Array.from(new Set(requestedRoles.filter((value) => roles.includes(value) && value !== nextRole)));
     // เจ้าของไม่มีสาขาประจำ (เห็นทุกสาขา); บทบาทอื่นกำหนดสาขาได้เฉพาะผู้มีสิทธิ์จัดการผู้ใช้
     const nextBranch = nextRole === "Owner"
       ? ""
@@ -2255,10 +2265,11 @@ export default function Page() {
     const safeUpdates = {
       name: updates.name,
       role: nextRole,
+      roles: nextRoles.length ? nextRoles : undefined,
       branch: nextBranch
     };
     if (supabase && uuidPattern.test(memberId)) {
-      const { error } = await supabase.from("profiles").update({ full_name: safeUpdates.name, role: safeUpdates.role, branch: safeUpdates.branch || null }).eq("id", memberId);
+      const { error } = await supabase.from("profiles").update({ full_name: safeUpdates.name, role: safeUpdates.role, extra_roles: nextRoles, branch: safeUpdates.branch || null }).eq("id", memberId);
       if (error) {
         setDataError(error.message);
         return;
@@ -4707,7 +4718,7 @@ function SettingsView({
   companyProfile: CompanyProfile;
   onUpdateCompany: (profile: CompanyProfile) => void;
   onAddMember: (member: NewTeamMemberInput) => void;
-  onUpdateMember: (memberId: string, updates: Pick<TeamMember, "name" | "role" | "branch">) => void;
+  onUpdateMember: (memberId: string, updates: Pick<TeamMember, "name" | "role" | "branch"> & { roles?: Role[] }) => void;
   onUpdateMemberAvatar: (memberId: string, avatarUrl: string) => void;
   onRemoveMember: (memberId: string) => void;
   permissionMatrix: Record<Role, PermissionKey[]>;
@@ -4721,7 +4732,7 @@ function SettingsView({
   const [newMember, setNewMember] = useState({ name: "", username: "", password: "", role: "Designer" as Role, branch: "" });
   const newMemberBranchOptions = ["พะเยา", "กรุงเทพ"];
   const [editingId, setEditingId] = useState<string | null>(null);
-  const [editingMember, setEditingMember] = useState({ name: "", role: "Designer" as Role, branch: "" });
+  const [editingMember, setEditingMember] = useState({ name: "", role: "Designer" as Role, roles: [] as Role[], branch: "" });
   const memberBranchOptions = ["พะเยา", "กรุงเทพ"];
   const [companyDraft, setCompanyDraft] = useState(companyProfile);
   const [facebookPageName, setFacebookPageName] = useState("");
@@ -4733,7 +4744,7 @@ function SettingsView({
 
   function startEditing(member: TeamMember) {
     setEditingId(member.id);
-    setEditingMember({ name: member.name, role: member.role, branch: member.branch ?? "" });
+    setEditingMember({ name: member.name, role: member.role, roles: member.roles ?? [], branch: member.branch ?? "" });
   }
 
   function submitNewMember() {
@@ -4745,7 +4756,7 @@ function SettingsView({
 
   function submitEdit(memberId: string) {
     if (!editingMember.name.trim() || (!canManageTeam && memberId !== currentUserId)) return;
-    onUpdateMember(memberId, { name: editingMember.name.trim(), role: editingMember.role, branch: editingMember.branch });
+    onUpdateMember(memberId, { name: editingMember.name.trim(), role: editingMember.role, roles: editingMember.roles, branch: editingMember.branch });
     setEditingId(null);
   }
 
@@ -4971,6 +4982,26 @@ function SettingsView({
                           <option key={role} value={role}>{roleLabel[role]}</option>
                         ))}
                       </select>
+                      {canEditThisRole && editingMember.role !== "Owner" ? (
+                        <div className="rounded-2xl border border-white/80 bg-white/70 px-4 py-3 md:col-span-2">
+                          <p className="mb-2 text-xs font-bold text-k2-muted">บทบาทเสริม (1 คนหลายตำแหน่ง) — สิทธิ์จะรวมกับบทบาทหลัก</p>
+                          <div className="flex flex-wrap gap-2">
+                            {roles.filter((role) => role !== "Owner" && role !== editingMember.role).map((role) => {
+                              const active = editingMember.roles.includes(role);
+                              return (
+                                <button
+                                  key={role}
+                                  type="button"
+                                  onClick={() => setEditingMember((current) => ({ ...current, roles: active ? current.roles.filter((value) => value !== role) : [...current.roles, role] }))}
+                                  className={`rounded-full px-3 py-1.5 text-xs font-bold ${active ? "bg-k2-ink text-white" : "bg-white/80 text-k2-muted"}`}
+                                >
+                                  {roleLabel[role]}
+                                </button>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      ) : null}
                       {editingMember.role !== "Owner" ? (
                         <select
                           value={editingMember.branch}
@@ -4991,6 +5022,7 @@ function SettingsView({
                       {member.username ? <p className="mt-1 text-xs font-extrabold text-teal-600">@{member.username}</p> : null}
                       <p className="mt-1 text-sm font-semibold text-k2-muted">
                         {roleLabel[member.role]}
+                        {member.roles?.length ? ` + ${member.roles.map((role) => roleLabel[role]).join(", ")}` : ""}
                         {member.role !== "Owner" && member.branch ? ` · สาขา${member.branch}` : ""}
                       </p>
                     </div>
