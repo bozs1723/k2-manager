@@ -159,6 +159,8 @@ type SupabaseJobRow = {
   deposit_confirmed?: boolean | null;
   deposit_confirmed_by?: string | null;
   deposit_waived?: boolean | null;
+  balance_slip?: string | null;
+  balance_received_date?: string | null;
   created_at: string;
 };
 
@@ -860,6 +862,8 @@ function jobFromRow(
     depositConfirmed: Boolean(row.deposit_confirmed),
     depositConfirmedBy: row.deposit_confirmed_by ? profileNames.get(row.deposit_confirmed_by) ?? undefined : undefined,
     depositWaived: Boolean(row.deposit_waived),
+    balanceSlip: row.balance_slip ?? undefined,
+    balanceReceivedDate: row.balance_received_date ?? undefined,
     remainingBalance: Number(row.remaining_balance),
     paymentStatus: row.payment_status,
     internalNotes: row.internal_notes ?? "",
@@ -1911,6 +1915,27 @@ export default function Page() {
       }
     }
     void appendAudit("confirmed deposit", jobId, "jobs", existingJob.dbId);
+  }
+
+  // รับเงินส่วนที่เหลือ (ยอดคงเหลือ) + แนบสลิป → ตั้งยอดเป็นชำระครบ
+  async function receiveBalance(jobId: string, slip: string, receivedDate: string) {
+    if (!can("edit_payment")) {
+      setDataError("บทบาทนี้ยังไม่มีสิทธิ์รับชำระเงิน");
+      return;
+    }
+    const existingJob = jobs.find((job) => job.id === jobId);
+    if (!existingJob) return;
+    setJobs((current) => current.map((job) => (job.id === jobId
+      ? { ...job, deposit: job.price, remainingBalance: 0, paymentStatus: getPaymentStatus(job.price, job.price), balanceSlip: slip || undefined, balanceReceivedDate: receivedDate || undefined }
+      : job)));
+    if (supabase && existingJob.dbId) {
+      const { error } = await supabase
+        .from("jobs")
+        .update({ deposit: existingJob.price, balance_slip: slip || null, balance_received_date: receivedDate || null })
+        .eq("id", existingJob.dbId);
+      if (error) { setDataError(error.message); void refreshWorkspaceData(); return; }
+    }
+    void appendAudit("received balance payment", jobId, "jobs", existingJob.dbId);
   }
 
   async function addComment(jobId: string, text: string) {
@@ -3201,7 +3226,7 @@ export default function Page() {
             )}
             {activeView === "Calendar" && (
               <motion.div key="calendar" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}>
-                <CalendarView jobs={filteredJobs} onSelect={(id) => {
+                <CalendarView jobs={filteredJobs} customers={customerRecords} onSelect={(id) => {
                   setSelectedJobId(id);
                   setActiveView("Detail");
                 }} />
@@ -3270,7 +3295,7 @@ export default function Page() {
             {activeView === "Detail" && (
               <motion.div key="detail" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}>
                 {selectedJob ? (
-                  <JobDetail job={selectedJob} companyProfile={companyProfile} canSeeMoney={canSeeMoney} canDeleteJob={can("delete_job")} canConfirmDeposit={["Owner", "Manager", "Admin"].includes(currentUser.role)} canApproveWaiver={currentUser.role === "Owner"} onPayment={updatePayment} onConfirmDeposit={confirmDeposit} onComment={addComment} onMove={requestMove} onDelete={removeJob} />
+                  <JobDetail job={selectedJob} companyProfile={companyProfile} canSeeMoney={canSeeMoney} canEditPayment={can("edit_payment")} canDeleteJob={can("delete_job")} canConfirmDeposit={["Owner", "Manager", "Admin"].includes(currentUser.role)} canApproveWaiver={currentUser.role === "Owner"} onPayment={updatePayment} onConfirmDeposit={confirmDeposit} onReceiveBalance={receiveBalance} onComment={addComment} onMove={requestMove} onDelete={removeJob} />
                 ) : (
                   <EmptyState title="ยังไม่มีงานในระบบ" text="เริ่มจากสร้างลูกค้าและสร้างงานแรกได้เลย" action={() => setActiveView("Create Job")} />
                 )}
@@ -4094,11 +4119,13 @@ function JobDetail({
   job,
   companyProfile,
   canSeeMoney,
+  canEditPayment,
   canDeleteJob,
   canConfirmDeposit,
   canApproveWaiver,
   onPayment,
   onConfirmDeposit,
+  onReceiveBalance,
   onComment,
   onMove,
   onDelete
@@ -4106,16 +4133,28 @@ function JobDetail({
   job: Job;
   companyProfile: CompanyProfile;
   canSeeMoney: boolean;
+  canEditPayment: boolean;
   canDeleteJob: boolean;
   canConfirmDeposit: boolean;
   canApproveWaiver: boolean;
   onPayment: (jobId: string, deposit: number) => void;
   onConfirmDeposit: (jobId: string) => void;
+  onReceiveBalance: (jobId: string, slip: string, receivedDate: string) => void;
   onComment: (jobId: string, text: string) => void;
   onMove: (jobId: string, status: JobStatus) => void;
   onDelete: (jobId: string) => void;
 }) {
   const [comment, setComment] = useState("");
+  const [balanceSlipDraft, setBalanceSlipDraft] = useState("");
+  const [balanceDateDraft, setBalanceDateDraft] = useState(todayISO());
+  const [balanceError, setBalanceError] = useState("");
+  async function handleBalanceSlip(file: File | null) {
+    if (!file) return;
+    setBalanceError("");
+    if (!file.type.startsWith("image/")) { setBalanceError("กรุณาเลือกไฟล์รูปภาพ"); return; }
+    if (file.size > 1_500_000) { setBalanceError("รูปต้องไม่เกิน 1.5 MB"); return; }
+    setBalanceSlipDraft(await readImageAsDataUrl(file));
+  }
   const workOrderNumber = job.quoteNumber ?? quoteNumberFor(Number(job.id.replace(/\D/g, "").slice(-4)) || 1, companyProfile.quotePrefix);
   const dueInfo = dueUrgency(job.dueDate, job.status);
   return (
@@ -4278,6 +4317,51 @@ function JobDetail({
                 className="w-full rounded-2xl border border-white/80 bg-white/80 px-4 py-3 outline-none"
               />
             </label>
+          )}
+
+          {/* รับเงินส่วนที่เหลือ (ตอนปิดงาน) */}
+          {canSeeMoney && (
+            <div className="mt-4 rounded-2xl border border-white/70 bg-white/55 p-3">
+              <div className="flex items-center justify-between">
+                <span className="font-semibold">รับเงินส่วนที่เหลือ</span>
+                {job.remainingBalance <= 0 ? (
+                  <span className="inline-flex items-center gap-1 rounded-full bg-teal-100 px-3 py-1 text-xs font-bold text-teal-700"><CheckCircle2 className="h-3.5 w-3.5" /> ชำระครบแล้ว</span>
+                ) : (
+                  <span className="rounded-full bg-amber-100 px-3 py-1 text-xs font-bold text-amber-700">ค้าง {money.format(job.remainingBalance)}</span>
+                )}
+              </div>
+              {job.balanceReceivedDate ? <p className="mt-2 text-sm font-semibold text-k2-muted">วันที่รับเงิน: {job.balanceReceivedDate}</p> : null}
+              {job.balanceSlip ? (
+                <a href={job.balanceSlip} target="_blank" rel="noreferrer" className="mt-2 inline-block">
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img src={job.balanceSlip} alt="สลิปยอดคงเหลือ" className="h-24 w-auto rounded-xl object-cover ring-1 ring-white/80" />
+                </a>
+              ) : null}
+              {job.remainingBalance > 0 && canEditPayment ? (
+                <div className="mt-3 space-y-2">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <label className="inline-flex cursor-pointer items-center gap-2 rounded-2xl bg-white px-4 py-2.5 text-sm font-bold text-k2-ink shadow-sm">
+                      <FileImage className="h-4 w-4" />
+                      {balanceSlipDraft ? "เปลี่ยนรูปสลิป" : "แนบสลิปยอดคงเหลือ"}
+                      <input type="file" accept="image/*" className="hidden" onChange={(e) => void handleBalanceSlip(e.target.files?.[0] ?? null)} />
+                    </label>
+                    {balanceSlipDraft ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img src={balanceSlipDraft} alt="สลิป" className="h-12 w-12 rounded-lg object-cover ring-1 ring-white/80" />
+                    ) : null}
+                  </div>
+                  <input type="date" value={balanceDateDraft} onChange={(e) => setBalanceDateDraft(e.target.value)} className="w-full rounded-2xl border border-white/80 bg-white/80 px-4 py-2.5 text-sm outline-none" />
+                  {balanceError ? <p className="text-xs font-semibold text-rose-600">{balanceError}</p> : null}
+                  <button
+                    type="button"
+                    onClick={() => { onReceiveBalance(job.id, balanceSlipDraft, balanceDateDraft); setBalanceSlipDraft(""); }}
+                    className="w-full rounded-2xl bg-teal-500 px-4 py-3 text-sm font-extrabold text-white"
+                  >
+                    ✓ บันทึกรับเงินครบ ({money.format(job.remainingBalance)})
+                  </button>
+                </div>
+              ) : null}
+            </div>
           )}
         </section>
 
@@ -5961,8 +6045,9 @@ function SettingsView({
   );
 }
 
-function CalendarView({ jobs, onSelect }: { jobs: Job[]; onSelect: (id: string) => void }) {
+function CalendarView({ jobs, customers, onSelect }: { jobs: Job[]; customers: Customer[]; onSelect: (id: string) => void }) {
   const [modalJob, setModalJob] = useState<Job | null>(null);
+  const modalCustomer = modalJob ? customers.find((c) => c.id === modalJob.customerId) : undefined;
 
   const grouped = useMemo(
     () =>
@@ -6091,6 +6176,11 @@ function CalendarView({ jobs, onSelect }: { jobs: Job[]; onSelect: (id: string) 
               {modalJob.lineId ? (
                 <a href={`https://line.me/ti/p/~${encodeURIComponent(modalJob.lineId)}`} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1.5 rounded-2xl bg-green-500 px-4 py-2.5 text-sm font-extrabold text-white">
                   💬 LINE
+                </a>
+              ) : null}
+              {modalCustomer?.sourceChannel === "Facebook" && modalCustomer?.sourcePage ? (
+                <a href={`https://www.facebook.com/${encodeURIComponent(modalCustomer.sourcePage)}`} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1.5 rounded-2xl bg-blue-600 px-4 py-2.5 text-sm font-extrabold text-white">
+                  👍 Facebook
                 </a>
               ) : null}
             </div>
