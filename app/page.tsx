@@ -7316,7 +7316,7 @@ function PayrollView({
         <h3 className="text-2xl font-semibold">คำนวณเงินเดือนรายเดือน</h3>
         <div className="mt-3 flex flex-wrap items-center gap-3">
           <input type="month" value={month} onChange={(event) => onMonthChange(event.target.value)} className="rounded-2xl border border-white/80 bg-white/85 px-3 py-2 text-sm outline-none" />
-          <span className="text-sm font-semibold text-k2-muted">ระบบดึงวันมาทำงาน/สาย/ลา อัตโนมัติ — กรอก "หักเงิน/โบนัส" ตามนโยบาย แล้วพิมพ์สลิป</span>
+          <span className="text-sm font-semibold text-k2-muted">ระบบดึงวันมาทำงาน/สาย/ลา อัตโนมัติ — กรอก &quot;หักเงิน/โบนัส&quot; ตามนโยบาย แล้วพิมพ์สลิป</span>
         </div>
       </section>
 
