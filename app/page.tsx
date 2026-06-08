@@ -5469,22 +5469,8 @@ function CreateJobView({
           setFormError("กรุณากรอกชื่อลูกค้า หรือเลือกลูกค้าเดิมจากช่องค้นหา");
           return;
         }
-        // บังคับแนบสลิปมัดจำ: ต้องมียอดมัดจำ + วันที่รับเงิน + รูปสลิป
-        // ยกเว้น: เคส "ไม่ต้องมัดจำ (ขออนุมัติเจ้าของ)" ข้ามการบังคับสลิป
-        if (!form.depositWaived) {
-          if (form.deposit <= 0) {
-            setFormError("กรุณาระบุยอดเงินมัดจำ หรือเลือก 'ไม่ต้องมัดจำ (ขออนุมัติเจ้าของ)'");
-            return;
-          }
-          if (!form.depositReceivedDate) {
-            setFormError("กรุณาระบุวันที่รับเงินมัดจำ");
-            return;
-          }
-          if (!form.depositSlip) {
-            setFormError("กรุณาแนบรูปสลิปมัดจำก่อนสร้างงาน");
-            return;
-          }
-        }
+        // หมายเหตุ: ไม่บังคับแนบสลิป/มัดจำตอนสร้าง — ตาม flow ใหม่ของทีม (งานเริ่มที่ "Quotation")
+        // มัดจำ/สลิปจะเก็บภายหลังในขั้นการเงิน (แนบที่นี่ก่อนได้ ถ้ามีแล้ว)
         setFormError("");
         const workOrderSpec = [
           `ช่องทางรับงาน: ${form.sourceChannel || "-"}`,
@@ -5718,8 +5704,8 @@ function CreateJobView({
             onChange={(value) => setField("depositReceivedDate", value)}
           />
           <TextField label="ไฟล์ / รูปแนบ" value={form.fileName} onChange={(value) => setField("fileName", value)} />
-          {/* สลิปมัดจำ — บังคับแนบก่อนสร้างงาน (ยกเว้นเคสไม่ต้องมัดจำที่เจ้าของอนุมัติ) */}
-          <div className={`space-y-3 md:col-span-2 rounded-2xl border p-4 ${form.depositWaived ? "border-amber-200 bg-amber-50/60" : "border-rose-200 bg-rose-50/60"}`}>
+          {/* สลิปมัดจำ — ไม่บังคับตอนสร้าง (เก็บภายหลังในขั้นการเงินได้) */}
+          <div className={`space-y-3 md:col-span-2 rounded-2xl border p-4 ${form.depositWaived ? "border-amber-200 bg-amber-50/60" : "border-white/80 bg-white/55"}`}>
             <label className="flex items-center justify-between gap-3">
               <span className="flex items-center gap-2 text-sm font-extrabold text-k2-ink">
                 <ShieldCheck className="h-4 w-4 text-amber-600" />
@@ -5738,7 +5724,7 @@ function CreateJobView({
               <>
                 <span className="flex items-center gap-2 text-sm font-extrabold text-k2-ink">
                   <WalletCards className="h-4 w-4 text-rose-500" />
-                  สลิปมัดจำ <span className="text-xs font-bold text-rose-600">* บังคับแนบก่อนสร้างงาน</span>
+                  สลิปมัดจำ <span className="text-xs font-bold text-k2-muted">(ไม่บังคับ — เก็บภายหลังในขั้นการเงินได้)</span>
                 </span>
                 <div className="flex flex-wrap items-center gap-3">
                   <label className="inline-flex cursor-pointer items-center gap-2 rounded-2xl bg-white px-4 py-2.5 text-sm font-bold text-k2-ink shadow-sm">
