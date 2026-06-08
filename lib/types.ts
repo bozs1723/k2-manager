@@ -1,6 +1,6 @@
 export type AppNotification = {
   id: string;
-  type: "assigned" | "status_moved" | "comment" | "due_soon";
+  type: "assigned" | "status_moved" | "comment" | "due_soon" | "express_request" | "express_decision";
   jobId: string;
   jobTitle: string;
   message: string;
@@ -49,11 +49,38 @@ export type TeamMember = {
   avatar: string;
   avatarUrl?: string;
   username?: string;
+  phone?: string;
   branch?: string;
   nickname?: string;
   avatarBorderColor?: string;
   statusEmoji?: string;
   statusText?: string;
+};
+
+export type Quotation = {
+  id: string;
+  quoteNumber?: string;
+  customerId?: string;
+  customerName: string;
+  customerPhone: string;
+  title: string;
+  description: string;
+  amount: number;
+  status: "draft" | "sent" | "approved" | "rejected" | "converted";
+  createdByName?: string;
+  convertedJobId?: string;
+  createdAt: string;
+};
+
+export type ExpressRequest = {
+  id: string;
+  requestedById: string;
+  requestedByName: string;
+  status: "pending" | "approved" | "rejected";
+  approvedById?: string;
+  approvedByName?: string;
+  consumed: boolean;
+  createdAt: string;
 };
 
 export type Customer = {
@@ -70,6 +97,8 @@ export type Customer = {
   billingAddress?: string;
   accountingEmail?: string;
   requiresInvoice?: boolean;
+  sourceChannel?: string;
+  sourcePage?: string;
   totalOrders: number;
   lifetimeValue: number;
   lastOrderDate: string;
@@ -177,6 +206,11 @@ export type Job = {
   assignedProduction: string;
   price: number;
   deposit: number;
+  depositSlip?: string;
+  depositReceivedDate?: string;
+  depositConfirmed?: boolean;
+  depositConfirmedBy?: string;
+  depositWaived?: boolean;
   remainingBalance: number;
   paymentStatus: PaymentStatus;
   internalNotes: string;

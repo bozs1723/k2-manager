@@ -42,7 +42,7 @@ import {
 import type { LucideIcon } from "lucide-react";
 import { customers as initialCustomers, initialAuditLog, initialJobs, statuses, team as initialTeam } from "@/lib/mock-data";
 import { createSupabaseAuthWorker, isSupabaseConfigured, supabase } from "@/lib/supabase";
-import type { AppNotification, Attendance, AuditEvent, BranchSetting, Customer, Holiday, Job, JobStatus, JobType, LeaveRequest, PaymentStatus, Priority, QuoteStatus, Role, TeamMember } from "@/lib/types";
+import type { AppNotification, Attendance, AuditEvent, BranchSetting, Customer, ExpressRequest, Holiday, Job, JobStatus, JobType, LeaveRequest, PaymentStatus, Priority, Quotation, QuoteStatus, Role, TeamMember } from "@/lib/types";
 
 type ImportedCustomer = Pick<Customer, "name" | "phone" | "lineId" | "email"> & {
   notes: string;
@@ -99,6 +99,8 @@ type SupabaseProfileRow = {
   role: Role | null;
   extra_roles?: Role[] | null;
   avatar_url?: string | null;
+  phone?: string | null;
+  branch?: string | null;
   is_active?: boolean | null;
 };
 
@@ -115,6 +117,8 @@ type SupabaseCustomerRow = {
   billing_address: string | null;
   accounting_email: string | null;
   requires_invoice: boolean;
+  source_channel: string | null;
+  source_page: string | null;
   created_at: string;
 };
 
@@ -152,6 +156,11 @@ type SupabaseJobRow = {
   remaining_balance: number | string;
   payment_status: PaymentStatus;
   internal_notes: string | null;
+  deposit_slip?: string | null;
+  deposit_received_date?: string | null;
+  deposit_confirmed?: boolean | null;
+  deposit_confirmed_by?: string | null;
+  deposit_waived?: boolean | null;
   created_at: string;
 };
 
@@ -188,6 +197,62 @@ type SupabaseRolePermissionRow = {
   role: Role;
   permissions: PermissionKey[] | null;
 };
+
+type SupabaseExpressRequestRow = {
+  id: string;
+  requested_by: string;
+  requested_by_name: string | null;
+  status: string | null;
+  approved_by: string | null;
+  approved_by_name: string | null;
+  consumed: boolean | null;
+  created_at: string;
+};
+
+type SupabaseQuotationRow = {
+  id: string;
+  quote_number: string | null;
+  customer_id: string | null;
+  customer_name: string | null;
+  customer_phone: string | null;
+  title: string;
+  description: string | null;
+  amount: number | string | null;
+  status: string | null;
+  created_by_name: string | null;
+  converted_job_id: string | null;
+  created_at: string;
+};
+
+function quotationRowToQuotation(row: SupabaseQuotationRow): Quotation {
+  return {
+    id: row.id,
+    quoteNumber: row.quote_number ?? undefined,
+    customerId: row.customer_id ?? undefined,
+    customerName: row.customer_name ?? "",
+    customerPhone: row.customer_phone ?? "",
+    title: row.title,
+    description: row.description ?? "",
+    amount: Number(row.amount ?? 0),
+    status: (row.status as Quotation["status"]) ?? "draft",
+    createdByName: row.created_by_name ?? undefined,
+    convertedJobId: row.converted_job_id ?? undefined,
+    createdAt: row.created_at
+  };
+}
+
+function expressRowToRequest(row: SupabaseExpressRequestRow): ExpressRequest {
+  return {
+    id: row.id,
+    requestedById: row.requested_by,
+    requestedByName: row.requested_by_name ?? "",
+    status: (row.status as ExpressRequest["status"]) ?? "pending",
+    approvedById: row.approved_by ?? undefined,
+    approvedByName: row.approved_by_name ?? undefined,
+    consumed: Boolean(row.consumed),
+    createdAt: row.created_at
+  };
+}
 
 type NewTeamMemberInput = Omit<TeamMember, "id" | "avatar"> & {
   password?: string;
@@ -365,6 +430,7 @@ const viewLabel: Record<string, string> = {
   Dashboard: "แดชบอร์ด",
   "My Jobs": "งานของฉัน",
   Board: "บอร์ดคิวงาน",
+  Quotations: "ใบเสนอราคา",
   "Create Job": "สร้างงาน",
   Calendar: "ปฏิทิน",
   Customers: "ลูกค้า",
@@ -375,7 +441,7 @@ const viewLabel: Record<string, string> = {
   Attendance: "ลงเวลา",
   Leave: "การลา",
   Payroll: "เงินเดือน / สลิป",
-  Detail: "รายละเอียดงาน",
+  Detail: "รายละเอียดออเดอร์",
   Audit: "ประวัติการแก้ไข"
 };
 
@@ -658,7 +724,7 @@ function memberDisplayName(member: TeamMember): string {
   return member.nickname?.trim() || member.name;
 }
 
-function profileToMember(profile: { id: string; email?: string | null; username?: string | null; full_name: string | null; role: Role | null; extra_roles?: Role[] | null; avatar_url?: string | null; branch?: string | null }): TeamMember {
+function profileToMember(profile: { id: string; email?: string | null; username?: string | null; full_name: string | null; role: Role | null; extra_roles?: Role[] | null; avatar_url?: string | null; phone?: string | null; branch?: string | null }): TeamMember {
   const name = profile.full_name || "K2 User";
   const extra = (profile.extra_roles ?? []).filter((value): value is Role => roles.includes(value as Role));
   return {
@@ -669,6 +735,7 @@ function profileToMember(profile: { id: string; email?: string | null; username?
     avatar: initialsFromName(name),
     avatarUrl: profile.avatar_url ?? undefined,
     username: profile.username || usernameFromEmail(profile.email),
+    phone: profile.phone ?? undefined,
     branch: profile.branch ?? undefined
   };
 }
@@ -757,6 +824,8 @@ function customerFromRow(row: SupabaseCustomerRow, jobs: SupabaseJobRow[]): Cust
     billingAddress: row.billing_address ?? "",
     accountingEmail: row.accounting_email ?? "",
     requiresInvoice: row.requires_invoice,
+    sourceChannel: row.source_channel ?? "",
+    sourcePage: row.source_page ?? "",
     totalOrders: customerJobs.length,
     lifetimeValue: customerJobs.reduce((sum, job) => sum + Number(job.price), 0),
     lastOrderDate: customerJobs[0]?.order_date ?? "-"
@@ -809,6 +878,11 @@ function jobFromRow(
     assignedProduction: row.assigned_production ? profileNames.get(row.assigned_production) ?? "Unassigned" : "Unassigned",
     price,
     deposit,
+    depositSlip: row.deposit_slip ?? undefined,
+    depositReceivedDate: row.deposit_received_date ?? undefined,
+    depositConfirmed: Boolean(row.deposit_confirmed),
+    depositConfirmedBy: row.deposit_confirmed_by ? profileNames.get(row.deposit_confirmed_by) ?? undefined : undefined,
+    depositWaived: Boolean(row.deposit_waived),
     remainingBalance: Number(row.remaining_balance),
     paymentStatus: row.payment_status,
     internalNotes: row.internal_notes ?? "",
@@ -894,7 +968,9 @@ function customerInsertPayload(customer: Omit<Customer, "id" | "totalOrders" | "
     branch: customer.branch ?? "",
     billing_address: customer.billingAddress ?? "",
     accounting_email: customer.accountingEmail ?? "",
-    requires_invoice: customer.requiresInvoice ?? false
+    requires_invoice: customer.requiresInvoice ?? false,
+    source_channel: customer.sourceChannel ?? "",
+    source_page: customer.sourcePage ?? ""
   };
 }
 
@@ -933,6 +1009,7 @@ export default function Page() {
   const [draggedJobId, setDraggedJobId] = useState<string | null>(null);
   const [personalizationVersion, setPersonalizationVersion] = useState(0);
   const [showPersonalization, setShowPersonalization] = useState(false);
+  const [showMyProfile, setShowMyProfile] = useState(false);
   // personalizationVersion is an intentional trigger: bumping it re-reads localStorage prefs.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const currentUserPrefs = useMemo(() => mergePersonalization(currentUser), [currentUser, personalizationVersion]);
@@ -961,6 +1038,12 @@ export default function Page() {
   const [showNotifPanel, setShowNotifPanel] = useState(false);
   const notifPanelRef = useRef<HTMLDivElement>(null);
   const [expressOrdersEnabled, setExpressOrdersEnabled] = useState(false);
+  const [quotations, setQuotations] = useState<Quotation[]>([]);
+  const [createJobPrefill, setCreateJobPrefill] = useState<Partial<Job> | null>(null);
+  const [createJobNonce, setCreateJobNonce] = useState(0);
+  const [expressRequests, setExpressRequests] = useState<ExpressRequest[]>([]);
+  const [showExpressPanel, setShowExpressPanel] = useState(false);
+  const expressPanelRef = useRef<HTMLDivElement>(null);
 
   const selectedJob = jobs.find((job) => job.id === selectedJobId) ?? jobs[0] ?? null;
   const currentRolePermissions = useMemo(() => {
@@ -980,6 +1063,7 @@ export default function Page() {
         { label: "Dashboard", icon: LayoutDashboard, visible: currentRolePermissions.includes("view_dashboard") },
         { label: "My Jobs", icon: ListTodo, visible: true },
         { label: "Board", icon: ClipboardList, visible: currentRolePermissions.includes("view_dashboard") },
+        { label: "Quotations", icon: ReceiptText, visible: currentRolePermissions.includes("create_job") },
         { label: "Create Job", icon: ClipboardPlus, visible: currentRolePermissions.includes("create_job") },
         { label: "Calendar", icon: CalendarDays, visible: currentRolePermissions.includes("view_dashboard") },
         { label: "Customers", icon: UsersRound, visible: currentRolePermissions.includes("create_customer") || currentRolePermissions.includes("edit_customer") || currentRolePermissions.includes("delete_customer") },
@@ -989,11 +1073,11 @@ export default function Page() {
         { label: "Leave", icon: CalendarDays, visible: currentRolePermissions.includes("view_dashboard") },
         { label: "HR", icon: UsersRound, visible: currentRolePermissions.includes("manage_hr") },
         { label: "Payroll", icon: WalletCards, visible: currentRolePermissions.includes("manage_hr") },
-        { label: "Settings", icon: Settings, visible: true },
+        { label: "Settings", icon: Settings, visible: currentUser.role === "Owner" },
         { label: "Detail", icon: FileImage, visible: currentRolePermissions.includes("view_dashboard") },
         { label: "Audit", icon: ShieldCheck, visible: currentRolePermissions.includes("view_audit_log") }
       ].filter((item) => item.visible),
-    [currentRolePermissions]
+    [currentRolePermissions, currentUser.role]
   );
 
   useEffect(() => {
@@ -1003,7 +1087,7 @@ export default function Page() {
     async function loadProfile(userId: string) {
       const { data, error } = await supabase!
         .from("profiles")
-        .select("id, email, full_name, role, extra_roles, avatar_url, branch")
+        .select("id, email, full_name, role, extra_roles, avatar_url, phone, branch")
         .eq("id", userId)
         .single();
       if (!isMounted || error || !data) return;
@@ -1077,7 +1161,197 @@ export default function Page() {
     }
   }
 
+  // โหลดคำขอด่วน (เปิด/ที่อนุมัติแล้ว) สำหรับโหมด Supabase
+  async function reloadExpressRequests() {
+    if (!supabase || !isSupabaseConfigured) return;
+    const { data, error } = await supabase
+      .from("express_requests")
+      .select("id, requested_by, requested_by_name, status, approved_by, approved_by_name, consumed, created_at")
+      .order("created_at", { ascending: false })
+      .limit(100);
+    if (error) return;
+    setExpressRequests(((data ?? []) as SupabaseExpressRequestRow[]).map(expressRowToRequest));
+  }
+
+  // เซลส์กด "ขออนุมัติงานด่วน" → สร้างคำขอ + แจ้งผู้จัดการ/เจ้าของ + log
+  async function requestExpress() {
+    if (!can("create_job")) {
+      setDataError("บทบาทนี้ยังไม่มีสิทธิ์สร้างงาน");
+      return;
+    }
+    if (myLatestExpressRequest?.status === "pending") {
+      setDataError("คุณมีคำขอด่วนที่รออนุมัติอยู่แล้ว");
+      return;
+    }
+    if (myApprovedExpressRequest) {
+      setDataError("คำขอด่วนของคุณได้รับอนุมัติแล้ว สร้างงานด่วนได้เลย");
+      return;
+    }
+    if (supabase && isSupabaseConfigured && uuidPattern.test(currentUser.id)) {
+      const { error } = await supabase.from("express_requests").insert({
+        requested_by: currentUser.id,
+        requested_by_name: currentUser.name,
+        status: "pending"
+      });
+      if (error) {
+        setDataError(error.message);
+        return;
+      }
+      // แจ้งเตือนผู้จัดการ/เจ้าของทุกคน
+      const managerIds = teamMembers
+        .filter((member) => (member.role === "Owner" || member.role === "Manager") && uuidPattern.test(member.id))
+        .map((member) => member.id);
+      if (managerIds.length) {
+        void supabase.from("notifications").insert(
+          managerIds.map((recipientId) => ({
+            recipient_id: recipientId,
+            type: "express_request",
+            message: `${currentUser.name} ขออนุมัติสร้างงานด่วน`
+          }))
+        );
+      }
+      void appendAudit("requested express order", currentUser.name, "express_requests", null);
+      await reloadExpressRequests();
+    } else {
+      // โหมด mock
+      setExpressRequests((current) => [
+        { id: crypto.randomUUID(), requestedById: currentUser.id, requestedByName: currentUser.name, status: "pending", consumed: false, createdAt: new Date().toISOString() },
+        ...current
+      ]);
+    }
+  }
+
+  // ผู้จัดการ/เจ้าของ อนุมัติหรือปฏิเสธคำขอด่วน
+  async function decideExpress(requestId: string, decision: "approved" | "rejected") {
+    if (!canManageExpress) {
+      setDataError("เฉพาะผู้จัดการ/เจ้าของเท่านั้นที่อนุมัติงานด่วนได้");
+      return;
+    }
+    const target = expressRequests.find((req) => req.id === requestId);
+    if (supabase && isSupabaseConfigured) {
+      const { error } = await supabase
+        .from("express_requests")
+        .update({ status: decision, approved_by: uuidPattern.test(currentUser.id) ? currentUser.id : null, approved_by_name: currentUser.name, decided_at: new Date().toISOString() })
+        .eq("id", requestId);
+      if (error) {
+        setDataError(error.message);
+        return;
+      }
+      // แจ้งเตือนผู้ขอ
+      if (target && uuidPattern.test(target.requestedById)) {
+        void supabase.from("notifications").insert({
+          recipient_id: target.requestedById,
+          type: "express_decision",
+          message: decision === "approved" ? `${currentUser.name} อนุมัติงานด่วนของคุณแล้ว — สร้างงานด่วนได้เลย` : `${currentUser.name} ปฏิเสธคำขอด่วนของคุณ`
+        });
+      }
+      void appendAudit(decision === "approved" ? "approved express order" : "rejected express order", target?.requestedByName ?? requestId, "express_requests", requestId);
+      await reloadExpressRequests();
+    } else {
+      setExpressRequests((current) => current.map((req) => (req.id === requestId ? { ...req, status: decision, approvedByName: currentUser.name } : req)));
+    }
+  }
+
+  // ทำเครื่องหมายว่าคำขอด่วนถูกใช้สร้างงานแล้ว (เรียกหลังสร้างงานด่วนสำเร็จ)
+  async function consumeExpressRequest() {
+    const req = myApprovedExpressRequest;
+    if (!req) return;
+    if (supabase && isSupabaseConfigured) {
+      await supabase.from("express_requests").update({ consumed: true }).eq("id", req.id);
+      await reloadExpressRequests();
+    } else {
+      setExpressRequests((current) => current.map((r) => (r.id === req.id ? { ...r, consumed: true } : r)));
+    }
+  }
+
+  // ===== ใบเสนอราคา (Quotation) =====
+  async function reloadQuotations() {
+    if (!supabase || !isSupabaseConfigured) return;
+    const { data, error } = await supabase
+      .from("quotations")
+      .select("id, quote_number, customer_id, customer_name, customer_phone, title, description, amount, status, created_by_name, converted_job_id, created_at")
+      .order("created_at", { ascending: false })
+      .limit(200);
+    if (error) return;
+    setQuotations(((data ?? []) as SupabaseQuotationRow[]).map(quotationRowToQuotation));
+  }
+
+  async function createQuotation(input: { customerId?: string; customerName: string; customerPhone: string; title: string; description: string; amount: number }) {
+    if (!can("create_job")) {
+      setDataError("บทบาทนี้ยังไม่มีสิทธิ์สร้างใบเสนอราคา");
+      return;
+    }
+    if (!input.title.trim() || !input.customerName.trim()) {
+      setDataError("กรุณากรอกชื่อลูกค้าและชื่องาน");
+      return;
+    }
+    if (supabase && isSupabaseConfigured) {
+      const { error } = await supabase.from("quotations").insert({
+        customer_id: input.customerId && uuidPattern.test(input.customerId) ? input.customerId : null,
+        customer_name: input.customerName.trim(),
+        customer_phone: input.customerPhone.trim(),
+        title: input.title.trim(),
+        description: input.description.trim(),
+        amount: input.amount,
+        status: "draft",
+        created_by: uuidPattern.test(currentUser.id) ? currentUser.id : null,
+        created_by_name: currentUser.name
+      });
+      if (error) { setDataError(error.message); return; }
+      void appendAudit("created quotation", input.title.trim(), "quotations", null);
+      await reloadQuotations();
+    } else {
+      setQuotations((current) => [
+        { id: crypto.randomUUID(), customerId: input.customerId, customerName: input.customerName, customerPhone: input.customerPhone, title: input.title, description: input.description, amount: input.amount, status: "draft", createdByName: currentUser.name, createdAt: new Date().toISOString() },
+        ...current
+      ]);
+    }
+  }
+
+  async function updateQuotationStatus(id: string, status: Quotation["status"]) {
+    if (!can("create_job")) return;
+    const patch: Record<string, unknown> = { status };
+    if (status === "approved") patch.approved_at = new Date().toISOString();
+    setQuotations((current) => current.map((q) => (q.id === id ? { ...q, status } : q)));
+    if (supabase && isSupabaseConfigured) {
+      const { error } = await supabase.from("quotations").update(patch).eq("id", id);
+      if (error) { setDataError(error.message); void reloadQuotations(); return; }
+    }
+    void appendAudit(`quotation ${status}`, id, "quotations", id);
+  }
+
+  // แปลงใบเสนอราคา → เด้งไปหน้าสร้างงาน พร้อมเติมข้อมูลให้ (เซลส์แนบสลิปแล้วสร้างใบงานตามระบบเดิม)
+  function convertQuotationToJob(quotation: Quotation) {
+    setCreateJobPrefill({
+      customerId: quotation.customerId ?? "new",
+      customerName: quotation.customerName,
+      phone: quotation.customerPhone,
+      title: quotation.title,
+      description: quotation.description,
+      price: quotation.amount
+    });
+    setCreateJobNonce((n) => n + 1);
+    setActiveView("Create Job");
+    void updateQuotationStatus(quotation.id, "converted");
+  }
+
   const canManageExpress = currentUser.role === "Owner" || currentUser.role === "Manager";
+  const pendingExpressRequests = useMemo(
+    () => expressRequests.filter((req) => req.status === "pending"),
+    [expressRequests]
+  );
+  // คำขอด่วนของฉันที่อนุมัติแล้วและยังไม่ได้ใช้สร้างงาน (ปลดล็อกการติ๊ก "งานด่วน")
+  const myApprovedExpressRequest = useMemo(
+    () => expressRequests.find((req) => req.requestedById === currentUser.id && req.status === "approved" && !req.consumed),
+    [expressRequests, currentUser.id]
+  );
+  // คำขอด่วนล่าสุดของฉัน (ไว้แสดงสถานะปุ่มฝั่งเซลส์)
+  const myLatestExpressRequest = useMemo(
+    () => expressRequests.filter((req) => req.requestedById === currentUser.id)[0],
+    [expressRequests, currentUser.id]
+  );
+  // ติ๊กงานด่วนได้เมื่อ: เป็นผู้จัดการ/เจ้าของ หรือมีคำขอที่อนุมัติแล้ว
+  const canCreateExpress = canManageExpress || Boolean(myApprovedExpressRequest);
 
   // Realtime: รับแจ้งเตือน + สวิตช์งานด่วน + ซิงก์ลูกค้า/งานจากเซิร์ฟเวอร์กลาง (เฉพาะโหมด Supabase)
   useEffect(() => {
@@ -1132,6 +1406,18 @@ export default function Page() {
     document.addEventListener("mousedown", handleClickOutside);
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, [showNotifPanel]);
+
+  // ปิด express panel เมื่อคลิกนอกกล่อง
+  useEffect(() => {
+    if (!showExpressPanel) return;
+    function handleClickOutside(event: MouseEvent) {
+      if (expressPanelRef.current && !expressPanelRef.current.contains(event.target as Node)) {
+        setShowExpressPanel(false);
+      }
+    }
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, [showExpressPanel]);
 
   // เตือนงานของตัวเองที่ใกล้ถึงกำหนดส่ง (ภายใน 2 วัน หรือเลยกำหนด) วันละครั้งต่อหนึ่งงาน
   useEffect(() => {
@@ -1229,7 +1515,7 @@ export default function Page() {
         shopStateResult,
         notificationsResult
       ] = await Promise.all([
-        supabase.from("profiles").select("id, email, full_name, role, extra_roles, avatar_url, branch, is_active").eq("is_active", true).order("created_at", { ascending: true }),
+        supabase.from("profiles").select("id, email, full_name, role, extra_roles, avatar_url, phone, branch, is_active").eq("is_active", true).order("created_at", { ascending: true }),
         supabase.from("company_settings").select("*").order("created_at", { ascending: true }).limit(1),
         supabase.from("customers").select("*").order("created_at", { ascending: false }),
         supabase.from("jobs").select("*").order("created_at", { ascending: false }),
@@ -1291,6 +1577,8 @@ export default function Page() {
       if (!notificationsResult.error) {
         setNotifications(((notificationsResult.data ?? []) as SupabaseNotificationRow[]).map(notifFromRow));
       }
+      void reloadExpressRequests();
+      void reloadQuotations();
       // คงงานที่กำลังเปิดดูไว้ ไม่ดีดออกเวลามีข้อมูลซิงก์เข้ามา
       setSelectedJobId((current) => (current && nextJobs.some((job) => job.id === current) ? current : nextJobs[0]?.id ?? ""));
     } catch (error) {
@@ -1302,8 +1590,15 @@ export default function Page() {
 
   // เจ้าของ/คนไม่มีสาขาประจำ → เห็นทุกสาขา; คนมีสาขา → เห็นเฉพาะงานสาขาตัวเอง + งานที่ยังไม่ระบุสาขา
   const branchScopedJobs = useMemo(() => {
-    if (currentUser.role === "Owner" || !currentUser.branch) return jobs;
-    return jobs.filter((job) => !job.productionBranch || job.productionBranch === currentUser.branch);
+    const byBranch = (currentUser.role === "Owner" || !currentUser.branch)
+      ? jobs
+      : jobs.filter((job) => !job.productionBranch || job.productionBranch === currentUser.branch);
+    // ฝ่ายผลิต (ดีไซเนอร์/ผลิต/แพ็ก) เห็นเฉพาะงานที่ยืนยันมัดจำแล้ว
+    // งานเก่าที่ไม่มีสลิป (ก่อนมีระบบนี้) ไม่ถูกกั้น เพื่อไม่ให้งานเดิมหายจากคิว
+    if (["Designer", "Production Staff", "Packing Staff"].includes(currentUser.role)) {
+      return byBranch.filter((job) => job.depositConfirmed || (!job.depositSlip && !job.depositWaived));
+    }
+    return byBranch;
   }, [jobs, currentUser.role, currentUser.branch]);
 
   const filteredJobs = useMemo(() => {
@@ -1391,7 +1686,7 @@ export default function Page() {
         if (error) throw error;
         const { data: profile, error: profileError } = await supabase
           .from("profiles")
-          .select("id, email, full_name, role, extra_roles, avatar_url, branch")
+          .select("id, email, full_name, role, extra_roles, avatar_url, phone, branch")
           .eq("id", data.user.id)
           .single();
         if (profileError) throw profileError;
@@ -1638,6 +1933,35 @@ export default function Page() {
     void appendAudit("updated payment", jobId, "jobs", existingJob.dbId);
   }
 
+  // ผู้จัดการ/แอดมิน ยืนยันยอดมัดจำ → ปลดล็อกให้งานเข้าคิวผลิต
+  // เคสยกเว้นมัดจำ (deposit_waived) ต้องเป็น "เจ้าของ" เท่านั้นที่อนุมัติได้
+  async function confirmDeposit(jobId: string) {
+    const existingJob = jobs.find((job) => job.id === jobId);
+    if (!existingJob) return;
+    if (existingJob.depositWaived) {
+      if (currentUser.role !== "Owner") {
+        setDataError("เฉพาะเจ้าของเท่านั้นที่อนุมัติยกเว้นมัดจำได้");
+        return;
+      }
+    } else if (!["Owner", "Manager", "Admin"].includes(currentUser.role)) {
+      setDataError("เฉพาะเจ้าของ/ผู้จัดการ/แอดมินเท่านั้นที่ยืนยันยอดมัดจำได้");
+      return;
+    }
+    setJobs((current) => current.map((job) => (job.id === jobId ? { ...job, depositConfirmed: true, depositConfirmedBy: currentUser.name } : job)));
+    if (supabase && existingJob.dbId) {
+      const { error } = await supabase
+        .from("jobs")
+        .update({ deposit_confirmed: true, deposit_confirmed_by: uuidPattern.test(currentUser.id) ? currentUser.id : null, deposit_confirmed_at: new Date().toISOString() })
+        .eq("id", existingJob.dbId);
+      if (error) {
+        setDataError(error.message);
+        void refreshWorkspaceData();
+        return;
+      }
+    }
+    void appendAudit("confirmed deposit", jobId, "jobs", existingJob.dbId);
+  }
+
   async function addComment(jobId: string, text: string) {
     if (!text.trim()) return;
     const existingJob = jobs.find((job) => job.id === jobId);
@@ -1790,6 +2114,9 @@ export default function Page() {
               due_date: input?.dueDate ?? todayISO(),
               priority: input?.priority ?? "Normal",
               is_express: input?.isExpress ?? false,
+              deposit_slip: input?.depositSlip ?? null,
+              deposit_received_date: input?.depositReceivedDate || null,
+              deposit_waived: input?.depositWaived ?? false,
               production_branch: input?.productionBranch ?? null,
               acceptance: jobAcceptance,
               reject_reason: null,
@@ -1863,6 +2190,10 @@ export default function Page() {
       dueDate: input?.dueDate ?? todayISO(),
       priority: input?.priority ?? "Urgent",
       isExpress: input?.isExpress ?? false,
+      depositSlip: input?.depositSlip ?? undefined,
+      depositReceivedDate: input?.depositReceivedDate ?? undefined,
+      depositConfirmed: false,
+      depositWaived: input?.depositWaived ?? false,
       productionBranch: input?.productionBranch ?? "",
       acceptance: jobAcceptance,
       rejectReason: "",
@@ -1904,6 +2235,10 @@ export default function Page() {
     }
     setJobs((current) => [job, ...current]);
     notifyAssignees("assigned", job, `ได้รับมอบหมายงาน ${job.id} – ${job.title}`);
+    // งานด่วนที่สร้างโดยเซลส์ (ไม่ใช่ผู้จัดการ) → ใช้สิทธิ์คำขอที่อนุมัติแล้ว 1 ครั้ง
+    if (job.isExpress && !canManageExpress) {
+      void consumeExpressRequest();
+    }
     setSelectedJobId(job.id);
     setActiveView("Detail");
     void appendAudit("created job", job.id);
@@ -1960,7 +2295,7 @@ export default function Page() {
       const { data, error } = await supabase
         .from("profiles")
         .upsert({ id: profileId, email: authEmail, full_name: member.name, role: member.role, avatar_url: member.avatarUrl ?? null, branch: member.branch || null, is_active: true }, { onConflict: "id" })
-        .select("id, email, full_name, role, extra_roles, avatar_url, branch")
+        .select("id, email, full_name, role, extra_roles, avatar_url, phone, branch")
         .single();
       if (error) {
         setDataError(error.message);
@@ -2241,7 +2576,7 @@ export default function Page() {
     void appendAudit("updated salary", memberId, "employee_hr", memberId);
   }
 
-  async function updateTeamMember(memberId: string, updates: Pick<TeamMember, "name" | "role" | "branch"> & { roles?: Role[] }) {
+  async function updateTeamMember(memberId: string, updates: Pick<TeamMember, "name" | "role" | "branch"> & { roles?: Role[]; phone?: string }) {
     const isOwnProfile = currentUser.id === memberId;
     if (!can("manage_users") && !isOwnProfile) {
       setDataError("บทบาทนี้ยังไม่มีสิทธิ์จัดการผู้ใช้");
@@ -2262,14 +2597,16 @@ export default function Page() {
     const nextBranch = nextRole === "Owner"
       ? ""
       : (can("manage_users") ? (updates.branch ?? existingMember.branch ?? "") : existingMember.branch ?? "");
+    const nextPhone = updates.phone !== undefined ? updates.phone.trim() : (existingMember.phone ?? "");
     const safeUpdates = {
       name: updates.name,
       role: nextRole,
       roles: nextRoles.length ? nextRoles : undefined,
-      branch: nextBranch
+      branch: nextBranch,
+      phone: nextPhone || undefined
     };
     if (supabase && uuidPattern.test(memberId)) {
-      const { error } = await supabase.from("profiles").update({ full_name: safeUpdates.name, role: safeUpdates.role, extra_roles: nextRoles, branch: safeUpdates.branch || null }).eq("id", memberId);
+      const { error } = await supabase.from("profiles").update({ full_name: safeUpdates.name, role: safeUpdates.role, extra_roles: nextRoles, branch: safeUpdates.branch || null, phone: nextPhone || null }).eq("id", memberId);
       if (error) {
         setDataError(error.message);
         return;
@@ -2300,6 +2637,25 @@ export default function Page() {
     setTeamMembers((current) => current.map((member) => (member.id === memberId ? updatedMember : member)));
     if (currentUser.id === memberId) setCurrentUser(updatedMember);
     void appendAudit(avatarUrl ? "updated profile image" : "removed profile image", existingMember.name, "profiles", memberId);
+  }
+
+  // เปลี่ยนรหัสผ่านของตัวเอง (ผ่าน Supabase Auth) — คืนค่า true ถ้าสำเร็จ
+  async function changeOwnPassword(newPassword: string): Promise<boolean> {
+    if (newPassword.length < 6) {
+      setDataError("รหัสผ่านต้องมีอย่างน้อย 6 ตัวอักษร");
+      return false;
+    }
+    if (!supabase || !isSupabaseConfigured) {
+      setDataError("เปลี่ยนรหัสผ่านได้เมื่อเชื่อมต่อ Supabase แล้วเท่านั้น");
+      return false;
+    }
+    const { error } = await supabase.auth.updateUser({ password: newPassword });
+    if (error) {
+      setDataError(error.message);
+      return false;
+    }
+    void appendAudit("changed own password", currentUser.name, "profiles", currentUser.id);
+    return true;
   }
 
   async function removeTeamMember(memberId: string) {
@@ -2350,7 +2706,7 @@ export default function Page() {
     void appendAudit("created customer", nextCustomer.name, "customers");
   }
 
-  async function updateCustomer(customerId: string, updates: Pick<Customer, "name" | "phone" | "lineId" | "email" | "companyName" | "taxId" | "branch" | "billingAddress" | "accountingEmail" | "requiresInvoice">) {
+  async function updateCustomer(customerId: string, updates: Pick<Customer, "name" | "phone" | "lineId" | "email" | "companyName" | "taxId" | "branch" | "billingAddress" | "accountingEmail" | "requiresInvoice" | "notes" | "sourceChannel" | "sourcePage">) {
     if (!can("edit_customer")) {
       setDataError("บทบาทนี้ยังไม่มีสิทธิ์แก้ไขลูกค้า");
       return;
@@ -2701,23 +3057,81 @@ export default function Page() {
                   />
                 </label>
 
-                {/* สวิตช์เปิดรับงานด่วน — เฉพาะผู้จัดการ/เจ้าของ */}
+                {/* งานด่วน — ผู้จัดการ/เจ้าของ: สวิตช์รับงานด่วน + อนุมัติคำขอ */}
                 {canManageExpress ? (
-                  <button
-                    onClick={toggleExpressOrders}
-                    className={`inline-flex items-center justify-center gap-2 rounded-2xl px-4 py-2.5 text-sm font-semibold shadow-sm transition ${
-                      expressOrdersEnabled ? "bg-rose-500 text-white shadow-rose-500/25" : "bg-white/70 text-k2-muted"
-                    }`}
-                    title={expressOrdersEnabled ? "ปิดรับงานด่วน" : "เปิดรับงานด่วน"}
-                  >
-                    <Zap className="h-4 w-4" />
-                    {expressOrdersEnabled ? "รับงานด่วน: เปิด" : "รับงานด่วน: ปิด"}
-                  </button>
-                ) : expressOrdersEnabled ? (
-                  <span className="inline-flex items-center gap-1.5 rounded-2xl bg-rose-100 px-3 py-2.5 text-sm font-bold text-rose-700">
-                    <Zap className="h-4 w-4" />
-                    รับงานด่วน
-                  </span>
+                  <>
+                    <button
+                      onClick={toggleExpressOrders}
+                      className={`inline-flex items-center justify-center gap-2 rounded-2xl px-4 py-2.5 text-sm font-semibold shadow-sm transition ${
+                        expressOrdersEnabled ? "bg-rose-500 text-white shadow-rose-500/25" : "bg-white/70 text-k2-muted"
+                      }`}
+                      title={expressOrdersEnabled ? "ปิดรับงานด่วน" : "เปิดรับงานด่วน"}
+                    >
+                      <Zap className="h-4 w-4" />
+                      {expressOrdersEnabled ? "รับงานด่วน: เปิด" : "รับงานด่วน: ปิด"}
+                    </button>
+                    {/* อนุมัติคำขอด่วน */}
+                    <div ref={expressPanelRef} className="relative">
+                      <button
+                        onClick={() => { setShowExpressPanel((prev) => !prev); void reloadExpressRequests(); }}
+                        className="relative inline-flex items-center gap-2 rounded-2xl bg-white/70 px-4 py-2.5 text-sm font-semibold text-k2-muted shadow-sm"
+                        title="คำขอสร้างงานด่วน"
+                      >
+                        <Zap className="h-4 w-4" />
+                        อนุมัติด่วน
+                        {pendingExpressRequests.length > 0 && (
+                          <span className="absolute -right-1 -top-1 flex h-5 w-5 items-center justify-center rounded-full bg-rose-500 text-[10px] font-bold text-white">
+                            {Math.min(pendingExpressRequests.length, 9)}{pendingExpressRequests.length > 9 ? "+" : ""}
+                          </span>
+                        )}
+                      </button>
+                      {showExpressPanel && (
+                        <div className="absolute right-0 top-12 z-50 w-80 overflow-hidden rounded-[1.25rem] border border-white/80 bg-white/97 shadow-2xl backdrop-blur-xl">
+                          <div className="border-b border-white/60 px-4 py-3 text-sm font-bold">คำขอสร้างงานด่วน</div>
+                          <div className="max-h-96 overflow-y-auto">
+                            {pendingExpressRequests.length === 0 ? (
+                              <p className="px-4 py-8 text-center text-sm font-semibold text-k2-muted">ไม่มีคำขอรออนุมัติ</p>
+                            ) : (
+                              pendingExpressRequests.map((req) => (
+                                <div key={req.id} className="flex flex-col gap-2 border-b border-white/40 px-4 py-3">
+                                  <div>
+                                    <p className="text-sm font-bold">{req.requestedByName || "พนักงาน"}</p>
+                                    <p className="text-xs text-k2-muted">{new Date(req.createdAt).toLocaleString("th-TH")}</p>
+                                  </div>
+                                  <div className="flex gap-2">
+                                    <button onClick={() => void decideExpress(req.id, "approved")} className="flex-1 rounded-xl bg-teal-500 px-3 py-2 text-xs font-extrabold text-white">อนุมัติ</button>
+                                    <button onClick={() => void decideExpress(req.id, "rejected")} className="flex-1 rounded-xl bg-white/70 px-3 py-2 text-xs font-extrabold text-rose-600 shadow-sm">ปฏิเสธ</button>
+                                  </div>
+                                </div>
+                              ))
+                            )}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  </>
+                ) : can("create_job") ? (
+                  /* เซลส์: ปุ่มขออนุมัติงานด่วน ตามสถานะคำขอ */
+                  myApprovedExpressRequest ? (
+                    <span className="inline-flex items-center gap-1.5 rounded-2xl bg-teal-100 px-3 py-2.5 text-sm font-bold text-teal-700" title="สร้างงานด่วนได้เลย">
+                      <Zap className="h-4 w-4" />
+                      อนุมัติด่วนแล้ว ✓
+                    </span>
+                  ) : myLatestExpressRequest?.status === "pending" ? (
+                    <span className="inline-flex items-center gap-1.5 rounded-2xl bg-amber-100 px-3 py-2.5 text-sm font-bold text-amber-700">
+                      <Zap className="h-4 w-4" />
+                      รออนุมัติด่วน...
+                    </span>
+                  ) : (
+                    <button
+                      onClick={() => void requestExpress()}
+                      className="inline-flex items-center justify-center gap-2 rounded-2xl bg-white/70 px-4 py-2.5 text-sm font-semibold text-rose-600 shadow-sm"
+                      title="ขออนุมัติสร้างงานด่วน"
+                    >
+                      <Zap className="h-4 w-4" />
+                      ขออนุมัติงานด่วน
+                    </button>
+                  )
                 ) : null}
 
                 {/* กระดิ่งแจ้งเตือน */}
@@ -2785,6 +3199,16 @@ export default function Page() {
                     สร้างงาน
                   </button>
                 ) : null}
+                {/* โปรไฟล์ของฉัน — ไอคอนมุมขวาบน (เห็นทุกอุปกรณ์ รวมมือถือ) */}
+                <button
+                  onClick={() => setShowMyProfile(true)}
+                  className="inline-flex items-center gap-2 rounded-2xl bg-white/70 px-2.5 py-1.5 text-sm font-semibold text-k2-ink shadow-sm"
+                  title="โปรไฟล์ของฉัน"
+                  aria-label="โปรไฟล์ของฉัน"
+                >
+                  <MemberAvatar member={currentUserPrefs} className="h-8 w-8 rounded-xl text-xs" />
+                  <span className="hidden max-w-[8rem] truncate sm:inline">{currentUserPrefs.nickname || currentUser.name}</span>
+                </button>
                 <button
                   onClick={signOut}
                   className="inline-flex items-center justify-center gap-2 rounded-2xl bg-white/70 px-4 py-2.5 text-sm font-semibold text-k2-muted shadow-sm"
@@ -2869,7 +3293,19 @@ export default function Page() {
             )}
             {activeView === "Create Job" && (
               <motion.div key="create" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}>
-                <CreateJobView customers={customerRecords} teamMembers={teamMembers} companyProfile={companyProfile} expressEnabled={expressOrdersEnabled} onCreate={createJob} />
+                <CreateJobView key={createJobNonce} prefill={createJobPrefill} customers={customerRecords} teamMembers={teamMembers} companyProfile={companyProfile} expressEnabled={canCreateExpress} onCreate={createJob} />
+              </motion.div>
+            )}
+            {activeView === "Quotations" && (
+              <motion.div key="quotations" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}>
+                <QuotationsView
+                  quotations={quotations}
+                  customers={customerRecords}
+                  canSeeMoney={canSeeMoney}
+                  onCreate={createQuotation}
+                  onSetStatus={updateQuotationStatus}
+                  onConvert={convertQuotationToJob}
+                />
               </motion.div>
             )}
             {activeView === "Customers" && (
@@ -2897,7 +3333,7 @@ export default function Page() {
                 <ReportsView jobs={jobs} canSeeMoney={canSeeMoney} />
               </motion.div>
             )}
-            {activeView === "Settings" && (
+            {activeView === "Settings" && currentUser.role === "Owner" && (
               <motion.div key="settings" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}>
                 <SettingsView
                   currentUserId={currentUser.id}
@@ -2918,13 +3354,13 @@ export default function Page() {
             {activeView === "Detail" && (
               <motion.div key="detail" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}>
                 {selectedJob ? (
-                  <JobDetail job={selectedJob} companyProfile={companyProfile} canSeeMoney={canSeeMoney} canDeleteJob={can("delete_job")} onPayment={updatePayment} onComment={addComment} onMove={requestMove} onDelete={removeJob} />
+                  <JobDetail job={selectedJob} companyProfile={companyProfile} canSeeMoney={canSeeMoney} canDeleteJob={can("delete_job")} canConfirmDeposit={["Owner", "Manager", "Admin"].includes(currentUser.role)} canApproveWaiver={currentUser.role === "Owner"} onPayment={updatePayment} onConfirmDeposit={confirmDeposit} onComment={addComment} onMove={requestMove} onDelete={removeJob} />
                 ) : (
                   <EmptyState title="ยังไม่มีงานในระบบ" text="เริ่มจากสร้างลูกค้าและสร้างงานแรกได้เลย" action={() => setActiveView("Create Job")} />
                 )}
               </motion.div>
             )}
-            {activeView === "HR" && (
+            {activeView === "HR" && can("manage_hr") && (
               <motion.div key="hr" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}>
                 <HRView teamMembers={teamMembers} records={hrRecords} canEdit={can("manage_hr")} onSave={saveHrRecord} branches={BRANCH_LIST} branchSettings={branchSettings} onSaveBranch={saveBranchSetting} holidays={holidays} onAddHoliday={addHoliday} onRemoveHoliday={removeHoliday} />
               </motion.div>
@@ -3021,6 +3457,18 @@ export default function Page() {
         />
       ) : null}
 
+      {showMyProfile ? (
+        <MyProfileModal
+          currentUser={currentUserPrefs}
+          onSaveProfile={(name, phone) => updateTeamMember(currentUser.id, { name, role: currentUser.role, branch: currentUser.branch, phone })}
+          onUploadAvatar={(avatarUrl) => updateTeamMemberAvatar(currentUser.id, avatarUrl)}
+          onChangePassword={changeOwnPassword}
+          onOpenPersonalization={() => { setShowMyProfile(false); setShowPersonalization(true); }}
+          onSignOut={signOut}
+          onClose={() => setShowMyProfile(false)}
+        />
+      ) : null}
+
     </main>
   );
 }
@@ -3114,6 +3562,185 @@ function PersonalizationModal({
           type="button"
           onClick={onClose}
           className="mt-6 w-full rounded-2xl bg-k2-ink px-4 py-3 font-extrabold text-white"
+        >
+          เสร็จสิ้น
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function MyProfileModal({
+  currentUser,
+  onSaveProfile,
+  onUploadAvatar,
+  onChangePassword,
+  onOpenPersonalization,
+  onSignOut,
+  onClose
+}: {
+  currentUser: TeamMember;
+  onSaveProfile: (name: string, phone: string) => void;
+  onUploadAvatar: (avatarUrl: string) => void;
+  onChangePassword: (newPassword: string) => Promise<boolean>;
+  onOpenPersonalization: () => void;
+  onSignOut: () => void;
+  onClose: () => void;
+}) {
+  const [name, setName] = useState(currentUser.name);
+  const [phone, setPhone] = useState(currentUser.phone ?? "");
+  const [savedMsg, setSavedMsg] = useState("");
+  const [avatarError, setAvatarError] = useState("");
+  const [password, setPassword] = useState("");
+  const [passwordConfirm, setPasswordConfirm] = useState("");
+  const [pwMsg, setPwMsg] = useState("");
+  const [pwBusy, setPwBusy] = useState(false);
+
+  async function handleAvatar(file: File | null) {
+    if (!file) return;
+    setAvatarError("");
+    if (!file.type.startsWith("image/")) {
+      setAvatarError("กรุณาเลือกไฟล์รูปภาพเท่านั้น");
+      return;
+    }
+    if (file.size > 1_200_000) {
+      setAvatarError("รูปโปรไฟล์ต้องมีขนาดไม่เกิน 1.2 MB");
+      return;
+    }
+    const dataUrl = await readImageAsDataUrl(file);
+    onUploadAvatar(dataUrl);
+  }
+
+  function handleSaveProfile() {
+    if (!name.trim()) return;
+    onSaveProfile(name.trim(), phone.trim());
+    setSavedMsg("บันทึกแล้ว ✓");
+    setTimeout(() => setSavedMsg(""), 2500);
+  }
+
+  async function handleChangePassword() {
+    setPwMsg("");
+    if (password.length < 6) {
+      setPwMsg("รหัสผ่านต้องมีอย่างน้อย 6 ตัวอักษร");
+      return;
+    }
+    if (password !== passwordConfirm) {
+      setPwMsg("รหัสผ่านทั้งสองช่องไม่ตรงกัน");
+      return;
+    }
+    setPwBusy(true);
+    const ok = await onChangePassword(password);
+    setPwBusy(false);
+    if (ok) {
+      setPassword("");
+      setPasswordConfirm("");
+      setPwMsg("เปลี่ยนรหัสผ่านสำเร็จ ✓");
+      setTimeout(() => setPwMsg(""), 3000);
+    } else {
+      setPwMsg("เปลี่ยนรหัสผ่านไม่สำเร็จ (ดูข้อความแจ้งเตือนด้านบน)");
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4 backdrop-blur-sm" onClick={onClose}>
+      <div className="glass-solid max-h-[90vh] w-full max-w-md overflow-y-auto rounded-[1.6rem] p-6" onClick={(event) => event.stopPropagation()}>
+        <div className="mb-5 flex items-center gap-3">
+          <MemberAvatar member={currentUser} className="h-16 w-16 rounded-2xl text-lg" />
+          <div className="min-w-0">
+            <h3 className="text-xl font-extrabold text-k2-ink">โปรไฟล์ของฉัน</h3>
+            <p className="text-sm font-semibold text-k2-muted">{roleLabel[currentUser.role]}</p>
+          </div>
+        </div>
+
+        {/* รูปโปรไฟล์ */}
+        <div className="mb-5">
+          <p className="mb-1.5 text-sm font-bold text-k2-muted">รูปโปรไฟล์</p>
+          <label className="inline-flex cursor-pointer items-center gap-2 rounded-2xl bg-white/70 px-4 py-2.5 text-sm font-bold text-k2-ink shadow-sm">
+            <FileImage className="h-4 w-4" />
+            เปลี่ยนรูป
+            <input type="file" accept="image/*" className="hidden" onChange={(event) => handleAvatar(event.target.files?.[0] ?? null)} />
+          </label>
+          {avatarError ? <p className="mt-1.5 text-xs font-semibold text-rose-600">{avatarError}</p> : null}
+        </div>
+
+        {/* ชื่อ + เบอร์ */}
+        <label className="block">
+          <span className="mb-1.5 block text-sm font-bold text-k2-muted">ชื่อ</span>
+          <input
+            value={name}
+            onChange={(event) => setName(event.target.value)}
+            placeholder="ชื่อ-สกุล"
+            className="w-full rounded-2xl border border-white/80 bg-white/85 px-4 py-3 text-sm font-semibold outline-none"
+          />
+        </label>
+        <label className="mt-3 block">
+          <span className="mb-1.5 block text-sm font-bold text-k2-muted">เบอร์โทร</span>
+          <input
+            value={phone}
+            onChange={(event) => setPhone(event.target.value)}
+            placeholder="เช่น 081-234-5678"
+            inputMode="tel"
+            className="w-full rounded-2xl border border-white/80 bg-white/85 px-4 py-3 text-sm font-semibold outline-none"
+          />
+        </label>
+        <button
+          type="button"
+          onClick={handleSaveProfile}
+          className="mt-3 w-full rounded-2xl bg-k2-ink px-4 py-3 text-sm font-extrabold text-white"
+        >
+          บันทึกชื่อ/เบอร์
+        </button>
+        {savedMsg ? <p className="mt-2 text-center text-sm font-bold text-teal-600">{savedMsg}</p> : null}
+
+        {/* เปลี่ยนรหัสผ่าน */}
+        <div className="mt-6 border-t border-white/60 pt-5">
+          <p className="mb-2 text-sm font-bold text-k2-muted">เปลี่ยนรหัสผ่าน</p>
+          <input
+            type="password"
+            value={password}
+            onChange={(event) => setPassword(event.target.value)}
+            placeholder="รหัสผ่านใหม่ (อย่างน้อย 6 ตัว)"
+            className="w-full rounded-2xl border border-white/80 bg-white/85 px-4 py-3 text-sm font-semibold outline-none"
+          />
+          <input
+            type="password"
+            value={passwordConfirm}
+            onChange={(event) => setPasswordConfirm(event.target.value)}
+            placeholder="ยืนยันรหัสผ่านใหม่"
+            className="mt-2 w-full rounded-2xl border border-white/80 bg-white/85 px-4 py-3 text-sm font-semibold outline-none"
+          />
+          <button
+            type="button"
+            onClick={handleChangePassword}
+            disabled={pwBusy}
+            className="mt-3 w-full rounded-2xl bg-white/70 px-4 py-3 text-sm font-extrabold text-k2-ink shadow-sm disabled:opacity-50"
+          >
+            {pwBusy ? "กำลังเปลี่ยน..." : "เปลี่ยนรหัสผ่าน"}
+          </button>
+          {pwMsg ? <p className="mt-2 text-center text-sm font-bold text-k2-ink">{pwMsg}</p> : null}
+        </div>
+
+        {/* ปรับแต่ง (ชื่อเล่น/สี/สถานะ) + ออกจากระบบ */}
+        <div className="mt-6 grid grid-cols-2 gap-2">
+          <button
+            type="button"
+            onClick={onOpenPersonalization}
+            className="rounded-2xl bg-white/70 px-4 py-3 text-sm font-bold text-k2-ink shadow-sm"
+          >
+            ✨ ปรับแต่ง
+          </button>
+          <button
+            type="button"
+            onClick={onSignOut}
+            className="rounded-2xl bg-white/70 px-4 py-3 text-sm font-bold text-rose-600 shadow-sm"
+          >
+            ออกจากระบบ
+          </button>
+        </div>
+        <button
+          type="button"
+          onClick={onClose}
+          className="mt-3 w-full rounded-2xl bg-k2-ink px-4 py-3 font-extrabold text-white"
         >
           เสร็จสิ้น
         </button>
@@ -3478,6 +4105,9 @@ function Board({
                     </div>
                     <p className="font-semibold leading-5">{job.title}</p>
                     <p className="mt-1 text-sm text-k2-muted">{job.customerName}</p>
+                    {!job.depositConfirmed && (job.depositSlip || job.depositWaived) ? (
+                      <span className="mt-2 inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-bold text-amber-700">{job.depositWaived ? "รอเจ้าของอนุมัติ" : "รอยืนยันมัดจำ"}</span>
+                    ) : null}
                     <div className="mt-4 flex items-center justify-between gap-2 text-xs font-semibold text-k2-muted">
                       <span>{jobTypeLabel[job.type]}</span>
                       {urgency ? (
@@ -3561,7 +4191,10 @@ function JobDetail({
   companyProfile,
   canSeeMoney,
   canDeleteJob,
+  canConfirmDeposit,
+  canApproveWaiver,
   onPayment,
+  onConfirmDeposit,
   onComment,
   onMove,
   onDelete
@@ -3570,7 +4203,10 @@ function JobDetail({
   companyProfile: CompanyProfile;
   canSeeMoney: boolean;
   canDeleteJob: boolean;
+  canConfirmDeposit: boolean;
+  canApproveWaiver: boolean;
   onPayment: (jobId: string, deposit: number) => void;
+  onConfirmDeposit: (jobId: string) => void;
   onComment: (jobId: string, text: string) => void;
   onMove: (jobId: string, status: JobStatus) => void;
   onDelete: (jobId: string) => void;
@@ -3683,6 +4319,48 @@ function JobDetail({
           <div className="mt-4 flex items-center justify-between rounded-2xl bg-white/70 p-3">
             <span className="font-semibold">สถานะชำระเงิน</span>
             <span className="rounded-full bg-k2-mint px-3 py-1 text-xs font-bold text-emerald-800">{paymentLabel[job.paymentStatus]}</span>
+          </div>
+
+          {/* มัดจำ: วันที่รับเงิน + สลิป + ยืนยันยอด (หรือเคสยกเว้นมัดจำ — เจ้าของอนุมัติ) */}
+          <div className="mt-4 rounded-2xl border border-white/70 bg-white/55 p-3">
+            <div className="flex items-center justify-between">
+              <span className="font-semibold">{job.depositWaived ? "ยกเว้นมัดจำ" : "มัดจำ"}</span>
+              {job.depositConfirmed ? (
+                <span className="inline-flex items-center gap-1 rounded-full bg-teal-100 px-3 py-1 text-xs font-bold text-teal-700">
+                  <CheckCircle2 className="h-3.5 w-3.5" /> {job.depositWaived ? "เจ้าของอนุมัติแล้ว" : "ยืนยันยอดแล้ว"}{job.depositConfirmedBy ? ` · ${job.depositConfirmedBy}` : ""}
+                </span>
+              ) : (
+                <span className="rounded-full bg-amber-100 px-3 py-1 text-xs font-bold text-amber-700">{job.depositWaived ? "รอเจ้าของอนุมัติ" : "รอยืนยันยอด"}</span>
+              )}
+            </div>
+            {job.depositWaived ? (
+              <p className="mt-2 text-sm font-semibold text-amber-700">ลูกค้าไม่ต้องมัดจำ — ต้องให้เจ้าของอนุมัติก่อนเข้าคิวผลิต</p>
+            ) : (
+              <>
+                {job.depositReceivedDate ? (
+                  <p className="mt-2 text-sm font-semibold text-k2-muted">วันที่รับเงิน: {job.depositReceivedDate}</p>
+                ) : null}
+                {job.depositSlip ? (
+                  <a href={job.depositSlip} target="_blank" rel="noreferrer" className="mt-2 inline-block">
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img src={job.depositSlip} alt="สลิปมัดจำ" className="h-28 w-auto rounded-xl object-cover ring-1 ring-white/80" />
+                  </a>
+                ) : (
+                  <p className="mt-2 text-sm font-semibold text-k2-muted">— ไม่มีรูปสลิป —</p>
+                )}
+              </>
+            )}
+            {!job.depositConfirmed && (job.depositWaived ? canApproveWaiver : canConfirmDeposit) ? (
+              <button
+                type="button"
+                onClick={() => onConfirmDeposit(job.id)}
+                className="mt-3 w-full rounded-2xl bg-teal-500 px-4 py-3 text-sm font-extrabold text-white"
+              >
+                {job.depositWaived ? "✓ อนุมัติยกเว้นมัดจำ (เจ้าของ)" : "✓ ยืนยันยอดมัดจำ"} (ปลดล็อกเข้าคิวผลิต)
+              </button>
+            ) : !job.depositConfirmed && job.depositWaived ? (
+              <p className="mt-3 text-center text-xs font-semibold text-k2-muted">รอเจ้าของกดอนุมัติ</p>
+            ) : null}
           </div>
           {canSeeMoney && (
             <label className="mt-4 block">
@@ -3827,7 +4505,7 @@ function QuoteDocumentPreview({
               <td className="border border-slate-300 px-3 py-3 text-center">1</td>
               <td className="border border-slate-300 px-3 py-3 text-center text-slate-400">-</td>
               <td className="min-w-64 border border-slate-300 px-3 py-3 text-left">
-                <p className="font-bold">รายละเอียดงาน :</p>
+                <p className="font-bold">รายละเอียดออเดอร์ :</p>
                 <p>{job.title}</p>
                 <p className="mt-1 text-sm text-slate-600">{job.description}</p>
               </td>
@@ -4046,17 +4724,128 @@ function CustomerPicker({
   );
 }
 
+const quotationStatusInfo: Record<Quotation["status"], { label: string; cls: string }> = {
+  draft: { label: "ฉบับร่าง", cls: "bg-slate-100 text-slate-600" },
+  sent: { label: "ส่งให้ลูกค้าแล้ว", cls: "bg-sky-100 text-sky-700" },
+  approved: { label: "ลูกค้าอนุมัติ", cls: "bg-teal-100 text-teal-700" },
+  rejected: { label: "ปฏิเสธ", cls: "bg-rose-100 text-rose-700" },
+  converted: { label: "แปลงเป็นใบงานแล้ว", cls: "bg-violet-100 text-violet-700" }
+};
+
+function QuotationsView({
+  quotations,
+  customers,
+  canSeeMoney,
+  onCreate,
+  onSetStatus,
+  onConvert
+}: {
+  quotations: Quotation[];
+  customers: Customer[];
+  canSeeMoney: boolean;
+  onCreate: (input: { customerId?: string; customerName: string; customerPhone: string; title: string; description: string; amount: number }) => void;
+  onSetStatus: (id: string, status: Quotation["status"]) => void;
+  onConvert: (q: Quotation) => void;
+}) {
+  const [form, setForm] = useState({ customerId: "new", customerName: "", customerPhone: "", title: "", description: "", amount: 0 });
+
+  function pickCustomer(customer: Customer) {
+    setForm((c) => ({ ...c, customerId: customer.id, customerName: customer.name, customerPhone: customer.phone }));
+  }
+  function pickNew() {
+    setForm((c) => ({ ...c, customerId: "new", customerName: "", customerPhone: "" }));
+  }
+  function submit() {
+    if (!form.customerName.trim() || !form.title.trim()) return;
+    onCreate({ customerId: form.customerId, customerName: form.customerName, customerPhone: form.customerPhone, title: form.title, description: form.description, amount: form.amount });
+    setForm({ customerId: "new", customerName: "", customerPhone: "", title: "", description: "", amount: 0 });
+  }
+
+  return (
+    <div className="grid gap-4 xl:grid-cols-[0.85fr_1.15fr]">
+      {/* ฟอร์มสร้างใบเสนอราคา */}
+      <section className="glass rounded-[1.5rem] p-5">
+        <div className="mb-4">
+          <p className="text-sm font-semibold text-k2-muted">ใบเสนอราคา</p>
+          <h3 className="text-2xl font-semibold">สร้างใบเสนอราคาใหม่</h3>
+          <p className="mt-1 text-sm font-semibold text-k2-muted">เสนอราคา → ส่งให้ลูกค้า → ลูกค้าอนุมัติ → แปลงเป็นใบงาน</p>
+        </div>
+        <div className="space-y-3">
+          <label className="block space-y-2">
+            <span className="text-sm font-semibold text-k2-muted">ลูกค้า</span>
+            <CustomerPicker customers={customers} selectedId={form.customerId} selectedName={form.customerName} onPickNew={pickNew} onPickCustomer={pickCustomer} />
+          </label>
+          <TextField label={form.customerId === "new" ? "ชื่อลูกค้าใหม่" : "ชื่อลูกค้า"} value={form.customerName} onChange={(v) => setForm((c) => ({ ...c, customerName: v }))} />
+          <TextField label="เบอร์โทร" value={form.customerPhone} onChange={(v) => setForm((c) => ({ ...c, customerPhone: v }))} />
+          <TextField label="ชื่องาน / หัวข้อ" value={form.title} onChange={(v) => setForm((c) => ({ ...c, title: v }))} />
+          <label className="block space-y-2">
+            <span className="text-sm font-semibold text-k2-muted">รายละเอียด</span>
+            <textarea value={form.description} onChange={(e) => setForm((c) => ({ ...c, description: e.target.value }))} className="min-h-24 w-full rounded-2xl border border-white/80 bg-white/80 px-4 py-3 outline-none" />
+          </label>
+          <NumberField label="ราคาเสนอ (บาท)" value={form.amount} onChange={(v) => setForm((c) => ({ ...c, amount: v }))} />
+          <button type="button" onClick={submit} className="w-full rounded-2xl bg-k2-ink px-5 py-3.5 font-semibold text-white shadow-lg shadow-slate-900/15">
+            สร้างใบเสนอราคา
+          </button>
+        </div>
+      </section>
+
+      {/* รายการใบเสนอราคา */}
+      <section className="glass rounded-[1.5rem] p-5">
+        <h4 className="mb-4 text-xl font-semibold">รายการใบเสนอราคา ({quotations.length})</h4>
+        {quotations.length === 0 ? (
+          <p className="rounded-2xl bg-white/60 px-4 py-8 text-center text-sm font-semibold text-k2-muted">ยังไม่มีใบเสนอราคา</p>
+        ) : (
+          <div className="space-y-3">
+            {quotations.map((q) => (
+              <div key={q.id} className="rounded-2xl border border-white/70 bg-white/55 p-4">
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <p className="font-bold leading-5">{q.title}</p>
+                    <p className="text-sm text-k2-muted">{q.customerName}{q.customerPhone ? ` · ${q.customerPhone}` : ""}</p>
+                  </div>
+                  <span className={`shrink-0 rounded-full px-3 py-1 text-[11px] font-bold ${quotationStatusInfo[q.status].cls}`}>{quotationStatusInfo[q.status].label}</span>
+                </div>
+                {q.description ? <p className="mt-2 whitespace-pre-wrap text-sm text-k2-muted">{q.description}</p> : null}
+                {canSeeMoney ? <p className="mt-2 text-sm font-extrabold text-k2-ink">{money.format(q.amount)}</p> : null}
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {q.status === "draft" ? (
+                    <button type="button" onClick={() => onSetStatus(q.id, "sent")} className="rounded-xl bg-sky-500 px-3 py-2 text-xs font-extrabold text-white">ส่งให้ลูกค้า</button>
+                  ) : null}
+                  {q.status === "sent" ? (
+                    <>
+                      <button type="button" onClick={() => onSetStatus(q.id, "approved")} className="rounded-xl bg-teal-500 px-3 py-2 text-xs font-extrabold text-white">ลูกค้าอนุมัติ</button>
+                      <button type="button" onClick={() => onSetStatus(q.id, "rejected")} className="rounded-xl bg-white/70 px-3 py-2 text-xs font-extrabold text-rose-600 shadow-sm">ปฏิเสธ</button>
+                    </>
+                  ) : null}
+                  {q.status === "approved" ? (
+                    <button type="button" onClick={() => onConvert(q)} className="rounded-xl bg-k2-ink px-3 py-2 text-xs font-extrabold text-white">→ แปลงเป็นใบงาน (รับมัดจำ)</button>
+                  ) : null}
+                  {q.status === "rejected" ? (
+                    <button type="button" onClick={() => onSetStatus(q.id, "draft")} className="rounded-xl bg-white/70 px-3 py-2 text-xs font-extrabold text-k2-muted shadow-sm">กลับเป็นร่าง</button>
+                  ) : null}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </section>
+    </div>
+  );
+}
+
 function CreateJobView({
   customers,
   teamMembers,
   companyProfile,
   expressEnabled,
+  prefill,
   onCreate
 }: {
   customers: Customer[];
   teamMembers: TeamMember[];
   companyProfile: CompanyProfile;
   expressEnabled: boolean;
+  prefill?: Partial<Job> | null;
   onCreate: (job: Partial<Job>) => void;
 }) {
   const designerOptions = useMemo(() => teamMembers.filter((member) => ["Designer", "Admin", "Owner"].includes(member.role)), [teamMembers]);
@@ -4065,9 +4854,9 @@ function CreateJobView({
   const defaultProduction = productionOptions[0]?.name ?? "Unassigned";
   // ฟอร์มสร้างงานเริ่มจากค่าว่างเสมอ เพื่อไม่ให้ข้อมูลจากงานก่อนหน้าค้างมาทำให้สร้างออเดอร์ผิด/ซ้ำ
   const [form, setForm] = useState({
-    customerId: "new",
-    customerName: "",
-    phone: "",
+    customerId: prefill?.customerId ?? "new",
+    customerName: prefill?.customerName ?? "",
+    phone: prefill?.phone ?? "",
     lineId: "",
     companyName: "",
     taxId: "",
@@ -4075,9 +4864,9 @@ function CreateJobView({
     billingAddress: "",
     accountingEmail: "",
     requiresInvoice: false,
-    title: "",
+    title: prefill?.title ?? "",
     type: "DTG Shirt" as JobType,
-    description: "",
+    description: prefill?.description ?? "",
     quantity: 1,
     orderDate: todayISO(),
     dueDate: addDaysISO(todayISO(), DEFAULT_LEAD_TIME_DAYS),
@@ -4085,8 +4874,11 @@ function CreateJobView({
     priority: "Normal" as Priority,
     assignedDesigner: defaultDesigner,
     assignedProduction: defaultProduction,
-    price: 0,
+    price: prefill?.price ?? 0,
     deposit: 0,
+    depositReceivedDate: todayISO(),
+    depositSlip: "",
+    depositWaived: false,
     internalNotes: "",
     fileName: "",
     sourceChannel: "LINE",
@@ -4096,11 +4888,28 @@ function CreateJobView({
     colorSpec: "",
     productionBranch: "พะเยา",
     deliveryMethod: "รับหน้าร้าน",
-    deliveryOther: ""
+    deliveryOther: "",
+    deliveryAddress: ""
   });
 
   const [formError, setFormError] = useState("");
   const [lookupMsg, setLookupMsg] = useState("");
+  const [slipError, setSlipError] = useState("");
+
+  async function handleSlipUpload(file: File | null) {
+    if (!file) return;
+    setSlipError("");
+    if (!file.type.startsWith("image/")) {
+      setSlipError("กรุณาเลือกไฟล์รูปภาพเท่านั้น");
+      return;
+    }
+    if (file.size > 1_500_000) {
+      setSlipError("รูปสลิปต้องมีขนาดไม่เกิน 1.5 MB");
+      return;
+    }
+    const dataUrl = await readImageAsDataUrl(file);
+    setField("depositSlip", dataUrl);
+  }
 
   function setField<Key extends keyof typeof form>(key: Key, value: (typeof form)[Key]) {
     setForm((current) => ({ ...current, [key]: value }));
@@ -4190,6 +4999,22 @@ function CreateJobView({
           setFormError("กรุณากรอกชื่อลูกค้า หรือเลือกลูกค้าเดิมจากช่องค้นหา");
           return;
         }
+        // บังคับแนบสลิปมัดจำ: ต้องมียอดมัดจำ + วันที่รับเงิน + รูปสลิป
+        // ยกเว้น: เคส "ไม่ต้องมัดจำ (ขออนุมัติเจ้าของ)" ข้ามการบังคับสลิป
+        if (!form.depositWaived) {
+          if (form.deposit <= 0) {
+            setFormError("กรุณาระบุยอดเงินมัดจำ หรือเลือก 'ไม่ต้องมัดจำ (ขออนุมัติเจ้าของ)'");
+            return;
+          }
+          if (!form.depositReceivedDate) {
+            setFormError("กรุณาระบุวันที่รับเงินมัดจำ");
+            return;
+          }
+          if (!form.depositSlip) {
+            setFormError("กรุณาแนบรูปสลิปมัดจำก่อนสร้างงาน");
+            return;
+          }
+        }
         setFormError("");
         const workOrderSpec = [
           `ช่องทางรับงาน: ${form.sourceChannel || "-"}`,
@@ -4198,7 +5023,8 @@ function CreateJobView({
           `วัสดุ: ${form.materials.filter(Boolean).join(", ") || "-"}`,
           `สี / สเปกสี: ${form.colorSpec || "-"}`,
           `สาขาที่ผลิต: ${form.productionBranch || "-"}`,
-          `วิธีรับ/จัดส่ง: ${form.deliveryMethod === "ขนส่งอื่น ๆ" && form.deliveryOther ? `${form.deliveryMethod} (${form.deliveryOther})` : form.deliveryMethod || "-"}`
+          `วิธีรับ/จัดส่ง: ${form.deliveryMethod === "ขนส่งอื่น ๆ" && form.deliveryOther ? `${form.deliveryMethod} (${form.deliveryOther})` : form.deliveryMethod || "-"}`,
+          `ที่อยู่จัดส่ง: ${form.deliveryAddress.trim() || "-"}`
         ].join("\n");
         onCreate({
           ...form,
@@ -4330,7 +5156,7 @@ function CreateJobView({
               <Zap className={`h-4 w-4 ${form.isExpress ? "text-rose-500" : "text-k2-muted"}`} />
               งานด่วน
               {!expressEnabled ? (
-                <span className="text-xs font-semibold text-k2-muted">(ผู้จัดการ/เจ้าของยังไม่เปิดรับงานด่วน)</span>
+                <span className="text-xs font-semibold text-k2-muted">(ต้องขออนุมัติงานด่วนจากผู้จัดการก่อน)</span>
               ) : (
                 <span className="text-xs font-semibold text-k2-muted">ระบุวันนัดส่งเองได้</span>
               )}
@@ -4415,7 +5241,55 @@ function CreateJobView({
           </label>
           <NumberField label="ราคา" value={form.price} onChange={(value) => setField("price", value)} />
           <NumberField label="มัดจำ" value={form.deposit} onChange={(value) => setField("deposit", value)} />
+          <TextField
+            label="วันที่รับเงินมัดจำ"
+            type="date"
+            value={form.depositReceivedDate}
+            onChange={(value) => setField("depositReceivedDate", value)}
+          />
           <TextField label="ไฟล์ / รูปแนบ" value={form.fileName} onChange={(value) => setField("fileName", value)} />
+          {/* สลิปมัดจำ — บังคับแนบก่อนสร้างงาน (ยกเว้นเคสไม่ต้องมัดจำที่เจ้าของอนุมัติ) */}
+          <div className={`space-y-3 md:col-span-2 rounded-2xl border p-4 ${form.depositWaived ? "border-amber-200 bg-amber-50/60" : "border-rose-200 bg-rose-50/60"}`}>
+            <label className="flex items-center justify-between gap-3">
+              <span className="flex items-center gap-2 text-sm font-extrabold text-k2-ink">
+                <ShieldCheck className="h-4 w-4 text-amber-600" />
+                ไม่ต้องมัดจำ (ขออนุมัติเจ้าของ)
+              </span>
+              <input
+                type="checkbox"
+                checked={form.depositWaived}
+                onChange={(event) => setField("depositWaived", event.target.checked)}
+                className="h-5 w-5 accent-amber-500"
+              />
+            </label>
+            {form.depositWaived ? (
+              <p className="text-xs font-semibold text-amber-700">งานนี้จะถูกสร้างโดยไม่ต้องแนบสลิป แต่จะ<strong>ยังไม่เข้าคิวผลิตจนกว่าเจ้าของจะอนุมัติ</strong></p>
+            ) : (
+              <>
+                <span className="flex items-center gap-2 text-sm font-extrabold text-k2-ink">
+                  <WalletCards className="h-4 w-4 text-rose-500" />
+                  สลิปมัดจำ <span className="text-xs font-bold text-rose-600">* บังคับแนบก่อนสร้างงาน</span>
+                </span>
+                <div className="flex flex-wrap items-center gap-3">
+                  <label className="inline-flex cursor-pointer items-center gap-2 rounded-2xl bg-white px-4 py-2.5 text-sm font-bold text-k2-ink shadow-sm">
+                    <FileImage className="h-4 w-4" />
+                    {form.depositSlip ? "เปลี่ยนรูปสลิป" : "แนบรูปสลิป"}
+                    <input type="file" accept="image/*" className="hidden" onChange={(event) => void handleSlipUpload(event.target.files?.[0] ?? null)} />
+                  </label>
+                  {form.depositSlip ? (
+                    <div className="flex items-center gap-2">
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img src={form.depositSlip} alt="สลิปมัดจำ" className="h-16 w-16 rounded-xl object-cover ring-1 ring-rose-200" />
+                      <button type="button" onClick={() => setField("depositSlip", "")} className="text-xs font-bold text-rose-600">ลบรูป</button>
+                    </div>
+                  ) : (
+                    <span className="text-xs font-semibold text-k2-muted">ยังไม่ได้แนบสลิป</span>
+                  )}
+                </div>
+                {slipError ? <p className="text-xs font-semibold text-rose-600">{slipError}</p> : null}
+              </>
+            )}
+          </div>
         </div>
 
         <div className="mt-5 rounded-[1.35rem] border border-white/70 bg-white/45 p-4">
@@ -4494,6 +5368,15 @@ function CreateJobView({
                 />
               ) : null}
             </label>
+            <label className="space-y-2 md:col-span-2">
+              <span className="text-sm font-semibold text-k2-muted">ที่อยู่จัดส่ง</span>
+              <textarea
+                value={form.deliveryAddress}
+                onChange={(event) => setField("deliveryAddress", event.target.value)}
+                placeholder="ที่อยู่สำหรับจัดส่งสินค้า (ถ้ารับหน้าร้านเว้นว่างได้)"
+                className="min-h-20 w-full rounded-2xl border border-white/80 bg-white/80 px-4 py-3 outline-none"
+              />
+            </label>
           </div>
         </div>
 
@@ -4530,7 +5413,7 @@ function CreateJobView({
         </div>
 
         <label className="mt-4 block space-y-2">
-          <span className="text-sm font-semibold text-k2-muted">รายละเอียดงาน</span>
+          <span className="text-sm font-semibold text-k2-muted">รายละเอียดออเดอร์</span>
           <textarea
             value={form.description}
             onChange={(event) => setField("description", event.target.value)}
@@ -5196,39 +6079,157 @@ function SettingsView({
 }
 
 function CalendarView({ jobs, onSelect }: { jobs: Job[]; onSelect: (id: string) => void }) {
-  const grouped = statuses
-    .flatMap(() => jobs)
-    .filter((job, index, all) => all.findIndex((item) => item.id === job.id) === index)
-    .sort((a, b) => a.dueDate.localeCompare(b.dueDate))
-    .reduce<Record<string, Job[]>>((acc, job) => {
-      acc[job.dueDate] = [...(acc[job.dueDate] ?? []), job];
-      return acc;
-    }, {});
+  const [modalJob, setModalJob] = useState<Job | null>(null);
+
+  const grouped = useMemo(
+    () =>
+      jobs
+        .slice()
+        .sort((a, b) => a.dueDate.localeCompare(b.dueDate))
+        .reduce<Record<string, Job[]>>((acc, job) => {
+          acc[job.dueDate] = [...(acc[job.dueDate] ?? []), job];
+          return acc;
+        }, {}),
+    [jobs]
+  );
+
+  // พื้นหลังคนละสีตามวันในสัปดาห์ (จ.-อา.)
+  const dayBg = ["bg-rose-50/70", "bg-amber-50/70", "bg-emerald-50/70", "bg-sky-50/70", "bg-violet-50/70", "bg-teal-50/70", "bg-orange-50/70"];
+
+  function deadlineStyle(dueDate: string) {
+    const d = daysFromToday(dueDate);
+    if (d <= 0) return { dot: "bg-rose-500", text: "text-rose-600", label: d < 0 ? `เลยกำหนด ${Math.abs(d)} วัน` : "ครบกำหนดวันนี้", blink: true };
+    if (d <= 1) return { dot: "bg-rose-500", text: "text-rose-600", label: `เหลือ ${d} วัน`, blink: false };
+    if (d <= 5) return { dot: "bg-amber-400", text: "text-amber-600", label: `เหลือ ${d} วัน`, blink: false };
+    return { dot: "bg-emerald-500", text: "text-emerald-600", label: `เหลือ ${d} วัน`, blink: false };
+  }
+
+  function formatDay(date: string) {
+    try {
+      return new Date(`${date}T00:00:00`).toLocaleDateString("th-TH", { weekday: "long", day: "numeric", month: "long" });
+    } catch {
+      return date;
+    }
+  }
 
   return (
-    <div className="grid gap-4 lg:grid-cols-2 xl:grid-cols-3">
-      {Object.entries(grouped).map(([date, dateJobs]) => (
-        <section key={date} className="glass rounded-[1.5rem] p-5">
-          <div className="mb-4 flex items-center justify-between">
-            <h3 className="text-xl font-semibold">{date}</h3>
-            <span className="rounded-full bg-white px-3 py-1 text-xs font-bold">{dateJobs.length} งาน</span>
+    <>
+      {/* คำอธิบายสี */}
+      <div className="mb-4 flex flex-wrap items-center gap-3 rounded-2xl bg-white/60 px-4 py-2 text-xs font-bold text-k2-muted">
+        <span className="flex items-center gap-1"><span className="h-2.5 w-2.5 rounded-full bg-emerald-500" /> เหลือ &gt;5 วัน</span>
+        <span className="flex items-center gap-1"><span className="h-2.5 w-2.5 rounded-full bg-amber-400" /> เหลือ 2-5 วัน</span>
+        <span className="flex items-center gap-1"><span className="h-2.5 w-2.5 rounded-full bg-rose-500" /> เหลือ &lt;2 วัน</span>
+        <span className="flex items-center gap-1"><span className="h-2.5 w-2.5 animate-pulse rounded-full bg-rose-500 ring-2 ring-rose-300" /> ใกล้ส่ง (กระพริบ)</span>
+      </div>
+
+      <div className="grid gap-4 lg:grid-cols-2 xl:grid-cols-3">
+        {Object.keys(grouped).length === 0 ? (
+          <p className="rounded-2xl bg-white/60 px-4 py-8 text-center text-sm font-semibold text-k2-muted">ยังไม่มีงานในปฏิทิน</p>
+        ) : null}
+        {Object.entries(grouped).map(([date, dateJobs]) => {
+          const weekday = (new Date(`${date}T00:00:00`).getDay() + 6) % 7; // จันทร์=0
+          return (
+            <section key={date} className={`rounded-[1.5rem] border border-white/70 ${dayBg[weekday]} p-5 shadow-sm`}>
+              <div className="mb-4 flex items-center justify-between">
+                <h3 className="text-lg font-semibold leading-tight">{formatDay(date)}</h3>
+                <span className="shrink-0 rounded-full bg-white px-3 py-1 text-xs font-bold">{dateJobs.length} งาน</span>
+              </div>
+              <div className="space-y-3">
+                {dateJobs.map((job) => {
+                  const dl = deadlineStyle(job.dueDate);
+                  const team = [job.assignedDesigner, job.assignedProduction].filter((n) => n && n !== "Unassigned");
+                  return (
+                    <button
+                      key={job.id}
+                      onClick={() => setModalJob(job)}
+                      className={`w-full rounded-2xl bg-white/85 p-4 text-left shadow-sm transition hover:bg-white ${dl.blink ? "animate-pulse ring-2 ring-rose-400" : ""}`}
+                    >
+                      <div className="mb-1.5 flex items-center justify-between gap-2">
+                        <span className="flex items-center gap-2 font-bold">
+                          <span className={`h-2.5 w-2.5 shrink-0 rounded-full ${dl.dot}`} />
+                          {job.isExpress ? <Zap className="h-3.5 w-3.5 text-rose-500" /> : null}
+                          {job.id}
+                        </span>
+                        <span className={`shrink-0 rounded-full px-2 py-1 text-[11px] font-bold ${priorityClass[job.priority]}`}>{priorityLabel[job.priority]}</span>
+                      </div>
+                      <p className="font-semibold leading-5">{job.title}</p>
+                      <p className="mt-0.5 text-sm text-k2-muted">🧑 {job.customerName}</p>
+                      <p className="text-sm text-k2-muted">📦 {jobTypeLabel[job.type]}</p>
+                      {team.length ? (
+                        <div className="mt-1.5 flex flex-wrap gap-1">
+                          {team.map((n) => (
+                            <span key={n} className="rounded-full bg-k2-mint/70 px-2 py-0.5 text-[11px] font-bold text-k2-ink">👤 {n}</span>
+                          ))}
+                        </div>
+                      ) : null}
+                      <p className={`mt-2 text-xs font-extrabold ${dl.text}`}>⏰ {dl.label} · {statusLabel[job.status]}</p>
+                    </button>
+                  );
+                })}
+              </div>
+            </section>
+          );
+        })}
+      </div>
+
+      {/* Modal รายละเอียดงาน */}
+      {modalJob ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4 backdrop-blur-sm" onClick={() => setModalJob(null)}>
+          <div className="glass-solid max-h-[88vh] w-full max-w-lg overflow-y-auto rounded-[1.6rem] p-6" onClick={(e) => e.stopPropagation()}>
+            <div className="mb-3 flex items-start justify-between gap-3">
+              <div>
+                <p className="text-sm font-bold text-k2-muted">{modalJob.id}{modalJob.isExpress ? " · ⚡ ด่วน" : ""}</p>
+                <h3 className="text-xl font-extrabold text-k2-ink">{modalJob.title}</h3>
+              </div>
+              <button type="button" onClick={() => setModalJob(null)} className="shrink-0 rounded-full bg-white/70 px-3 py-1 text-sm font-bold text-k2-muted">✕</button>
+            </div>
+
+            <div className="space-y-2 text-sm">
+              <p><span className="font-bold text-k2-muted">สถานะ:</span> {statusLabel[modalJob.status]}</p>
+              <p><span className="font-bold text-k2-muted">สินค้า:</span> 📦 {jobTypeLabel[modalJob.type]} · จำนวน {modalJob.quantity}</p>
+              <p><span className="font-bold text-k2-muted">ลูกค้า:</span> 🧑 {modalJob.customerName}</p>
+              {modalJob.phone ? <p><span className="font-bold text-k2-muted">เบอร์โทร:</span> {modalJob.phone}</p> : null}
+              {modalJob.billingAddress ? <p><span className="font-bold text-k2-muted">ที่อยู่:</span> {modalJob.billingAddress}</p> : null}
+              <p><span className="font-bold text-k2-muted">ผู้รับผิดชอบ:</span> {[modalJob.assignedDesigner, modalJob.assignedProduction].filter((n) => n && n !== "Unassigned").join(", ") || "ยังไม่มอบหมาย"}</p>
+              <p><span className="font-bold text-k2-muted">กำหนดส่ง:</span> {modalJob.dueDate} ({deadlineStyle(modalJob.dueDate).label})</p>
+              {modalJob.description ? <p className="whitespace-pre-wrap"><span className="font-bold text-k2-muted">รายละเอียด:</span> {modalJob.description}</p> : null}
+              {modalJob.files.length ? (
+                <p><span className="font-bold text-k2-muted">ไฟล์แนบ:</span> {modalJob.files.map((f) => f.name).join(", ")}</p>
+              ) : null}
+            </div>
+
+            {/* ปุ่มติดต่อด่วน */}
+            <div className="mt-4 flex flex-wrap gap-2">
+              {modalJob.phone ? (
+                <a href={`tel:${modalJob.phone}`} className="inline-flex items-center gap-1.5 rounded-2xl bg-teal-500 px-4 py-2.5 text-sm font-extrabold text-white">
+                  <Phone className="h-4 w-4" /> โทร
+                </a>
+              ) : null}
+              {modalJob.lineId ? (
+                <a href={`https://line.me/ti/p/~${encodeURIComponent(modalJob.lineId)}`} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1.5 rounded-2xl bg-green-500 px-4 py-2.5 text-sm font-extrabold text-white">
+                  💬 LINE
+                </a>
+              ) : null}
+            </div>
+
+            <button
+              type="button"
+              onClick={() => { const id = modalJob.id; setModalJob(null); onSelect(id); }}
+              className="mt-4 w-full rounded-2xl bg-k2-ink px-4 py-3 font-extrabold text-white"
+            >
+              เปิดรายละเอียดเต็ม →
+            </button>
           </div>
-          <div className="space-y-3">
-            {dateJobs.map((job) => (
-              <button key={job.id} onClick={() => onSelect(job.id)} className="w-full rounded-2xl bg-white/65 p-4 text-left hover:bg-white">
-                <div className="mb-2 flex items-center justify-between">
-                  <span className="font-bold">{job.id}</span>
-                  <span className={`rounded-full px-2 py-1 text-[11px] font-bold ${priorityClass[job.priority]}`}>{priorityLabel[job.priority]}</span>
-                </div>
-                <p className="font-semibold">{job.title}</p>
-                <p className="text-sm text-k2-muted">{job.customerName} - {statusLabel[job.status]}</p>
-              </button>
-            ))}
-          </div>
-        </section>
-      ))}
-    </div>
+        </div>
+      ) : null}
+    </>
   );
+}
+
+function loyaltyBadge(orders: number, ltv: number): { label: string; emoji: string; cls: string } {
+  if (orders >= 10 || ltv >= 100000) return { label: "VIP", emoji: "🥇", cls: "bg-amber-100 text-amber-700" };
+  if (orders >= 3) return { label: "ลูกค้าประจำ", emoji: "🥈", cls: "bg-sky-100 text-sky-700" };
+  return { label: "ลูกค้าใหม่", emoji: "🥉", cls: "bg-orange-100 text-orange-700" };
 }
 
 function CustomersView({
@@ -5243,13 +6244,14 @@ function CustomersView({
   jobs: Job[];
   canDelete: boolean;
   onAddCustomer: (customer: Omit<Customer, "id" | "totalOrders" | "lifetimeValue" | "lastOrderDate">) => void;
-  onUpdateCustomer: (customerId: string, updates: Pick<Customer, "name" | "phone" | "lineId" | "email" | "companyName" | "taxId" | "branch" | "billingAddress" | "accountingEmail" | "requiresInvoice">) => void;
+  onUpdateCustomer: (customerId: string, updates: Pick<Customer, "name" | "phone" | "lineId" | "email" | "companyName" | "taxId" | "branch" | "billingAddress" | "accountingEmail" | "requiresInvoice" | "notes" | "sourceChannel" | "sourcePage">) => void;
   onRemoveCustomer: (customerId: string) => void;
 }) {
   const [customerQuery, setCustomerQuery] = useState("");
   const [editingId, setEditingId] = useState<string | null>(null);
-  const [newCustomer, setNewCustomer] = useState({ name: "", phone: "", lineId: "", email: "", companyName: "", taxId: "", branch: "สำนักงานใหญ่", billingAddress: "", accountingEmail: "", requiresInvoice: false });
-  const [editingCustomer, setEditingCustomer] = useState({ name: "", phone: "", lineId: "", email: "", companyName: "", taxId: "", branch: "สำนักงานใหญ่", billingAddress: "", accountingEmail: "", requiresInvoice: false });
+  const [newCustomer, setNewCustomer] = useState({ name: "", phone: "", lineId: "", email: "", companyName: "", taxId: "", branch: "สำนักงานใหญ่", billingAddress: "", accountingEmail: "", requiresInvoice: false, sourceChannel: "", sourcePage: "" });
+  const [editingCustomer, setEditingCustomer] = useState({ name: "", phone: "", lineId: "", email: "", companyName: "", taxId: "", branch: "สำนักงานใหญ่", billingAddress: "", accountingEmail: "", requiresInvoice: false, notes: "", sourceChannel: "", sourcePage: "" });
+  const sourceChannelOptions = ["", "Facebook", "LINE", "หน้าร้าน", "TikTok", "Website", "Shopee", "อื่น ๆ"];
   const [importRows, setImportRows] = useState<ImportedCustomer[]>([]);
   const [importFileName, setImportFileName] = useState("");
   const [importError, setImportError] = useState("");
@@ -5275,7 +6277,10 @@ function CustomersView({
       branch: customer.branch ?? "สำนักงานใหญ่",
       billingAddress: customer.billingAddress ?? "",
       accountingEmail: customer.accountingEmail ?? "",
-      requiresInvoice: customer.requiresInvoice ?? false
+      requiresInvoice: customer.requiresInvoice ?? false,
+      notes: customer.notes ?? "",
+      sourceChannel: customer.sourceChannel ?? "",
+      sourcePage: customer.sourcePage ?? ""
     });
   }
 
@@ -5291,9 +6296,11 @@ function CustomersView({
       branch: newCustomer.branch.trim(),
       billingAddress: newCustomer.billingAddress.trim(),
       accountingEmail: newCustomer.accountingEmail.trim(),
-      requiresInvoice: newCustomer.requiresInvoice
+      requiresInvoice: newCustomer.requiresInvoice,
+      sourceChannel: newCustomer.sourceChannel,
+      sourcePage: newCustomer.sourcePage.trim()
     });
-    setNewCustomer({ name: "", phone: "", lineId: "", email: "", companyName: "", taxId: "", branch: "สำนักงานใหญ่", billingAddress: "", accountingEmail: "", requiresInvoice: false });
+    setNewCustomer({ name: "", phone: "", lineId: "", email: "", companyName: "", taxId: "", branch: "สำนักงานใหญ่", billingAddress: "", accountingEmail: "", requiresInvoice: false, sourceChannel: "", sourcePage: "" });
   }
 
   async function handleImportFile(file: File | null) {
@@ -5355,7 +6362,10 @@ function CustomersView({
       branch: editingCustomer.branch.trim(),
       billingAddress: editingCustomer.billingAddress.trim(),
       accountingEmail: editingCustomer.accountingEmail.trim(),
-      requiresInvoice: editingCustomer.requiresInvoice
+      requiresInvoice: editingCustomer.requiresInvoice,
+      notes: editingCustomer.notes.trim(),
+      sourceChannel: editingCustomer.sourceChannel,
+      sourcePage: editingCustomer.sourcePage.trim()
     });
     setEditingId(null);
   }
@@ -5451,6 +6461,21 @@ function CustomersView({
             />
             ออกใบกำกับ
           </label>
+          <select
+            value={newCustomer.sourceChannel}
+            onChange={(event) => setNewCustomer((current) => ({ ...current, sourceChannel: event.target.value }))}
+            className="rounded-2xl border border-white/80 bg-white/80 px-4 py-3 text-sm font-semibold outline-none"
+          >
+            {sourceChannelOptions.map((c) => (
+              <option key={c} value={c}>{c || "แหล่งที่มา (ไม่ระบุ)"}</option>
+            ))}
+          </select>
+          <input
+            value={newCustomer.sourcePage}
+            onChange={(event) => setNewCustomer((current) => ({ ...current, sourcePage: event.target.value }))}
+            placeholder="ชื่อเพจ/ไลน์ เช่น K2Sign, @k2sign"
+            className="rounded-2xl border border-white/80 bg-white/80 px-4 py-3 text-sm font-semibold outline-none"
+          />
           <textarea
             value={newCustomer.billingAddress}
             onChange={(event) => setNewCustomer((current) => ({ ...current, billingAddress: event.target.value }))}
@@ -5612,15 +6637,48 @@ function CustomersView({
                       />
                       ลูกค้าต้องออกใบกำกับ / ใบเสร็จ
                     </label>
+                    <select
+                      value={editingCustomer.sourceChannel}
+                      onChange={(event) => setEditingCustomer((current) => ({ ...current, sourceChannel: event.target.value }))}
+                      className="rounded-2xl border border-white/80 bg-white/85 px-4 py-3 text-sm font-semibold outline-none"
+                    >
+                      {sourceChannelOptions.map((c) => (
+                        <option key={c} value={c}>{c || "แหล่งที่มา (ไม่ระบุ)"}</option>
+                      ))}
+                    </select>
+                    <input
+                      value={editingCustomer.sourcePage}
+                      onChange={(event) => setEditingCustomer((current) => ({ ...current, sourcePage: event.target.value }))}
+                      placeholder="ชื่อเพจ/ไลน์ เช่น K2Sign, @k2sign"
+                      className="rounded-2xl border border-white/80 bg-white/85 px-4 py-3 text-sm font-semibold outline-none"
+                    />
+                    <textarea
+                      value={editingCustomer.notes}
+                      onChange={(event) => setEditingCustomer((current) => ({ ...current, notes: event.target.value }))}
+                      placeholder="โน้ตลูกค้า เช่น ชอบงานด่วน · จ่ายเงินเร็ว · ชอบแก้หลายรอบ · ลูกค้าประจำ"
+                      className="min-h-20 rounded-2xl border border-amber-200 bg-amber-50/60 px-4 py-3 text-sm font-semibold outline-none md:col-span-2"
+                    />
                   </div>
                 ) : (
                   <>
-                    <h3 className="break-words text-2xl font-semibold">{customer.name}</h3>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <h3 className="break-words text-2xl font-semibold">{customer.name}</h3>
+                      {(() => {
+                        const badge = loyaltyBadge(customer.totalOrders, customer.lifetimeValue);
+                        return <span className={`rounded-full px-2.5 py-1 text-xs font-bold ${badge.cls}`}>{badge.emoji} {badge.label}</span>;
+                      })()}
+                    </div>
                     <p className="mt-1 text-k2-muted">{customer.phone || "ไม่มีเบอร์โทร"} - LINE {customer.lineId || "-"}</p>
                     <p className="text-k2-muted">{customer.email || "ยังไม่มีอีเมล"}</p>
                     <p className="mt-2 rounded-2xl bg-white/55 px-3 py-2 text-sm font-semibold text-k2-muted">
                       {customer.companyName || "ยังไม่มีข้อมูลบริษัท"} {customer.taxId ? `| Tax ID ${customer.taxId}` : ""} {customer.requiresInvoice ? "| ต้องออกเอกสาร" : ""}
                     </p>
+                    {customer.sourceChannel || customer.sourcePage ? (
+                      <p className="mt-2 text-sm font-semibold text-k2-muted">📍 มาจาก: {customer.sourceChannel || "-"}{customer.sourcePage ? ` · ${customer.sourcePage}` : ""}</p>
+                    ) : null}
+                    {customer.notes ? (
+                      <p className="mt-2 rounded-2xl bg-amber-50 px-3 py-2 text-sm font-semibold text-amber-700">📝 {customer.notes}</p>
+                    ) : null}
                   </>
                 )}
               </div>
@@ -5659,24 +6717,48 @@ function CustomersView({
                 ) : null}
               </div>
             </div>
-            <div className="mt-5 grid grid-cols-3 gap-3">
+            <div className="mt-5 grid grid-cols-2 gap-3 sm:grid-cols-4">
               <MiniStat label="ออเดอร์" value={customer.totalOrders} />
-              <MiniStat label="มูลค่า" value={money.format(customer.lifetimeValue)} />
+              <MiniStat label="มูลค่าสะสม" value={money.format(customer.lifetimeValue)} />
               <MiniStat label="งานเปิด" value={customerJobs.filter((job) => !["Completed", "Cancelled"].includes(job.status)).length} />
+              <MiniStat label="ไฟล์งาน" value={customerJobs.reduce((sum, job) => sum + job.files.length, 0)} />
             </div>
-            <div className="mt-5 space-y-3">
-              {customerJobs.map((job) => (
-                <div key={job.id} className="rounded-2xl bg-white/65 p-3">
-                  <p className="font-semibold">{job.id} - {job.title}</p>
-                  <p className="text-sm text-k2-muted">{statusLabel[job.status]} - กำหนดส่ง {job.dueDate}</p>
-                </div>
-              ))}
-              {customerJobs.length === 0 ? (
-                <div className="rounded-2xl border border-dashed border-white/90 bg-white/45 p-3 text-sm font-semibold text-k2-muted">
-                  ยังไม่มีประวัติงานของลูกค้าคนนี้
-                </div>
-              ) : null}
+
+            {/* ประวัติออเดอร์ย้อนหลัง */}
+            <div className="mt-5">
+              <p className="mb-2 text-sm font-bold text-k2-muted">ประวัติออเดอร์ ({customerJobs.length})</p>
+              <div className="space-y-2">
+                {customerJobs.map((job) => (
+                  <div key={job.id} className="flex items-start justify-between gap-3 rounded-2xl bg-white/65 p-3">
+                    <div className="min-w-0">
+                      <p className="font-semibold leading-5">{job.id} · {job.title}</p>
+                      <p className="text-sm text-k2-muted">{statusLabel[job.status]} · สั่ง {job.orderDate} · ส่ง {job.dueDate}</p>
+                    </div>
+                    <span className="shrink-0 text-sm font-extrabold text-k2-ink">{money.format(job.price)}</span>
+                  </div>
+                ))}
+                {customerJobs.length === 0 ? (
+                  <div className="rounded-2xl border border-dashed border-white/90 bg-white/45 p-3 text-sm font-semibold text-k2-muted">
+                    ยังไม่มีประวัติงานของลูกค้าคนนี้
+                  </div>
+                ) : null}
+              </div>
             </div>
+
+            {/* สลิปมัดจำย้อนหลัง */}
+            {customerJobs.some((job) => job.depositSlip) ? (
+              <div className="mt-5">
+                <p className="mb-2 text-sm font-bold text-k2-muted">สลิปมัดจำย้อนหลัง</p>
+                <div className="flex flex-wrap gap-2">
+                  {customerJobs.filter((job) => job.depositSlip).map((job) => (
+                    <a key={job.id} href={job.depositSlip} target="_blank" rel="noreferrer" title={`${job.id} · ${money.format(job.deposit)}`}>
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img src={job.depositSlip} alt={`สลิป ${job.id}`} className="h-20 w-20 rounded-xl object-cover ring-1 ring-white/80" />
+                    </a>
+                  ))}
+                </div>
+              </div>
+            ) : null}
           </section>
         );
       })}
