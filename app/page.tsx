@@ -17,6 +17,7 @@ import {
   ClipboardPlus,
   Clock3,
   Factory,
+  Inbox,
   FileImage,
   LayoutDashboard,
   ListTodo,
@@ -42,7 +43,7 @@ import {
 import type { LucideIcon } from "lucide-react";
 import { customers as initialCustomers, initialAuditLog, initialJobs, statuses, team as initialTeam } from "@/lib/mock-data";
 import { createSupabaseAuthWorker, isSupabaseConfigured, supabase } from "@/lib/supabase";
-import type { AppNotification, Attendance, AuditEvent, BranchSetting, Customer, ExpressRequest, Holiday, Job, JobStatus, JobType, LeaveRequest, PaymentStatus, Priority, Quotation, QuoteStatus, Role, TeamMember } from "@/lib/types";
+import type { AppNotification, Attendance, AuditEvent, BranchSetting, Customer, ExpressRequest, Holiday, Job, JobStatus, JobType, Lead, LeaveRequest, PaymentStatus, Priority, Quotation, QuoteStatus, Role, TeamMember } from "@/lib/types";
 
 type ImportedCustomer = Pick<Customer, "name" | "phone" | "lineId" | "email"> & {
   notes: string;
@@ -230,6 +231,32 @@ type SupabaseQuotationRow = {
   converted_job_id: string | null;
   created_at: string;
 };
+
+type SupabaseLeadRow = {
+  id: string;
+  name: string;
+  phone: string | null;
+  channel: string | null;
+  page: string | null;
+  message: string | null;
+  status: string | null;
+  created_by_name: string | null;
+  created_at: string;
+};
+
+function leadRowToLead(row: SupabaseLeadRow): Lead {
+  return {
+    id: row.id,
+    name: row.name,
+    phone: row.phone ?? "",
+    channel: row.channel ?? "",
+    page: row.page ?? "",
+    message: row.message ?? "",
+    status: (row.status as Lead["status"]) ?? "new",
+    createdByName: row.created_by_name ?? undefined,
+    createdAt: row.created_at
+  };
+}
 
 function quotationRowToQuotation(row: SupabaseQuotationRow): Quotation {
   return {
@@ -437,6 +464,7 @@ const viewLabel: Record<string, string> = {
   Dashboard: "แดชบอร์ด",
   "My Jobs": "งานของฉัน",
   Board: "บอร์ดคิวงาน",
+  Leads: "กล่องลูกค้า",
   Quotations: "ใบเสนอราคา",
   "Create Job": "สร้างงาน",
   Calendar: "ปฏิทิน",
@@ -1081,6 +1109,7 @@ export default function Page() {
   const notifPanelRef = useRef<HTMLDivElement>(null);
   const [expressOrdersEnabled, setExpressOrdersEnabled] = useState(false);
   const [quotations, setQuotations] = useState<Quotation[]>([]);
+  const [leads, setLeads] = useState<Lead[]>([]);
   const [createJobPrefill, setCreateJobPrefill] = useState<Partial<Job> | null>(null);
   const [createJobNonce, setCreateJobNonce] = useState(0);
   const [expressRequests, setExpressRequests] = useState<ExpressRequest[]>([]);
@@ -1105,6 +1134,7 @@ export default function Page() {
         { label: "Dashboard", icon: LayoutDashboard, visible: currentRolePermissions.includes("view_dashboard") },
         { label: "My Jobs", icon: ListTodo, visible: true },
         { label: "Board", icon: ClipboardList, visible: currentRolePermissions.includes("view_dashboard") },
+        { label: "Leads", icon: Inbox, visible: currentRolePermissions.includes("create_job") },
         { label: "Quotations", icon: ReceiptText, visible: currentRolePermissions.includes("create_job") },
         { label: "Create Job", icon: ClipboardPlus, visible: currentRolePermissions.includes("create_job") },
         { label: "Calendar", icon: CalendarDays, visible: currentRolePermissions.includes("view_dashboard") },
@@ -1377,6 +1407,64 @@ export default function Page() {
     void updateQuotationStatus(quotation.id, "converted");
   }
 
+  // ===== กล่อง Lead ภายใน =====
+  async function reloadLeads() {
+    if (!supabase || !isSupabaseConfigured) return;
+    const { data, error } = await supabase
+      .from("leads")
+      .select("id, name, phone, channel, page, message, status, created_by_name, created_at")
+      .order("created_at", { ascending: false })
+      .limit(300);
+    if (error) return;
+    setLeads(((data ?? []) as SupabaseLeadRow[]).map(leadRowToLead));
+  }
+
+  async function createLead(input: { name: string; phone: string; channel: string; page: string; message: string }) {
+    if (!input.name.trim()) {
+      setDataError("กรุณากรอกชื่อลูกค้า");
+      return;
+    }
+    if (supabase && isSupabaseConfigured) {
+      const { error } = await supabase.from("leads").insert({
+        name: input.name.trim(),
+        phone: input.phone.trim(),
+        channel: input.channel,
+        page: input.page.trim(),
+        message: input.message.trim(),
+        status: "new",
+        created_by: uuidPattern.test(currentUser.id) ? currentUser.id : null,
+        created_by_name: currentUser.name
+      });
+      if (error) { setDataError(error.message); return; }
+      void appendAudit("created lead", input.name.trim(), "leads", null);
+      await reloadLeads();
+    } else {
+      setLeads((current) => [{ id: crypto.randomUUID(), name: input.name, phone: input.phone, channel: input.channel, page: input.page, message: input.message, status: "new", createdByName: currentUser.name, createdAt: new Date().toISOString() }, ...current]);
+    }
+  }
+
+  async function updateLeadStatus(id: string, status: Lead["status"]) {
+    setLeads((current) => current.map((l) => (l.id === id ? { ...l, status } : l)));
+    if (supabase && isSupabaseConfigured) {
+      const { error } = await supabase.from("leads").update({ status }).eq("id", id);
+      if (error) { setDataError(error.message); void reloadLeads(); return; }
+    }
+    void appendAudit(`lead ${status}`, id, "leads", id);
+  }
+
+  // แปลง Lead → ใบเสนอราคา (สถานะ lead เป็น quoted แล้วเด้งไปหน้าใบเสนอราคา)
+  async function convertLeadToQuotation(lead: Lead) {
+    await createQuotation({
+      customerName: lead.name,
+      customerPhone: lead.phone,
+      title: `งานของ ${lead.name}`,
+      description: lead.message,
+      amount: 0
+    });
+    await updateLeadStatus(lead.id, "quoted");
+    setActiveView("Quotations");
+  }
+
   const canManageExpress = currentUser.role === "Owner" || currentUser.role === "Manager";
   const pendingExpressRequests = useMemo(
     () => expressRequests.filter((req) => req.status === "pending"),
@@ -1621,6 +1709,7 @@ export default function Page() {
       }
       void reloadExpressRequests();
       void reloadQuotations();
+      void reloadLeads();
       // คงงานที่กำลังเปิดดูไว้ ไม่ดีดออกเวลามีข้อมูลซิงก์เข้ามา
       setSelectedJobId((current) => (current && nextJobs.some((job) => job.id === current) ? current : nextJobs[0]?.id ?? ""));
     } catch (error) {
@@ -3453,6 +3542,16 @@ export default function Page() {
                 <CreateJobView key={createJobNonce} prefill={createJobPrefill} customers={customerRecords} teamMembers={teamMembers} companyProfile={companyProfile} expressEnabled={canCreateExpress} onCreate={createJob} />
               </motion.div>
             )}
+            {activeView === "Leads" && (
+              <motion.div key="leads-inbox" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}>
+                <LeadsView
+                  leads={leads}
+                  onCreate={createLead}
+                  onSetStatus={updateLeadStatus}
+                  onConvert={convertLeadToQuotation}
+                />
+              </motion.div>
+            )}
             {activeView === "Quotations" && (
               <motion.div key="quotations" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}>
                 <QuotationsView
@@ -4997,6 +5096,100 @@ function CustomerPicker({
           </div>
         </div>
       ) : null}
+    </div>
+  );
+}
+
+const leadStatusInfo: Record<Lead["status"], { label: string; cls: string }> = {
+  new: { label: "ใหม่", cls: "bg-rose-100 text-rose-700" },
+  contacting: { label: "กำลังคุย", cls: "bg-amber-100 text-amber-700" },
+  quoted: { label: "เสนอราคาแล้ว", cls: "bg-sky-100 text-sky-700" },
+  won: { label: "ปิดการขาย", cls: "bg-teal-100 text-teal-700" },
+  lost: { label: "ไม่ปิด", cls: "bg-slate-100 text-slate-500" }
+};
+
+function LeadsView({
+  leads,
+  onCreate,
+  onSetStatus,
+  onConvert
+}: {
+  leads: Lead[];
+  onCreate: (input: { name: string; phone: string; channel: string; page: string; message: string }) => void;
+  onSetStatus: (id: string, status: Lead["status"]) => void;
+  onConvert: (lead: Lead) => void;
+}) {
+  const [form, setForm] = useState({ name: "", phone: "", channel: "Facebook", page: "", message: "" });
+  const channelOptions = ["Facebook", "LINE", "หน้าร้าน", "TikTok", "Website", "Shopee", "โทรศัพท์", "อื่น ๆ"];
+  const openCount = leads.filter((l) => l.status === "new" || l.status === "contacting").length;
+
+  function submit() {
+    if (!form.name.trim()) return;
+    onCreate(form);
+    setForm({ name: "", phone: "", channel: "Facebook", page: "", message: "" });
+  }
+
+  return (
+    <div className="grid gap-4 xl:grid-cols-[0.85fr_1.15fr]">
+      <section className="glass rounded-[1.5rem] p-5">
+        <div className="mb-4">
+          <p className="text-sm font-semibold text-k2-muted">กล่องลูกค้า (Lead)</p>
+          <h3 className="text-2xl font-semibold">บันทึกลูกค้าที่ทักเข้ามา</h3>
+          <p className="mt-1 text-sm font-semibold text-k2-muted">ลูกค้าทัก → บันทึก → ตามสถานะ → แปลงเป็นใบเสนอราคา</p>
+        </div>
+        <div className="space-y-3">
+          <TextField label="ชื่อลูกค้า" value={form.name} onChange={(v) => setForm((c) => ({ ...c, name: v }))} />
+          <TextField label="เบอร์โทร" value={form.phone} onChange={(v) => setForm((c) => ({ ...c, phone: v }))} />
+          <label className="block space-y-2">
+            <span className="text-sm font-semibold text-k2-muted">ช่องทาง</span>
+            <select value={form.channel} onChange={(e) => setForm((c) => ({ ...c, channel: e.target.value }))} className="w-full rounded-2xl border border-white/80 bg-white/80 px-4 py-3 outline-none">
+              {channelOptions.map((c) => <option key={c} value={c}>{c}</option>)}
+            </select>
+          </label>
+          <TextField label="ชื่อเพจ/ไลน์" value={form.page} onChange={(v) => setForm((c) => ({ ...c, page: v }))} />
+          <label className="block space-y-2">
+            <span className="text-sm font-semibold text-k2-muted">ข้อความ/ความต้องการ</span>
+            <textarea value={form.message} onChange={(e) => setForm((c) => ({ ...c, message: e.target.value }))} className="min-h-24 w-full rounded-2xl border border-white/80 bg-white/80 px-4 py-3 outline-none" />
+          </label>
+          <button type="button" onClick={submit} className="w-full rounded-2xl bg-k2-ink px-5 py-3.5 font-semibold text-white shadow-lg shadow-slate-900/15">บันทึก Lead</button>
+        </div>
+      </section>
+
+      <section className="glass rounded-[1.5rem] p-5">
+        <h4 className="mb-4 text-xl font-semibold">รายการ ({leads.length}) · ค้าง {openCount}</h4>
+        {leads.length === 0 ? (
+          <p className="rounded-2xl bg-white/60 px-4 py-8 text-center text-sm font-semibold text-k2-muted">ยังไม่มี Lead</p>
+        ) : (
+          <div className="space-y-3">
+            {leads.map((lead) => (
+              <div key={lead.id} className="rounded-2xl border border-white/70 bg-white/55 p-4">
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <p className="font-bold leading-5">{lead.name}{lead.phone ? ` · ${lead.phone}` : ""}</p>
+                    <p className="text-sm text-k2-muted">📍 {lead.channel || "-"}{lead.page ? ` · ${lead.page}` : ""}</p>
+                  </div>
+                  <span className={`shrink-0 rounded-full px-3 py-1 text-[11px] font-bold ${leadStatusInfo[lead.status].cls}`}>{leadStatusInfo[lead.status].label}</span>
+                </div>
+                {lead.message ? <p className="mt-2 whitespace-pre-wrap text-sm text-k2-muted">{lead.message}</p> : null}
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {lead.status === "new" ? (
+                    <button type="button" onClick={() => onSetStatus(lead.id, "contacting")} className="rounded-xl bg-amber-500 px-3 py-2 text-xs font-extrabold text-white">เริ่มคุย</button>
+                  ) : null}
+                  {lead.status !== "quoted" && lead.status !== "won" && lead.status !== "lost" ? (
+                    <button type="button" onClick={() => onConvert(lead)} className="rounded-xl bg-k2-ink px-3 py-2 text-xs font-extrabold text-white">→ แปลงเป็นใบเสนอราคา</button>
+                  ) : null}
+                  {lead.status !== "won" ? (
+                    <button type="button" onClick={() => onSetStatus(lead.id, "won")} className="rounded-xl bg-teal-500 px-3 py-2 text-xs font-extrabold text-white">ปิดการขาย</button>
+                  ) : null}
+                  {lead.status !== "lost" ? (
+                    <button type="button" onClick={() => onSetStatus(lead.id, "lost")} className="rounded-xl bg-white/70 px-3 py-2 text-xs font-extrabold text-k2-muted shadow-sm">ไม่ปิด</button>
+                  ) : null}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </section>
     </div>
   );
 }

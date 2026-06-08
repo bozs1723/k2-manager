@@ -57,6 +57,18 @@ export type TeamMember = {
   statusText?: string;
 };
 
+export type Lead = {
+  id: string;
+  name: string;
+  phone: string;
+  channel: string;
+  page: string;
+  message: string;
+  status: "new" | "contacting" | "quoted" | "won" | "lost";
+  createdByName?: string;
+  createdAt: string;
+};
+
 export type Quotation = {
   id: string;
   quoteNumber?: string;
