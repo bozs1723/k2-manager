@@ -202,3 +202,20 @@ button:focus-visible {
   background: rgba(102, 112, 133, 0.28);
   border-radius: 999px;
 }
+
+/* ===== เอกสารพิมพ์ PDF (ใบเสนอราคา/ใบสั่งงาน/ใบเสร็จ) ===== */
+@media print {
+  body { background: #ffffff !important; }
+  body * { visibility: hidden !important; }
+  #print-doc, #print-doc * { visibility: visible !important; }
+  #print-doc {
+    position: absolute !important;
+    left: 0; top: 0; width: 100%;
+    padding: 0 !important; margin: 0 !important;
+    box-shadow: none !important; border: 0 !important;
+    border-radius: 0 !important; background: #ffffff !important;
+    max-height: none !important; overflow: visible !important;
+  }
+  .no-print { display: none !important; }
+  @page { size: A4; margin: 14mm; }
+}

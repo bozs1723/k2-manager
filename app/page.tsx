@@ -4503,6 +4503,112 @@ function HandoffPanel({ job, currentUser, onSubmit, onAccept, onReject }: {
   );
 }
 
+type PrintDocType = "quote" | "workorder" | "receipt";
+
+const printDocTitle: Record<PrintDocType, { th: string; en: string }> = {
+  quote: { th: "ใบเสนอราคา", en: "QUOTATION" },
+  workorder: { th: "ใบสั่งงาน", en: "WORK ORDER" },
+  receipt: { th: "ใบเสร็จรับเงิน / บิลเงินสด", en: "RECEIPT" }
+};
+
+function PrintableDoc({ job, company, docType, docNumber, onClose }: { job: Job; company: CompanyProfile; docType: PrintDocType; docNumber: string; onClose: () => void }) {
+  const title = printDocTitle[docType];
+  const isReceipt = docType === "receipt";
+  const today = new Date().toLocaleDateString("th-TH", { year: "numeric", month: "long", day: "numeric" });
+  return (
+    <div className="fixed inset-0 z-[60] flex items-start justify-center overflow-y-auto bg-slate-900/50 p-4 backdrop-blur-sm" onClick={onClose}>
+      <div className="my-4 w-full max-w-3xl">
+        <div className="no-print mb-3 flex items-center justify-between gap-2" onClick={(e) => e.stopPropagation()}>
+          <p className="text-sm font-bold text-white">ตัวอย่างเอกสาร — {title.th}</p>
+          <div className="flex gap-2">
+            <button type="button" onClick={() => window.print()} className="rounded-2xl bg-white px-5 py-2.5 text-sm font-extrabold text-k2-ink shadow">🖨️ พิมพ์ / บันทึก PDF</button>
+            <button type="button" onClick={onClose} className="rounded-2xl bg-white/20 px-4 py-2.5 text-sm font-bold text-white">ปิด</button>
+          </div>
+        </div>
+
+        <div id="print-doc" className="mx-auto bg-white p-8 text-slate-900 shadow-2xl" onClick={(e) => e.stopPropagation()} style={{ fontSize: "13px", lineHeight: 1.5 }}>
+          <div className="flex items-start justify-between gap-4 border-b-2 border-slate-800 pb-4">
+            <div className="flex items-center gap-3">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src="/assets/k2smart-logo.png" alt="logo" style={{ width: 64, height: 64, objectFit: "contain" }} />
+              <div>
+                <p style={{ fontSize: "18px", fontWeight: 800 }}>{company.name || "K2Smart"}</p>
+                <p>{company.legalName}</p>
+                <p>{company.address}</p>
+                <p>โทร {company.phone}{company.email ? ` · ${company.email}` : ""}</p>
+                {company.taxId ? <p>เลขประจำตัวผู้เสียภาษี: {company.taxId}</p> : null}
+              </div>
+            </div>
+            <div className="text-right">
+              <p style={{ fontSize: "20px", fontWeight: 800 }}>{title.th}</p>
+              <p style={{ letterSpacing: "1px" }}>{title.en}</p>
+              <p className="mt-2">เลขที่: <b>{docNumber}</b></p>
+              <p>วันที่: {today}</p>
+            </div>
+          </div>
+
+          <div className="mt-4 rounded border border-slate-300 p-3">
+            <p style={{ fontWeight: 700 }}>ลูกค้า / ผู้ว่าจ้าง</p>
+            <p>{job.customerName}{job.companyName ? ` · ${job.companyName}` : ""}</p>
+            {job.billingAddress ? <p>{job.billingAddress}</p> : null}
+            <p>{job.phone ? `โทร ${job.phone}` : ""}{job.taxId ? ` · เลขภาษี ${job.taxId}` : ""}</p>
+          </div>
+
+          <table className="mt-4 w-full border-collapse" style={{ fontSize: "13px" }}>
+            <thead>
+              <tr style={{ background: "#14383d", color: "#fff" }}>
+                <th className="border border-slate-400 px-2 py-2 text-left">รายการ</th>
+                <th className="border border-slate-400 px-2 py-2 text-center" style={{ width: 70 }}>จำนวน</th>
+                <th className="border border-slate-400 px-2 py-2 text-right" style={{ width: 120 }}>ราคา (บาท)</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td className="border border-slate-300 px-2 py-2 align-top">
+                  <p style={{ fontWeight: 700 }}>{job.title}</p>
+                  <p style={{ whiteSpace: "pre-wrap", color: "#475569", fontSize: "12px" }}>{job.description}</p>
+                </td>
+                <td className="border border-slate-300 px-2 py-2 text-center align-top">{job.quantity}</td>
+                <td className="border border-slate-300 px-2 py-2 text-right align-top">{money.format(job.price)}</td>
+              </tr>
+            </tbody>
+          </table>
+
+          <div className="mt-3 flex justify-end">
+            <table style={{ fontSize: "13px", minWidth: 260 }}>
+              <tbody>
+                <tr><td className="px-2 py-1">ราคารวม</td><td className="px-2 py-1 text-right" style={{ fontWeight: 700 }}>{money.format(job.price)}</td></tr>
+                {job.deposit > 0 ? <tr><td className="px-2 py-1">มัดจำ{job.depositReceivedDate ? ` (${job.depositReceivedDate})` : ""}</td><td className="px-2 py-1 text-right">{money.format(job.deposit)}</td></tr> : null}
+                <tr style={{ borderTop: "2px solid #334155" }}>
+                  <td className="px-2 py-1" style={{ fontWeight: 800 }}>{isReceipt && job.remainingBalance <= 0 ? "ชำระแล้วทั้งหมด" : "คงเหลือ"}</td>
+                  <td className="px-2 py-1 text-right" style={{ fontWeight: 800 }}>{money.format(isReceipt && job.remainingBalance <= 0 ? job.price : job.remainingBalance)}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          {!isReceipt && (company.bankName || company.bankAccount) ? (
+            <div className="mt-4 rounded border border-slate-300 p-3">
+              <p style={{ fontWeight: 700 }}>ชำระเงินผ่าน</p>
+              <p>{company.bankName} · เลขที่บัญชี {company.bankAccount} · ชื่อบัญชี {company.bankAccountName}</p>
+            </div>
+          ) : null}
+          {company.quoteTerms ? <p className="mt-3" style={{ fontSize: "12px", color: "#475569" }}>หมายเหตุ: {company.quoteTerms}</p> : null}
+
+          <div className="mt-10 flex justify-between" style={{ fontSize: "12px" }}>
+            <div className="text-center" style={{ width: "45%" }}>
+              <div style={{ borderTop: "1px dotted #475569" }} className="pt-1">ผู้ว่าจ้าง / ลูกค้า</div>
+            </div>
+            <div className="text-center" style={{ width: "45%" }}>
+              <div style={{ borderTop: "1px dotted #475569" }} className="pt-1">ผู้มีอำนาจลงนาม ({company.name || "K2Smart"})</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function JobDetail({
   job,
   companyProfile,
@@ -4543,6 +4649,7 @@ function JobDetail({
     if (file.size > 1_500_000) { setBalanceError("รูปต้องไม่เกิน 1.5 MB"); return; }
     setBalanceSlipDraft(await readImageAsDataUrl(file));
   }
+  const [printType, setPrintType] = useState<PrintDocType | null>(null);
   const workOrderNumber = job.quoteNumber ?? quoteNumberFor(Number(job.id.replace(/\D/g, "").slice(-4)) || 1, companyProfile.quotePrefix);
   const dueInfo = dueUrgency(job.dueDate, job.status);
   return (
@@ -4567,6 +4674,13 @@ function JobDetail({
             </div>
             <h3 className="text-3xl font-semibold">{job.title}</h3>
             <p className="mt-2 text-k2-muted">{job.id} - {jobTypeLabel[job.type]} - {job.quantity} ชิ้น</p>
+            {/* พิมพ์เอกสาร PDF */}
+            <div className="mt-3 flex flex-wrap items-center gap-2">
+              <span className="text-xs font-bold text-k2-muted">🖨️ พิมพ์:</span>
+              <button type="button" onClick={() => setPrintType("quote")} className="rounded-xl bg-white/80 px-3 py-1.5 text-xs font-bold text-k2-ink shadow-sm">ใบเสนอราคา</button>
+              <button type="button" onClick={() => setPrintType("workorder")} className="rounded-xl bg-white/80 px-3 py-1.5 text-xs font-bold text-k2-ink shadow-sm">ใบสั่งงาน</button>
+              {canSeeMoney ? <button type="button" onClick={() => setPrintType("receipt")} className="rounded-xl bg-white/80 px-3 py-1.5 text-xs font-bold text-k2-ink shadow-sm">ใบเสร็จ</button> : null}
+            </div>
           </div>
           <div className="flex items-center gap-2">
             <select
@@ -4807,6 +4921,7 @@ function JobDetail({
         </div>
         <QuoteDocumentPreview job={job} companyProfile={companyProfile} quoteNumber={workOrderNumber} canSeeMoney={canSeeMoney} />
       </section>
+      {printType ? <PrintableDoc job={job} company={companyProfile} docType={printType} docNumber={workOrderNumber} onClose={() => setPrintType(null)} /> : null}
     </div>
   );
 }
