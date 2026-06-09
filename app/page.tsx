@@ -16,6 +16,7 @@ import {
   ClipboardList,
   ClipboardPlus,
   Clock3,
+  Coins,
   Factory,
   Inbox,
   FileImage,
@@ -169,6 +170,7 @@ type SupabaseJobRow = {
   deposit_waived?: boolean | null;
   balance_slip?: string | null;
   balance_received_date?: string | null;
+  created_by?: string | null;
   created_at: string;
 };
 
@@ -471,6 +473,7 @@ const viewLabel: Record<string, string> = {
   Customers: "ลูกค้า",
   Payments: "การชำระเงิน",
   Reports: "รายงาน",
+  Finance: "การเงิน",
   Settings: "ตั้งค่า",
   HR: "ฝ่ายบุคคล (HR)",
   Attendance: "ลงเวลา",
@@ -953,6 +956,7 @@ function jobFromRow(
     depositWaived: Boolean(row.deposit_waived),
     balanceSlip: row.balance_slip ?? undefined,
     balanceReceivedDate: row.balance_received_date ?? undefined,
+    createdBy: row.created_by ? profileNames.get(row.created_by) ?? undefined : undefined,
     remainingBalance: Number(row.remaining_balance),
     paymentStatus: row.payment_status,
     internalNotes: row.internal_notes ?? "",
@@ -1141,6 +1145,7 @@ export default function Page() {
         { label: "Customers", icon: UsersRound, visible: currentRolePermissions.includes("create_customer") || currentRolePermissions.includes("edit_customer") || currentRolePermissions.includes("delete_customer") },
         { label: "Payments", icon: WalletCards, visible: currentRolePermissions.includes("view_finance") || currentRolePermissions.includes("edit_payment") },
         { label: "Reports", icon: BarChart3, visible: currentRolePermissions.includes("view_dashboard") },
+        { label: "Finance", icon: Coins, visible: currentRolePermissions.includes("view_finance") },
         { label: "Attendance", icon: Clock3, visible: currentRolePermissions.includes("view_dashboard") },
         { label: "Leave", icon: CalendarDays, visible: currentRolePermissions.includes("view_dashboard") },
         { label: "HR", icon: UsersRound, visible: currentRolePermissions.includes("manage_hr") },
@@ -2446,6 +2451,7 @@ export default function Page() {
       status: "Quotation",
       assignedDesigner: input?.assignedDesigner ?? "Beam S.",
       assignedProduction: input?.assignedProduction ?? "Unassigned",
+      createdBy: currentUser.name,
       price,
       deposit,
       remainingBalance: Math.max(price - deposit, 0),
@@ -3587,6 +3593,11 @@ export default function Page() {
             {activeView === "Reports" && (
               <motion.div key="reports" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}>
                 <ReportsView jobs={jobs} canSeeMoney={canSeeMoney} />
+              </motion.div>
+            )}
+            {activeView === "Finance" && (
+              <motion.div key="finance" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}>
+                <FinanceView jobs={jobs} />
               </motion.div>
             )}
             {activeView === "Settings" && currentUser.role === "Owner" && (
@@ -6110,6 +6121,126 @@ function PaymentsView({
         </div>
       </section>
     </div>
+  );
+}
+
+function FinanceView({ jobs }: { jobs: Job[] }) {
+  const thisMonth = todayISO().slice(0, 7);
+  const active = jobs.filter((job) => job.status !== "Cancelled");
+
+  // สรุปบนสุด
+  const totalSales = active.reduce((s, j) => s + j.price, 0);
+  const totalReceived = active.reduce((s, j) => s + j.deposit, 0);
+  const totalOutstanding = active.reduce((s, j) => s + Math.max(j.remainingBalance, 0), 0);
+  const revenueThisMonth = active.filter((j) => j.orderDate.startsWith(thisMonth)).reduce((s, j) => s + j.price, 0);
+
+  // ยอดค้างรับ แยกตามลูกค้า
+  const receivables = useMemo(() => {
+    const map = new Map<string, { name: string; amount: number; count: number }>();
+    active.filter((j) => j.remainingBalance > 0).forEach((j) => {
+      const cur = map.get(j.customerName) ?? { name: j.customerName, amount: 0, count: 0 };
+      cur.amount += j.remainingBalance; cur.count += 1;
+      map.set(j.customerName, cur);
+    });
+    return [...map.values()].sort((a, b) => b.amount - a.amount);
+  }, [active]);
+
+  // รายได้ย้อนหลัง 6 เดือน
+  const months = useMemo(() => {
+    const arr: { key: string; label: string; value: number }[] = [];
+    const now = new Date();
+    for (let i = 5; i >= 0; i--) {
+      const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+      const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+      const label = d.toLocaleDateString("th-TH", { month: "short" });
+      const value = active.filter((j) => j.orderDate.startsWith(key)).reduce((s, j) => s + j.price, 0);
+      arr.push({ key, label, value });
+    }
+    return arr;
+  }, [active]);
+  const maxMonth = Math.max(1, ...months.map((m) => m.value));
+
+  return (
+    <div className="space-y-4">
+      {/* การ์ดสรุป */}
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        <div className="glass rounded-[1.4rem] p-5"><p className="text-sm font-bold text-k2-muted">ยอดขายรวม</p><p className="mt-1 text-2xl font-extrabold text-k2-ink">{money.format(totalSales)}</p></div>
+        <div className="glass rounded-[1.4rem] p-5"><p className="text-sm font-bold text-k2-muted">รับเงินแล้ว</p><p className="mt-1 text-2xl font-extrabold text-teal-600">{money.format(totalReceived)}</p></div>
+        <div className="glass rounded-[1.4rem] p-5"><p className="text-sm font-bold text-k2-muted">ยอดค้างรับ</p><p className="mt-1 text-2xl font-extrabold text-rose-600">{money.format(totalOutstanding)}</p></div>
+        <div className="glass rounded-[1.4rem] p-5"><p className="text-sm font-bold text-k2-muted">ยอดขายเดือนนี้</p><p className="mt-1 text-2xl font-extrabold text-k2-ink">{money.format(revenueThisMonth)}</p></div>
+      </div>
+
+      <div className="grid gap-4 xl:grid-cols-2">
+        {/* รายได้ 6 เดือน */}
+        <section className="glass rounded-[1.5rem] p-5">
+          <h3 className="text-xl font-semibold">รายได้ย้อนหลัง 6 เดือน</h3>
+          <div className="mt-5 flex items-end justify-between gap-2" style={{ height: 180 }}>
+            {months.map((m) => (
+              <div key={m.key} className="flex flex-1 flex-col items-center justify-end gap-1">
+                <span className="text-[10px] font-bold text-k2-muted">{m.value > 0 ? Math.round(m.value / 1000) + "k" : ""}</span>
+                <div className="w-full rounded-t-lg bg-k2-ink" style={{ height: `${(m.value / maxMonth) * 140}px`, minHeight: m.value > 0 ? 4 : 0 }} />
+                <span className="text-xs font-bold text-k2-muted">{m.label}</span>
+              </div>
+            ))}
+          </div>
+        </section>
+
+        {/* ยอดค้างรับ แยกลูกค้า */}
+        <section className="glass rounded-[1.5rem] p-5">
+          <h3 className="text-xl font-semibold">ยอดค้างรับ แยกตามลูกค้า</h3>
+          <div className="mt-4 max-h-72 space-y-2 overflow-y-auto">
+            {receivables.length === 0 ? (
+              <p className="rounded-2xl bg-white/60 px-4 py-6 text-center text-sm font-semibold text-k2-muted">ไม่มียอดค้างรับ 🎉</p>
+            ) : receivables.map((r) => (
+              <div key={r.name} className="flex items-center justify-between rounded-2xl bg-white/65 px-4 py-3">
+                <div className="min-w-0"><p className="truncate font-semibold">{r.name}</p><p className="text-xs text-k2-muted">{r.count} งานค้าง</p></div>
+                <span className="shrink-0 font-extrabold text-rose-600">{money.format(r.amount)}</span>
+              </div>
+            ))}
+          </div>
+        </section>
+      </div>
+
+      {/* ยอดขายรายพนักงาน */}
+      <SalesByStaff jobs={active} thisMonth={thisMonth} />
+    </div>
+  );
+}
+
+function SalesByStaff({ jobs, thisMonth }: { jobs: Job[]; thisMonth: string }) {
+  const rows = useMemo(() => {
+    const map = new Map<string, { name: string; count: number; total: number; monthTotal: number }>();
+    jobs.forEach((j) => {
+      const name = j.createdBy || "ไม่ระบุ";
+      const cur = map.get(name) ?? { name, count: 0, total: 0, monthTotal: 0 };
+      cur.count += 1; cur.total += j.price;
+      if (j.orderDate.startsWith(thisMonth)) cur.monthTotal += j.price;
+      map.set(name, cur);
+    });
+    return [...map.values()].sort((a, b) => b.total - a.total);
+  }, [jobs, thisMonth]);
+  const maxTotal = Math.max(1, ...rows.map((r) => r.total));
+
+  return (
+    <section className="glass rounded-[1.5rem] p-5">
+      <h3 className="text-xl font-semibold">ยอดขายรายพนักงาน</h3>
+      <p className="text-sm font-semibold text-k2-muted">นับจากคนที่สร้างงาน · เรียงยอดสูง→ต่ำ</p>
+      <div className="mt-5 space-y-4">
+        {rows.length === 0 ? (
+          <p className="rounded-2xl bg-white/60 px-4 py-6 text-center text-sm font-semibold text-k2-muted">ยังไม่มีข้อมูล</p>
+        ) : rows.map((r, i) => (
+          <div key={r.name}>
+            <div className="mb-1.5 flex items-center justify-between text-sm font-semibold">
+              <span>{i === 0 ? "🥇 " : i === 1 ? "🥈 " : i === 2 ? "🥉 " : ""}{r.name}</span>
+              <span>{money.format(r.total)} <span className="text-xs font-normal text-k2-muted">({r.count} งาน · เดือนนี้ {money.format(r.monthTotal)})</span></span>
+            </div>
+            <div className="h-3 overflow-hidden rounded-full bg-white/80">
+              <div className="h-full rounded-full bg-k2-ink" style={{ width: `${(r.total / maxTotal) * 100}%` }} />
+            </div>
+          </div>
+        ))}
+      </div>
+    </section>
   );
 }
 

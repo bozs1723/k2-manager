@@ -221,6 +221,7 @@ export type Job = {
   status: JobStatus;
   assignedDesigner: string;
   assignedProduction: string;
+  createdBy?: string;
   price: number;
   deposit: number;
   depositSlip?: string;
