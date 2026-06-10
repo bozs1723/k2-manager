@@ -1,0 +1,17 @@
+{
+  "name": "K2Smart — ระบบจัดการงานผลิต",
+  "short_name": "K2Smart",
+  "description": "ระบบจัดการคิวงานผลิตสำหรับร้านพิมพ์และสินค้าสั่งทำ",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#f4fbfa",
+  "theme_color": "#14383d",
+  "lang": "th",
+  "icons": [
+    { "src": "/assets/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/assets/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/assets/maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}
