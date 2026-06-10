@@ -99,6 +99,8 @@ export type Customer = {
   requiresInvoice?: boolean;
   sourceChannel?: string;
   sourcePage?: string;
+  lineFriend?: boolean;
+  loyaltyPoints?: number;
   totalOrders: number;
   lifetimeValue: number;
   lastOrderDate: string;

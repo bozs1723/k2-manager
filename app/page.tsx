@@ -119,6 +119,8 @@ type SupabaseCustomerRow = {
   requires_invoice: boolean;
   source_channel: string | null;
   source_page: string | null;
+  line_friend?: boolean | null;
+  loyalty_points?: number | null;
   created_at: string;
 };
 
@@ -861,6 +863,8 @@ function customerFromRow(row: SupabaseCustomerRow, jobs: SupabaseJobRow[]): Cust
     requiresInvoice: row.requires_invoice,
     sourceChannel: row.source_channel ?? "",
     sourcePage: row.source_page ?? "",
+    lineFriend: row.line_friend ?? false,
+    loyaltyPoints: row.loyalty_points ?? 0,
     totalOrders: customerJobs.length,
     lifetimeValue: customerJobs.reduce((sum, job) => sum + Number(job.price), 0),
     lastOrderDate: customerJobs[0]?.order_date ?? "-"
@@ -1012,7 +1016,9 @@ function customerInsertPayload(customer: Omit<Customer, "id" | "totalOrders" | "
     accounting_email: customer.accountingEmail ?? "",
     requires_invoice: customer.requiresInvoice ?? false,
     source_channel: customer.sourceChannel ?? "",
-    source_page: customer.sourcePage ?? ""
+    source_page: customer.sourcePage ?? "",
+    line_friend: customer.lineFriend ?? false,
+    loyalty_points: customer.loyaltyPoints ?? 0
   };
 }
 
@@ -2863,7 +2869,7 @@ export default function Page() {
     void appendAudit("created customer", nextCustomer.name, "customers");
   }
 
-  async function updateCustomer(customerId: string, updates: Pick<Customer, "name" | "phone" | "lineId" | "email" | "companyName" | "taxId" | "branch" | "billingAddress" | "accountingEmail" | "requiresInvoice" | "notes" | "sourceChannel" | "sourcePage">) {
+  async function updateCustomer(customerId: string, updates: Pick<Customer, "name" | "phone" | "lineId" | "email" | "companyName" | "taxId" | "branch" | "billingAddress" | "accountingEmail" | "requiresInvoice" | "notes" | "sourceChannel" | "sourcePage" | "lineFriend" | "loyaltyPoints">) {
     if (!can("edit_customer")) {
       setDataError("บทบาทนี้ยังไม่มีสิทธิ์แก้ไขลูกค้า");
       return;
@@ -6527,13 +6533,13 @@ function CustomersView({
   jobs: Job[];
   canDelete: boolean;
   onAddCustomer: (customer: Omit<Customer, "id" | "totalOrders" | "lifetimeValue" | "lastOrderDate">) => void;
-  onUpdateCustomer: (customerId: string, updates: Pick<Customer, "name" | "phone" | "lineId" | "email" | "companyName" | "taxId" | "branch" | "billingAddress" | "accountingEmail" | "requiresInvoice" | "notes" | "sourceChannel" | "sourcePage">) => void;
+  onUpdateCustomer: (customerId: string, updates: Pick<Customer, "name" | "phone" | "lineId" | "email" | "companyName" | "taxId" | "branch" | "billingAddress" | "accountingEmail" | "requiresInvoice" | "notes" | "sourceChannel" | "sourcePage" | "lineFriend" | "loyaltyPoints">) => void;
   onRemoveCustomer: (customerId: string) => void;
 }) {
   const [customerQuery, setCustomerQuery] = useState("");
   const [editingId, setEditingId] = useState<string | null>(null);
   const [newCustomer, setNewCustomer] = useState({ name: "", phone: "", lineId: "", email: "", companyName: "", taxId: "", branch: "สำนักงานใหญ่", billingAddress: "", accountingEmail: "", requiresInvoice: false, sourceChannel: "", sourcePage: "" });
-  const [editingCustomer, setEditingCustomer] = useState({ name: "", phone: "", lineId: "", email: "", companyName: "", taxId: "", branch: "สำนักงานใหญ่", billingAddress: "", accountingEmail: "", requiresInvoice: false, notes: "", sourceChannel: "", sourcePage: "" });
+  const [editingCustomer, setEditingCustomer] = useState({ name: "", phone: "", lineId: "", email: "", companyName: "", taxId: "", branch: "สำนักงานใหญ่", billingAddress: "", accountingEmail: "", requiresInvoice: false, notes: "", sourceChannel: "", sourcePage: "", lineFriend: false, loyaltyPoints: 0 });
   const sourceChannelOptions = ["", "Facebook", "LINE", "หน้าร้าน", "TikTok", "Website", "Shopee", "อื่น ๆ"];
   const [importRows, setImportRows] = useState<ImportedCustomer[]>([]);
   const [importFileName, setImportFileName] = useState("");
@@ -6563,7 +6569,9 @@ function CustomersView({
       requiresInvoice: customer.requiresInvoice ?? false,
       notes: customer.notes ?? "",
       sourceChannel: customer.sourceChannel ?? "",
-      sourcePage: customer.sourcePage ?? ""
+      sourcePage: customer.sourcePage ?? "",
+      lineFriend: customer.lineFriend ?? false,
+      loyaltyPoints: customer.loyaltyPoints ?? 0
     });
   }
 
@@ -6648,7 +6656,9 @@ function CustomersView({
       requiresInvoice: editingCustomer.requiresInvoice,
       notes: editingCustomer.notes.trim(),
       sourceChannel: editingCustomer.sourceChannel,
-      sourcePage: editingCustomer.sourcePage.trim()
+      sourcePage: editingCustomer.sourcePage.trim(),
+      lineFriend: editingCustomer.lineFriend,
+      loyaltyPoints: Number(editingCustomer.loyaltyPoints) || 0
     });
     setEditingId(null);
   }
@@ -6941,6 +6951,22 @@ function CustomersView({
                       placeholder="โน้ตลูกค้า เช่น ชอบงานด่วน · จ่ายเงินเร็ว · ชอบแก้หลายรอบ · ลูกค้าประจำ"
                       className="min-h-20 rounded-2xl border border-amber-200 bg-amber-50/60 px-4 py-3 text-sm font-semibold outline-none md:col-span-2"
                     />
+                    <label className="inline-flex items-center gap-2 rounded-2xl bg-green-50 px-4 py-3 text-sm font-extrabold text-green-700">
+                      <input
+                        type="checkbox"
+                        checked={editingCustomer.lineFriend}
+                        onChange={(event) => setEditingCustomer((current) => ({ ...current, lineFriend: event.target.checked }))}
+                        className="h-4 w-4 accent-green-500"
+                      />
+                      เป็นเพื่อน LINE OA แล้ว
+                    </label>
+                    <input
+                      type="number"
+                      value={editingCustomer.loyaltyPoints}
+                      onChange={(event) => setEditingCustomer((current) => ({ ...current, loyaltyPoints: Number(event.target.value) }))}
+                      placeholder="แต้มสะสม"
+                      className="rounded-2xl border border-white/80 bg-white/85 px-4 py-3 text-sm font-semibold outline-none"
+                    />
                   </div>
                 ) : (
                   <>
@@ -6950,6 +6976,8 @@ function CustomersView({
                         const badge = loyaltyBadge(customer.totalOrders, customer.lifetimeValue);
                         return <span className={`rounded-full px-2.5 py-1 text-xs font-bold ${badge.cls}`}>{badge.emoji} {badge.label}</span>;
                       })()}
+                      {customer.lineFriend ? <span className="rounded-full bg-green-100 px-2.5 py-1 text-xs font-bold text-green-700">🟢 เพื่อน LINE</span> : null}
+                      {customer.loyaltyPoints ? <span className="rounded-full bg-amber-100 px-2.5 py-1 text-xs font-bold text-amber-700">⭐ {customer.loyaltyPoints} แต้ม</span> : null}
                     </div>
                     <p className="mt-1 text-k2-muted">{customer.phone || "ไม่มีเบอร์โทร"} - LINE {customer.lineId || "-"}</p>
                     <p className="text-k2-muted">{customer.email || "ยังไม่มีอีเมล"}</p>
