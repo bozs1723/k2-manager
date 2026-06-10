@@ -2998,6 +2998,24 @@ export default function Page() {
     void appendAudit("updated customer", updates.name, "customers", customerId);
   }
 
+  // ชวนแอด LINE สำเร็จ → ทำเครื่องหมายว่าเป็นเพื่อน LINE แล้ว (อัปเดตเฉพาะ field เดียว ปลอดภัย)
+  async function markCustomerLineFriend(customerId: string) {
+    if (!can("edit_customer")) {
+      setDataError("บทบาทนี้ยังไม่มีสิทธิ์แก้ไขลูกค้า");
+      return;
+    }
+    setCustomerRecords((current) => current.map((customer) => (customer.id === customerId ? { ...customer, lineFriend: true } : customer)));
+    if (supabase && uuidPattern.test(customerId)) {
+      const { error } = await supabase.from("customers").update({ line_friend: true }).eq("id", customerId);
+      if (error) {
+        setDataError(error.message);
+        void refreshWorkspaceData();
+        return;
+      }
+    }
+    void appendAudit("marked LINE friend", customerId, "customers", customerId);
+  }
+
   async function removeCustomer(customerId: string) {
     if (!can("delete_customer")) {
       setDataError("บทบาทนี้ยังไม่มีสิทธิ์ลบลูกค้า");
@@ -3628,6 +3646,7 @@ export default function Page() {
               <motion.div key="detail" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}>
                 {selectedJob ? (
                   <>
+                  <LineInvitePanel job={selectedJob} customer={customerRecords.find((item) => item.id === selectedJob.customerId)} onMarkFriend={markCustomerLineFriend} />
                   <HandoffPanel job={selectedJob} currentUser={currentUser} onSubmit={submitHandoff} onAccept={acceptHandoff} onReject={rejectHandoff} />
                   <JobDetail job={selectedJob} companyProfile={companyProfile} canSeeMoney={canSeeMoney} canEditPayment={can("edit_payment")} canDeleteJob={can("delete_job")} canConfirmDeposit={["Owner", "Manager", "Admin"].includes(currentUser.role)} canApproveWaiver={currentUser.role === "Owner"} onPayment={updatePayment} onConfirmDeposit={confirmDeposit} onReceiveBalance={receiveBalance} onComment={addComment} onMove={requestMove} onDelete={removeJob} />
                   </>
@@ -4459,6 +4478,21 @@ function Board({
         );
       })}
     </div>
+  );
+}
+
+function LineInvitePanel({ job, customer, onMarkFriend }: {
+  job: Job;
+  customer?: Customer;
+  onMarkFriend: (customerId: string) => void;
+}) {
+  if (job.paymentStatus !== "paid" || !customer || customer.lineFriend) return null;
+  return (
+    <section className="glass mb-4 rounded-[1.5rem] border-2 border-green-200 p-5">
+      <p className="text-lg font-extrabold text-green-700">💚 ลูกค้าจ่ายครบแล้ว — ชวนแอด LINE OA</p>
+      <p className="mt-1 text-sm font-semibold text-k2-muted">โอกาสทอง! ชวน {customer.name} แอด LINE OA + ให้แต้มสะสม เพื่อขายซ้ำ / แจ้งสถานะงานในอนาคต</p>
+      <button type="button" onClick={() => onMarkFriend(customer.id)} className="mt-3 rounded-2xl bg-green-600 px-5 py-3 text-sm font-bold text-white">✅ ชวนแล้ว / เป็นเพื่อน LINE แล้ว</button>
+    </section>
   );
 }
 
