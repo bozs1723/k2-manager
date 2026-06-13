@@ -792,6 +792,13 @@ function memberDisplayName(member: TeamMember): string {
   return member.nickname?.trim() || member.name;
 }
 
+// เทียบข้อมูลที่เพิ่งโหลดมากับ state เดิมแบบ deep (ผ่าน JSON) — ใช้ใน refreshWorkspaceData
+// ถ้าเหมือนเดิมให้คืน reference เดิมเพื่อให้ React bail out ไม่ re-render
+// (กรณีหลักคือ realtime echo ของ action ที่ผู้ใช้ทำเองอยู่แล้ว → ซิงก์กลับมาเหมือนเดิม)
+function reuseIfSame<T>(current: T, next: T): T {
+  return JSON.stringify(current) === JSON.stringify(next) ? current : next;
+}
+
 function profileToMember(profile: { id: string; email?: string | null; username?: string | null; full_name: string | null; role: Role | null; extra_roles?: Role[] | null; avatar_url?: string | null; phone?: string | null; branch?: string | null }): TeamMember {
   const name = profile.full_name || "K2 User";
   const extra = (profile.extra_roles ?? []).filter((value): value is Role => roles.includes(value as Role));
@@ -1137,7 +1144,7 @@ export default function Page() {
   }, [permissionMatrix, currentUser.role, currentUser.roles]);
   const can = (permission: PermissionKey) => currentRolePermissions.includes(permission);
   const canSeeMoney = can("view_finance");
-  const activeJobs = jobs.filter((job) => !["Completed", "Cancelled"].includes(job.status));
+  const activeJobs = useMemo(() => jobs.filter((job) => !["Completed", "Cancelled"].includes(job.status)), [jobs]);
   const navigationItems = useMemo(
     () =>
       [
@@ -1253,7 +1260,8 @@ export default function Page() {
       .order("created_at", { ascending: false })
       .limit(100);
     if (error) return;
-    setExpressRequests(((data ?? []) as SupabaseExpressRequestRow[]).map(expressRowToRequest));
+    const next = ((data ?? []) as SupabaseExpressRequestRow[]).map(expressRowToRequest);
+    setExpressRequests((current) => reuseIfSame(current, next));
   }
 
   // เซลส์กด "ขออนุมัติงานด่วน" → สร้างคำขอ + แจ้งผู้จัดการ/เจ้าของ + log
@@ -1356,7 +1364,8 @@ export default function Page() {
       .order("created_at", { ascending: false })
       .limit(200);
     if (error) return;
-    setQuotations(((data ?? []) as SupabaseQuotationRow[]).map(quotationRowToQuotation));
+    const next = ((data ?? []) as SupabaseQuotationRow[]).map(quotationRowToQuotation);
+    setQuotations((current) => reuseIfSame(current, next));
   }
 
   async function createQuotation(input: { customerId?: string; customerName: string; customerPhone: string; title: string; description: string; amount: number }) {
@@ -1427,7 +1436,8 @@ export default function Page() {
       .order("created_at", { ascending: false })
       .limit(300);
     if (error) return;
-    setLeads(((data ?? []) as SupabaseLeadRow[]).map(leadRowToLead));
+    const next = ((data ?? []) as SupabaseLeadRow[]).map(leadRowToLead);
+    setLeads((current) => reuseIfSame(current, next));
   }
 
   async function createLead(input: { name: string; phone: string; channel: string; page: string; message: string }) {
@@ -1675,7 +1685,7 @@ export default function Page() {
       const profileRows = (profilesResult.data ?? []) as SupabaseProfileRow[];
       const profileNames = new Map(profileRows.map((profile) => [profile.id, profile.full_name || "K2 User"]));
       const members = profileRows.map(profileToMember);
-      if (members.length) setTeamMembers(members);
+      if (members.length) setTeamMembers((current) => reuseIfSame(current, members));
 
       const companyRows = companyResult.error ? [] : (companyResult.data ?? []) as SupabaseCompanyRow[];
       if (companyRows[0]) {
@@ -1686,7 +1696,8 @@ export default function Page() {
             return [];
           }
         })();
-        setCompanyProfile({ ...companyFromRow(companyRows[0]), ...(savedFacebookPages.length ? { facebookPages: savedFacebookPages } : {}) });
+        const nextCompany = { ...companyFromRow(companyRows[0]), ...(savedFacebookPages.length ? { facebookPages: savedFacebookPages } : {}) };
+        setCompanyProfile((current) => reuseIfSame(current, nextCompany));
       }
 
       if (!rolePermissionsResult.error) {
@@ -1708,15 +1719,18 @@ export default function Page() {
           (filesResult.data ?? []) as Array<{ id: string; job_id: string; file_name: string; file_type: string; file_size: number | null }>
         )
       );
-      setJobs(nextJobs);
-      setCustomerRecords(customerRows.map((row) => customerFromRow(row, jobRows)));
-      setAuditLog(auditResult.error ? [] : ((auditResult.data ?? []) as Parameters<typeof auditFromRow>[0][]).map((row) => auditFromRow(row, profileNames)));
+      setJobs((current) => reuseIfSame(current, nextJobs));
+      const nextCustomers = customerRows.map((row) => customerFromRow(row, jobRows));
+      setCustomerRecords((current) => reuseIfSame(current, nextCustomers));
+      const nextAudit = auditResult.error ? [] : ((auditResult.data ?? []) as Parameters<typeof auditFromRow>[0][]).map((row) => auditFromRow(row, profileNames));
+      setAuditLog((current) => reuseIfSame(current, nextAudit));
 
       if (!shopStateResult.error && shopStateResult.data?.[0]) {
         setExpressOrdersEnabled(Boolean((shopStateResult.data[0] as { express_orders_enabled?: boolean }).express_orders_enabled));
       }
       if (!notificationsResult.error) {
-        setNotifications(((notificationsResult.data ?? []) as SupabaseNotificationRow[]).map(notifFromRow));
+        const nextNotifs = ((notificationsResult.data ?? []) as SupabaseNotificationRow[]).map(notifFromRow);
+        setNotifications((current) => reuseIfSame(current, nextNotifs));
       }
       void reloadExpressRequests();
       void reloadQuotations();
@@ -3520,9 +3534,9 @@ export default function Page() {
             </div>
           ) : null}
 
-          <AnimatePresence mode="wait">
+          <AnimatePresence>
             {activeView === "Dashboard" && (
-              <motion.div key="dashboard" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}>
+              <motion.div key="dashboard" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }}>
                 <Dashboard metrics={metrics} jobs={filteredJobs} canSeeMoney={canSeeMoney} onSelect={(id) => {
                   setSelectedJobId(id);
                   setActiveView("Detail");
@@ -3530,7 +3544,7 @@ export default function Page() {
               </motion.div>
             )}
             {activeView === "My Jobs" && (
-              <motion.div key="my-jobs" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}>
+              <motion.div key="my-jobs" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }}>
                 <MyJobsView
                   jobs={filteredJobs}
                   currentUser={currentUser}
@@ -3543,7 +3557,7 @@ export default function Page() {
               </motion.div>
             )}
             {activeView === "Board" && (
-              <motion.div key="board" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}>
+              <motion.div key="board" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }}>
                 <Board
                   jobs={filteredJobs}
                   draggedJobId={draggedJobId}
@@ -3560,7 +3574,7 @@ export default function Page() {
               </motion.div>
             )}
             {activeView === "Calendar" && (
-              <motion.div key="calendar" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}>
+              <motion.div key="calendar" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }}>
                 <CalendarView jobs={filteredJobs} customers={customerRecords} onSelect={(id) => {
                   setSelectedJobId(id);
                   setActiveView("Detail");
@@ -3568,12 +3582,12 @@ export default function Page() {
               </motion.div>
             )}
             {activeView === "Create Job" && (
-              <motion.div key="create" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}>
+              <motion.div key="create" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }}>
                 <CreateJobView key={createJobNonce} prefill={createJobPrefill} customers={customerRecords} teamMembers={teamMembers} companyProfile={companyProfile} expressEnabled={canCreateExpress} onCreate={createJob} />
               </motion.div>
             )}
             {activeView === "Leads" && (
-              <motion.div key="leads-inbox" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}>
+              <motion.div key="leads-inbox" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }}>
                 <LeadsView
                   leads={leads}
                   onCreate={createLead}
@@ -3583,7 +3597,7 @@ export default function Page() {
               </motion.div>
             )}
             {activeView === "Quotations" && (
-              <motion.div key="quotations" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}>
+              <motion.div key="quotations" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }}>
                 <QuotationsView
                   quotations={quotations}
                   customers={customerRecords}
@@ -3595,7 +3609,7 @@ export default function Page() {
               </motion.div>
             )}
             {activeView === "Customers" && (
-              <motion.div key="customers" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}>
+              <motion.div key="customers" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }}>
                 <CustomersView
                   customers={customerRecords}
                   jobs={jobs}
@@ -3607,7 +3621,7 @@ export default function Page() {
               </motion.div>
             )}
             {activeView === "Payments" && (
-              <motion.div key="payments" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}>
+              <motion.div key="payments" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }}>
                 <PaymentsView jobs={filteredJobs} canSeeMoney={canSeeMoney} onSelect={(id) => {
                   setSelectedJobId(id);
                   setActiveView("Detail");
@@ -3615,17 +3629,17 @@ export default function Page() {
               </motion.div>
             )}
             {activeView === "Reports" && (
-              <motion.div key="reports" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}>
+              <motion.div key="reports" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }}>
                 <ReportsView jobs={jobs} canSeeMoney={canSeeMoney} />
               </motion.div>
             )}
             {activeView === "Finance" && (
-              <motion.div key="finance" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}>
+              <motion.div key="finance" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }}>
                 <FinanceView jobs={jobs} />
               </motion.div>
             )}
             {activeView === "Settings" && currentUser.role === "Owner" && (
-              <motion.div key="settings" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}>
+              <motion.div key="settings" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }}>
                 <SettingsView
                   currentUserId={currentUser.id}
                   currentRole={currentUser.role}
@@ -3643,7 +3657,7 @@ export default function Page() {
               </motion.div>
             )}
             {activeView === "Detail" && (
-              <motion.div key="detail" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}>
+              <motion.div key="detail" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }}>
                 {selectedJob ? (
                   <>
                   <LineInvitePanel job={selectedJob} customer={customerRecords.find((item) => item.id === selectedJob.customerId)} onMarkFriend={markCustomerLineFriend} />
@@ -3656,12 +3670,12 @@ export default function Page() {
               </motion.div>
             )}
             {activeView === "HR" && can("manage_hr") && (
-              <motion.div key="hr" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}>
+              <motion.div key="hr" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }}>
                 <HRView teamMembers={teamMembers} records={hrRecords} canEdit={can("manage_hr")} onSave={saveHrRecord} branches={BRANCH_LIST} branchSettings={branchSettings} onSaveBranch={saveBranchSetting} holidays={holidays} onAddHoliday={addHoliday} onRemoveHoliday={removeHoliday} />
               </motion.div>
             )}
             {activeView === "Attendance" && (
-              <motion.div key="attendance" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}>
+              <motion.div key="attendance" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }}>
                 <AttendanceView
                   currentUser={currentUser}
                   branchSetting={currentUser.branch ? branchSettings[currentUser.branch] : undefined}
@@ -3675,7 +3689,7 @@ export default function Page() {
               </motion.div>
             )}
             {activeView === "Leave" && (
-              <motion.div key="leave" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}>
+              <motion.div key="leave" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }}>
                 <LeaveView
                   currentUser={currentUser}
                   teamMembers={teamMembers}
@@ -3688,7 +3702,7 @@ export default function Page() {
               </motion.div>
             )}
             {activeView === "Payroll" && (
-              <motion.div key="payroll" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}>
+              <motion.div key="payroll" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }}>
                 <PayrollView
                   teamMembers={teamMembers}
                   records={hrRecords}
@@ -3700,7 +3714,7 @@ export default function Page() {
               </motion.div>
             )}
             {activeView === "Audit" && (
-              <motion.div key="audit" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}>
+              <motion.div key="audit" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }}>
                 <AuditLog auditLog={auditLog} />
               </motion.div>
             )}
