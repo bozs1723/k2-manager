@@ -792,6 +792,13 @@ function memberDisplayName(member: TeamMember): string {
   return member.nickname?.trim() || member.name;
 }
 
+// เทียบข้อมูลที่เพิ่งโหลดมากับ state เดิมแบบ deep (ผ่าน JSON) — ใช้ใน refreshWorkspaceData
+// ถ้าเหมือนเดิมให้คืน reference เดิมเพื่อให้ React bail out ไม่ re-render
+// (กรณีหลักคือ realtime echo ของ action ที่ผู้ใช้ทำเองอยู่แล้ว → ซิงก์กลับมาเหมือนเดิม)
+function reuseIfSame<T>(current: T, next: T): T {
+  return JSON.stringify(current) === JSON.stringify(next) ? current : next;
+}
+
 function profileToMember(profile: { id: string; email?: string | null; username?: string | null; full_name: string | null; role: Role | null; extra_roles?: Role[] | null; avatar_url?: string | null; phone?: string | null; branch?: string | null }): TeamMember {
   const name = profile.full_name || "K2 User";
   const extra = (profile.extra_roles ?? []).filter((value): value is Role => roles.includes(value as Role));
@@ -1253,7 +1260,8 @@ export default function Page() {
       .order("created_at", { ascending: false })
       .limit(100);
     if (error) return;
-    setExpressRequests(((data ?? []) as SupabaseExpressRequestRow[]).map(expressRowToRequest));
+    const next = ((data ?? []) as SupabaseExpressRequestRow[]).map(expressRowToRequest);
+    setExpressRequests((current) => reuseIfSame(current, next));
   }
 
   // เซลส์กด "ขออนุมัติงานด่วน" → สร้างคำขอ + แจ้งผู้จัดการ/เจ้าของ + log
@@ -1356,7 +1364,8 @@ export default function Page() {
       .order("created_at", { ascending: false })
       .limit(200);
     if (error) return;
-    setQuotations(((data ?? []) as SupabaseQuotationRow[]).map(quotationRowToQuotation));
+    const next = ((data ?? []) as SupabaseQuotationRow[]).map(quotationRowToQuotation);
+    setQuotations((current) => reuseIfSame(current, next));
   }
 
   async function createQuotation(input: { customerId?: string; customerName: string; customerPhone: string; title: string; description: string; amount: number }) {
@@ -1427,7 +1436,8 @@ export default function Page() {
       .order("created_at", { ascending: false })
       .limit(300);
     if (error) return;
-    setLeads(((data ?? []) as SupabaseLeadRow[]).map(leadRowToLead));
+    const next = ((data ?? []) as SupabaseLeadRow[]).map(leadRowToLead);
+    setLeads((current) => reuseIfSame(current, next));
   }
 
   async function createLead(input: { name: string; phone: string; channel: string; page: string; message: string }) {
@@ -1675,7 +1685,7 @@ export default function Page() {
       const profileRows = (profilesResult.data ?? []) as SupabaseProfileRow[];
       const profileNames = new Map(profileRows.map((profile) => [profile.id, profile.full_name || "K2 User"]));
       const members = profileRows.map(profileToMember);
-      if (members.length) setTeamMembers(members);
+      if (members.length) setTeamMembers((current) => reuseIfSame(current, members));
 
       const companyRows = companyResult.error ? [] : (companyResult.data ?? []) as SupabaseCompanyRow[];
       if (companyRows[0]) {
@@ -1686,7 +1696,8 @@ export default function Page() {
             return [];
           }
         })();
-        setCompanyProfile({ ...companyFromRow(companyRows[0]), ...(savedFacebookPages.length ? { facebookPages: savedFacebookPages } : {}) });
+        const nextCompany = { ...companyFromRow(companyRows[0]), ...(savedFacebookPages.length ? { facebookPages: savedFacebookPages } : {}) };
+        setCompanyProfile((current) => reuseIfSame(current, nextCompany));
       }
 
       if (!rolePermissionsResult.error) {
@@ -1708,15 +1719,18 @@ export default function Page() {
           (filesResult.data ?? []) as Array<{ id: string; job_id: string; file_name: string; file_type: string; file_size: number | null }>
         )
       );
-      setJobs(nextJobs);
-      setCustomerRecords(customerRows.map((row) => customerFromRow(row, jobRows)));
-      setAuditLog(auditResult.error ? [] : ((auditResult.data ?? []) as Parameters<typeof auditFromRow>[0][]).map((row) => auditFromRow(row, profileNames)));
+      setJobs((current) => reuseIfSame(current, nextJobs));
+      const nextCustomers = customerRows.map((row) => customerFromRow(row, jobRows));
+      setCustomerRecords((current) => reuseIfSame(current, nextCustomers));
+      const nextAudit = auditResult.error ? [] : ((auditResult.data ?? []) as Parameters<typeof auditFromRow>[0][]).map((row) => auditFromRow(row, profileNames));
+      setAuditLog((current) => reuseIfSame(current, nextAudit));
 
       if (!shopStateResult.error && shopStateResult.data?.[0]) {
         setExpressOrdersEnabled(Boolean((shopStateResult.data[0] as { express_orders_enabled?: boolean }).express_orders_enabled));
       }
       if (!notificationsResult.error) {
-        setNotifications(((notificationsResult.data ?? []) as SupabaseNotificationRow[]).map(notifFromRow));
+        const nextNotifs = ((notificationsResult.data ?? []) as SupabaseNotificationRow[]).map(notifFromRow);
+        setNotifications((current) => reuseIfSame(current, nextNotifs));
       }
       void reloadExpressRequests();
       void reloadQuotations();
