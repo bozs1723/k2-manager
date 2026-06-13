@@ -1,7 +1,7 @@
 "use client";
 
 import Image from "next/image";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import * as XLSX from "xlsx";
 import {
@@ -1145,6 +1145,11 @@ export default function Page() {
   const can = (permission: PermissionKey) => currentRolePermissions.includes(permission);
   const canSeeMoney = can("view_finance");
   const activeJobs = useMemo(() => jobs.filter((job) => !["Completed", "Cancelled"].includes(job.status)), [jobs]);
+  // callback คงที่สำหรับเปิดรายละเอียดงาน — ช่วยให้ view ที่ครอบด้วย memo ไม่ re-render เพราะ prop เปลี่ยน reference
+  const openJobDetail = useCallback((id: string) => {
+    setSelectedJobId(id);
+    setActiveView("Detail");
+  }, []);
   const navigationItems = useMemo(
     () =>
       [
@@ -3523,9 +3528,9 @@ export default function Page() {
             </div>
           </header>
 
-          {dataLoading ? (
+          {dataLoading && jobs.length > 0 ? (
             <div className="mb-4 rounded-3xl border border-white/80 bg-white/70 px-5 py-3 text-sm font-extrabold text-k2-muted shadow-sm">
-              กำลังโหลดข้อมูลจริงจาก Supabase...
+              กำลังอัปเดตข้อมูลจาก Supabase...
             </div>
           ) : null}
           {dataError ? (
@@ -3534,13 +3539,11 @@ export default function Page() {
             </div>
           ) : null}
 
+          {dataLoading && jobs.length === 0 ? <LoadingSkeleton /> : (
           <AnimatePresence>
             {activeView === "Dashboard" && (
               <motion.div key="dashboard" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }}>
-                <Dashboard metrics={metrics} jobs={filteredJobs} canSeeMoney={canSeeMoney} onSelect={(id) => {
-                  setSelectedJobId(id);
-                  setActiveView("Detail");
-                }} />
+                <Dashboard metrics={metrics} jobs={filteredJobs} canSeeMoney={canSeeMoney} onSelect={openJobDetail} />
               </motion.div>
             )}
             {activeView === "My Jobs" && (
@@ -3575,10 +3578,7 @@ export default function Page() {
             )}
             {activeView === "Calendar" && (
               <motion.div key="calendar" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }}>
-                <CalendarView jobs={filteredJobs} customers={customerRecords} onSelect={(id) => {
-                  setSelectedJobId(id);
-                  setActiveView("Detail");
-                }} />
+                <CalendarView jobs={filteredJobs} customers={customerRecords} onSelect={openJobDetail} />
               </motion.div>
             )}
             {activeView === "Create Job" && (
@@ -3622,10 +3622,7 @@ export default function Page() {
             )}
             {activeView === "Payments" && (
               <motion.div key="payments" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }}>
-                <PaymentsView jobs={filteredJobs} canSeeMoney={canSeeMoney} onSelect={(id) => {
-                  setSelectedJobId(id);
-                  setActiveView("Detail");
-                }} />
+                <PaymentsView jobs={filteredJobs} canSeeMoney={canSeeMoney} onSelect={openJobDetail} />
               </motion.div>
             )}
             {activeView === "Reports" && (
@@ -3719,6 +3716,7 @@ export default function Page() {
               </motion.div>
             )}
           </AnimatePresence>
+          )}
         </section>
       </div>
 
@@ -4247,7 +4245,41 @@ function MyJobsView({
   );
 }
 
-function Dashboard({
+// โครงร่าง (skeleton) ระหว่างโหลดข้อมูลครั้งแรก — ให้รู้สึกว่าโหลดเร็วและไม่เห็นหน้าว่าง
+function LoadingSkeleton() {
+  return (
+    <div className="animate-pulse space-y-4" aria-hidden="true">
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        {Array.from({ length: 4 }).map((_, index) => (
+          <div key={index} className="glass rounded-[1.5rem] p-5">
+            <div className="mb-4 h-11 w-11 rounded-2xl bg-white/70" />
+            <div className="h-3 w-24 rounded-full bg-white/70" />
+            <div className="mt-3 h-7 w-16 rounded-full bg-white/80" />
+          </div>
+        ))}
+      </div>
+      <div className="grid gap-4 xl:grid-cols-[1.3fr_0.7fr]">
+        <div className="glass space-y-3 rounded-[1.5rem] p-5">
+          <div className="h-5 w-40 rounded-full bg-white/70" />
+          {Array.from({ length: 5 }).map((_, index) => (
+            <div key={index} className="h-16 rounded-2xl bg-white/60" />
+          ))}
+        </div>
+        <div className="glass space-y-4 rounded-[1.5rem] p-5">
+          <div className="h-5 w-32 rounded-full bg-white/70" />
+          {Array.from({ length: 4 }).map((_, index) => (
+            <div key={index} className="space-y-2">
+              <div className="h-3 w-full rounded-full bg-white/70" />
+              <div className="h-3 w-full rounded-full bg-white/50" />
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+const Dashboard = memo(function Dashboard({
   metrics,
   jobs,
   canSeeMoney,
@@ -4305,7 +4337,7 @@ function Dashboard({
       </div>
     </div>
   );
-}
+});
 
 function JobRow({ job, canSeeMoney, onSelect }: { job: Job; canSeeMoney: boolean; onSelect: (id: string) => void }) {
   const urgency = dueUrgency(job.dueDate, job.status);
@@ -6125,7 +6157,7 @@ function NumberField({ label, value, onChange }: { label: string; value: number;
   );
 }
 
-function PaymentsView({
+const PaymentsView = memo(function PaymentsView({
   jobs,
   canSeeMoney,
   onSelect
@@ -6176,7 +6208,7 @@ function PaymentsView({
       </section>
     </div>
   );
-}
+});
 
 function FinanceView({ jobs }: { jobs: Job[] }) {
   const thisMonth = todayISO().slice(0, 7);
@@ -6298,7 +6330,7 @@ function SalesByStaff({ jobs, thisMonth }: { jobs: Job[]; thisMonth: string }) {
   );
 }
 
-function ReportsView({ jobs, canSeeMoney }: { jobs: Job[]; canSeeMoney: boolean }) {
+const ReportsView = memo(function ReportsView({ jobs, canSeeMoney }: { jobs: Job[]; canSeeMoney: boolean }) {
   const byType = jobTypes.map((type) => ({
     type,
     count: jobs.filter((job) => job.type === type).length,
@@ -6335,7 +6367,7 @@ function ReportsView({ jobs, canSeeMoney }: { jobs: Job[]; canSeeMoney: boolean 
       </section>
     </div>
   );
-}
+});
 
 function SettingsView({
   currentUserId,
@@ -6834,7 +6866,7 @@ function SettingsView({
   );
 }
 
-function CalendarView({ jobs, customers, onSelect }: { jobs: Job[]; customers: Customer[]; onSelect: (id: string) => void }) {
+const CalendarView = memo(function CalendarView({ jobs, customers, onSelect }: { jobs: Job[]; customers: Customer[]; onSelect: (id: string) => void }) {
   const [modalJob, setModalJob] = useState<Job | null>(null);
   const modalCustomer = modalJob ? customers.find((c) => c.id === modalJob.customerId) : undefined;
 
@@ -6986,7 +7018,7 @@ function CalendarView({ jobs, customers, onSelect }: { jobs: Job[]; customers: C
       ) : null}
     </>
   );
-}
+});
 
 function loyaltyBadge(orders: number, ltv: number): { label: string; emoji: string; cls: string } {
   if (orders >= 10 || ltv >= 100000) return { label: "VIP", emoji: "🥇", cls: "bg-amber-100 text-amber-700" };
@@ -8192,7 +8224,7 @@ function HRView({
   );
 }
 
-function AuditLog({ auditLog }: { auditLog: AuditEvent[] }) {
+const AuditLog = memo(function AuditLog({ auditLog }: { auditLog: AuditEvent[] }) {
   return (
     <section className="glass rounded-[1.5rem] p-5">
       <div className="mb-5 flex items-center justify-between">
@@ -8212,4 +8244,4 @@ function AuditLog({ auditLog }: { auditLog: AuditEvent[] }) {
       </div>
     </section>
   );
-}
+});
