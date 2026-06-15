@@ -121,6 +121,11 @@ type SupabaseCustomerRow = {
   requires_invoice: boolean;
   source_channel: string | null;
   source_page: string | null;
+  customer_code?: string | null;
+  code_page?: string | null;
+  code_admin?: string | null;
+  code_seq?: number | null;
+  code_year?: string | null;
   line_friend?: boolean | null;
   loyalty_points?: number | null;
   created_at: string;
@@ -901,6 +906,11 @@ function customerFromRow(row: SupabaseCustomerRow, jobs: SupabaseJobRow[]): Cust
     requiresInvoice: row.requires_invoice,
     sourceChannel: row.source_channel ?? "",
     sourcePage: row.source_page ?? "",
+    customerCode: row.customer_code ?? "",
+    codePage: row.code_page ?? "",
+    codeAdmin: row.code_admin ?? "",
+    codeSeq: row.code_seq ?? undefined,
+    codeYear: row.code_year ?? "",
     lineFriend: row.line_friend ?? false,
     loyaltyPoints: row.loyalty_points ?? 0,
     totalOrders: customerJobs.length,
@@ -1039,6 +1049,43 @@ function auditFromRow(row: { id: string; action: string; target_table: string; t
     target: String(row.metadata?.target ?? row.target_id ?? row.target_table),
     at: new Date(row.created_at).toLocaleString("en-GB")
   };
+}
+
+// ===== ระบบรหัสลูกค้า K2 (SOP v1) =====
+// รูปแบบ: [เพจ]-[แอดมิน]-[ลำดับ]-[ปี] เช่น KS-AOM-0001-26
+// ทะเบียนนี้คือ Source of Truth — ห้ามตั้งรหัสเอง
+const CUSTOMER_CODE_PAGES: { name: string; code: string }[] = [
+  { name: "Sweetdesign", code: "SW" },
+  { name: "K2Sign", code: "KS" },
+  { name: "K2 พะเยา", code: "KP" },
+  { name: "TheDecor", code: "TD" },
+  { name: "MonMon", code: "MM" },
+  { name: "K2STUDIO", code: "ST" },
+  { name: "Fluffi", code: "FF" }
+];
+
+const CUSTOMER_CODE_ADMINS: { name: string; code: string }[] = [
+  { name: "อ้อม", code: "AOM" },
+  { name: "อ้อ", code: "AOR" },
+  { name: "ก้อยพัทยา", code: "KOY" },
+  { name: "เหมียว", code: "MAW" },
+  { name: "แคท", code: "CAT" },
+  { name: "ออย", code: "OYL" },
+  { name: "House / Walk-in (ไม่มีเจ้าของ)", code: "HSE" }
+];
+
+// ปี ค.ศ. 2 หลัก เช่น 2026 -> "26"
+function customerCodeYear(): string {
+  return String(new Date().getFullYear()).slice(-2);
+}
+
+function formatCustomerCode(page: string, admin: string, seq: number, year: string): string {
+  return `${page}-${admin}-${String(seq).padStart(4, "0")}-${year}`;
+}
+
+// เลขวิ่งรวมทั้งบริษัท ไม่รีเซ็ต — เลขถัดไป = เลขสูงสุดที่เคยออก + 1
+function nextCustomerSeq(customers: Customer[]): number {
+  return customers.reduce((max, customer) => Math.max(max, customer.codeSeq ?? 0), 0) + 1;
 }
 
 function customerInsertPayload(customer: Omit<Customer, "id" | "totalOrders" | "lifetimeValue" | "lastOrderDate">) {
@@ -2956,13 +3003,37 @@ export default function Page() {
     void appendAudit("removed team member", member.name, "profiles", memberId);
   }
 
+  // ดึงเลขลำดับถัดไปจาก DB (กันเลขซ้ำตอนหลายเพจปิดงานพร้อมกัน) — fallback เป็น state ในโหมด mock
+  async function nextCustomerSeqFromSource(): Promise<number> {
+    if (supabase && isSupabaseConfigured) {
+      const { data } = await supabase
+        .from("customers")
+        .select("code_seq")
+        .order("code_seq", { ascending: false, nullsFirst: false })
+        .limit(1)
+        .maybeSingle();
+      return Number((data as { code_seq?: number | null } | null)?.code_seq ?? 0) + 1;
+    }
+    return nextCustomerSeq(customerRecords);
+  }
+
   async function addCustomer(customer: Omit<Customer, "id" | "totalOrders" | "lifetimeValue" | "lastOrderDate">) {
     if (!can("create_customer")) {
       setDataError("บทบาทนี้ยังไม่มีสิทธิ์เพิ่มลูกค้า");
       return;
     }
+    // ออกรหัสลูกค้าเมื่อเลือกเพจ + แอดมินครบ (เลขลำดับ = ระบบแจกเท่านั้น ตาม SOP)
+    let codeColumns: Record<string, unknown> = {};
+    let codeLocal: Partial<Customer> = {};
+    if (customer.codePage && customer.codeAdmin) {
+      const year = customerCodeYear();
+      const seq = await nextCustomerSeqFromSource();
+      const code = formatCustomerCode(customer.codePage, customer.codeAdmin, seq, year);
+      codeColumns = { customer_code: code, code_page: customer.codePage, code_admin: customer.codeAdmin, code_seq: seq, code_year: year };
+      codeLocal = { customerCode: code, codePage: customer.codePage, codeAdmin: customer.codeAdmin, codeSeq: seq, codeYear: year };
+    }
     if (supabase && isSupabaseConfigured) {
-      const { data, error } = await supabase.from("customers").insert(customerInsertPayload(customer)).select("*").single();
+      const { data, error } = await supabase.from("customers").insert({ ...customerInsertPayload(customer), ...codeColumns }).select("*").single();
       if (error) {
         setDataError(error.message);
         return;
@@ -2974,6 +3045,7 @@ export default function Page() {
     }
     const nextCustomer: Customer = {
       ...customer,
+      ...codeLocal,
       id: `c-${crypto.randomUUID()}`,
       totalOrders: 0,
       lifetimeValue: 0,
@@ -2981,6 +3053,38 @@ export default function Page() {
     };
     setCustomerRecords((current) => [nextCustomer, ...current]);
     void appendAudit("created customer", nextCustomer.name, "customers");
+  }
+
+  // ออกรหัสให้ลูกค้าเก่าที่ยังไม่มีรหัส (backfill) — ไม่ออกซ้ำถ้ามีรหัสแล้ว
+  async function assignCustomerCode(customerId: string, page: string, admin: string) {
+    if (!can("edit_customer")) {
+      setDataError("บทบาทนี้ยังไม่มีสิทธิ์แก้ไขลูกค้า");
+      return;
+    }
+    if (!page || !admin) return;
+    const target = customerRecords.find((customer) => customer.id === customerId);
+    if (!target || target.customerCode) return;
+    const year = customerCodeYear();
+    const seq = await nextCustomerSeqFromSource();
+    const code = formatCustomerCode(page, admin, seq, year);
+    if (supabase && uuidPattern.test(customerId)) {
+      const { error } = await supabase
+        .from("customers")
+        .update({ customer_code: code, code_page: page, code_admin: admin, code_seq: seq, code_year: year })
+        .eq("id", customerId);
+      if (error) {
+        setDataError(error.message);
+        return;
+      }
+    }
+    setCustomerRecords((current) =>
+      current.map((customer) =>
+        customer.id === customerId
+          ? { ...customer, customerCode: code, codePage: page, codeAdmin: admin, codeSeq: seq, codeYear: year }
+          : customer
+      )
+    );
+    void appendAudit("assigned customer code", code, "customers", uuidPattern.test(customerId) ? customerId : null);
   }
 
   async function updateCustomer(customerId: string, updates: Pick<Customer, "name" | "phone" | "lineId" | "email" | "companyName" | "taxId" | "branch" | "billingAddress" | "accountingEmail" | "requiresInvoice" | "notes" | "sourceChannel" | "sourcePage" | "lineFriend" | "loyaltyPoints">) {
@@ -3617,6 +3721,7 @@ export default function Page() {
                   onAddCustomer={addCustomer}
                   onUpdateCustomer={updateCustomer}
                   onRemoveCustomer={removeCustomer}
+                  onAssignCode={assignCustomerCode}
                 />
               </motion.div>
             )}
@@ -7032,7 +7137,8 @@ function CustomersView({
   canDelete,
   onAddCustomer,
   onUpdateCustomer,
-  onRemoveCustomer
+  onRemoveCustomer,
+  onAssignCode
 }: {
   customers: Customer[];
   jobs: Job[];
@@ -7040,10 +7146,12 @@ function CustomersView({
   onAddCustomer: (customer: Omit<Customer, "id" | "totalOrders" | "lifetimeValue" | "lastOrderDate">) => void;
   onUpdateCustomer: (customerId: string, updates: Pick<Customer, "name" | "phone" | "lineId" | "email" | "companyName" | "taxId" | "branch" | "billingAddress" | "accountingEmail" | "requiresInvoice" | "notes" | "sourceChannel" | "sourcePage" | "lineFriend" | "loyaltyPoints">) => void;
   onRemoveCustomer: (customerId: string) => void;
+  onAssignCode: (customerId: string, page: string, admin: string) => void;
 }) {
   const [customerQuery, setCustomerQuery] = useState("");
   const [editingId, setEditingId] = useState<string | null>(null);
-  const [newCustomer, setNewCustomer] = useState({ name: "", phone: "", lineId: "", email: "", companyName: "", taxId: "", branch: "สำนักงานใหญ่", billingAddress: "", accountingEmail: "", requiresInvoice: false, sourceChannel: "", sourcePage: "" });
+  const [newCustomer, setNewCustomer] = useState({ name: "", phone: "", lineId: "", email: "", companyName: "", taxId: "", branch: "สำนักงานใหญ่", billingAddress: "", accountingEmail: "", requiresInvoice: false, sourceChannel: "", sourcePage: "", codePage: "", codeAdmin: "" });
+  const [assignCode, setAssignCode] = useState({ page: "", admin: "" });
   const [editingCustomer, setEditingCustomer] = useState({ name: "", phone: "", lineId: "", email: "", companyName: "", taxId: "", branch: "สำนักงานใหญ่", billingAddress: "", accountingEmail: "", requiresInvoice: false, notes: "", sourceChannel: "", sourcePage: "", lineFriend: false, loyaltyPoints: 0 });
   const sourceChannelOptions = ["", "Facebook", "LINE", "หน้าร้าน", "TikTok", "Website", "Shopee", "อื่น ๆ"];
   const [importRows, setImportRows] = useState<ImportedCustomer[]>([]);
@@ -7094,9 +7202,11 @@ function CustomersView({
       accountingEmail: newCustomer.accountingEmail.trim(),
       requiresInvoice: newCustomer.requiresInvoice,
       sourceChannel: newCustomer.sourceChannel,
-      sourcePage: newCustomer.sourcePage.trim()
+      sourcePage: newCustomer.sourcePage.trim(),
+      codePage: newCustomer.codePage,
+      codeAdmin: newCustomer.codeAdmin
     });
-    setNewCustomer({ name: "", phone: "", lineId: "", email: "", companyName: "", taxId: "", branch: "สำนักงานใหญ่", billingAddress: "", accountingEmail: "", requiresInvoice: false, sourceChannel: "", sourcePage: "" });
+    setNewCustomer({ name: "", phone: "", lineId: "", email: "", companyName: "", taxId: "", branch: "สำนักงานใหญ่", billingAddress: "", accountingEmail: "", requiresInvoice: false, sourceChannel: "", sourcePage: "", codePage: "", codeAdmin: "" });
   }
 
   async function handleImportFile(file: File | null) {
@@ -7280,6 +7390,60 @@ function CustomersView({
             placeholder="ที่อยู่ใบกำกับ / ใบเสร็จ"
             className="min-h-20 rounded-2xl border border-white/80 bg-white/80 px-4 py-3 text-sm font-semibold outline-none md:col-span-2 xl:col-span-5"
           />
+        </div>
+
+        {/* ระบบรหัสลูกค้า K2 — [เพจ]-[แอดมิน]-[ลำดับ]-[ปี] */}
+        <div className="mt-3 grid gap-3 rounded-[1.25rem] border border-k2-ink/15 bg-white/45 p-3 md:grid-cols-2 xl:grid-cols-4">
+          <div className="flex flex-wrap items-center justify-between gap-2 md:col-span-2 xl:col-span-4">
+            <p className="text-sm font-extrabold text-k2-ink">รหัสลูกค้า (ผูกค่าคอมถาวร)</p>
+            <details className="text-xs">
+              <summary className="cursor-pointer font-bold text-k2-muted">ดูทะเบียนตัวย่อ</summary>
+              <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                <div>
+                  <p className="mb-1 font-bold text-k2-muted">เพจ</p>
+                  {CUSTOMER_CODE_PAGES.map((p) => (
+                    <span key={p.code} className="mb-1 mr-1 inline-block rounded bg-white/80 px-1.5 py-0.5">{p.code} = {p.name}</span>
+                  ))}
+                </div>
+                <div>
+                  <p className="mb-1 font-bold text-k2-muted">แอดมิน (เจ้าของค่าคอม)</p>
+                  {CUSTOMER_CODE_ADMINS.map((a) => (
+                    <span key={a.code} className="mb-1 mr-1 inline-block rounded bg-white/80 px-1.5 py-0.5">{a.code} = {a.name}</span>
+                  ))}
+                </div>
+              </div>
+            </details>
+          </div>
+          <select
+            value={newCustomer.codePage}
+            onChange={(event) => setNewCustomer((current) => ({ ...current, codePage: event.target.value }))}
+            className="rounded-2xl border border-white/80 bg-white/80 px-4 py-3 text-sm font-semibold outline-none"
+          >
+            <option value="">เลือกเพจ</option>
+            {CUSTOMER_CODE_PAGES.map((p) => (
+              <option key={p.code} value={p.code}>{p.name} ({p.code})</option>
+            ))}
+          </select>
+          <select
+            value={newCustomer.codeAdmin}
+            onChange={(event) => setNewCustomer((current) => ({ ...current, codeAdmin: event.target.value }))}
+            className="rounded-2xl border border-white/80 bg-white/80 px-4 py-3 text-sm font-semibold outline-none"
+          >
+            <option value="">เลือกแอดมิน (เจ้าของค่าคอม)</option>
+            {CUSTOMER_CODE_ADMINS.map((a) => (
+              <option key={a.code} value={a.code}>{a.name} ({a.code})</option>
+            ))}
+          </select>
+          <div className="flex items-center rounded-2xl bg-white/70 px-4 py-3 text-sm font-bold md:col-span-2">
+            {newCustomer.codePage && newCustomer.codeAdmin ? (
+              <span>
+                รหัสที่จะออก: <span className="font-extrabold text-k2-ink">{formatCustomerCode(newCustomer.codePage, newCustomer.codeAdmin, nextCustomerSeq(customers), customerCodeYear())}</span>
+                <span className="ml-1 font-semibold text-k2-muted">(เลขลำดับจริงออกโดยระบบตอนบันทึก)</span>
+              </span>
+            ) : (
+              <span className="text-k2-muted">เลือกเพจ + แอดมิน เพื่อออกรหัสอัตโนมัติ (ไม่บังคับ)</span>
+            )}
+          </div>
         </div>
 
         <div className="mt-5 rounded-[1.35rem] border border-white/70 bg-white/45 p-4">
@@ -7472,11 +7636,51 @@ function CustomersView({
                       placeholder="แต้มสะสม"
                       className="rounded-2xl border border-white/80 bg-white/85 px-4 py-3 text-sm font-semibold outline-none"
                     />
+                    {customer.customerCode ? (
+                      <div className="rounded-2xl bg-white/70 px-4 py-3 text-sm font-bold md:col-span-2">
+                        รหัสลูกค้า: <span className="font-extrabold text-k2-ink">{customer.customerCode}</span>
+                        <span className="ml-2 font-semibold text-k2-muted">(รหัสถาวร แก้ไม่ได้)</span>
+                      </div>
+                    ) : (
+                      <div className="grid gap-2 rounded-2xl border border-k2-ink/15 bg-white/55 p-3 sm:grid-cols-3 md:col-span-2">
+                        <select
+                          value={assignCode.page}
+                          onChange={(event) => setAssignCode((current) => ({ ...current, page: event.target.value }))}
+                          className="rounded-2xl border border-white/80 bg-white/85 px-4 py-3 text-sm font-semibold outline-none"
+                        >
+                          <option value="">เลือกเพจ</option>
+                          {CUSTOMER_CODE_PAGES.map((p) => (
+                            <option key={p.code} value={p.code}>{p.name} ({p.code})</option>
+                          ))}
+                        </select>
+                        <select
+                          value={assignCode.admin}
+                          onChange={(event) => setAssignCode((current) => ({ ...current, admin: event.target.value }))}
+                          className="rounded-2xl border border-white/80 bg-white/85 px-4 py-3 text-sm font-semibold outline-none"
+                        >
+                          <option value="">เลือกแอดมิน</option>
+                          {CUSTOMER_CODE_ADMINS.map((a) => (
+                            <option key={a.code} value={a.code}>{a.name} ({a.code})</option>
+                          ))}
+                        </select>
+                        <button
+                          type="button"
+                          disabled={!assignCode.page || !assignCode.admin}
+                          onClick={() => { onAssignCode(customer.id, assignCode.page, assignCode.admin); setAssignCode({ page: "", admin: "" }); }}
+                          className="rounded-2xl bg-k2-ink px-4 py-3 text-sm font-extrabold text-white disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                          ออกรหัสลูกค้า
+                        </button>
+                      </div>
+                    )}
                   </div>
                 ) : (
                   <>
                     <div className="flex flex-wrap items-center gap-2">
                       <h3 className="break-words text-2xl font-semibold">{customer.name}</h3>
+                      {customer.customerCode ? (
+                        <span className="rounded-full bg-k2-ink px-2.5 py-1 text-xs font-extrabold tracking-wide text-white">{customer.customerCode}</span>
+                      ) : null}
                       {(() => {
                         const badge = loyaltyBadge(customer.totalOrders, customer.lifetimeValue);
                         return <span className={`rounded-full px-2.5 py-1 text-xs font-bold ${badge.cls}`}>{badge.emoji} {badge.label}</span>;

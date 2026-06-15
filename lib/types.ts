@@ -111,6 +111,11 @@ export type Customer = {
   requiresInvoice?: boolean;
   sourceChannel?: string;
   sourcePage?: string;
+  customerCode?: string;
+  codePage?: string;
+  codeAdmin?: string;
+  codeSeq?: number;
+  codeYear?: string;
   lineFriend?: boolean;
   loyaltyPoints?: number;
   totalOrders: number;
