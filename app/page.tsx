@@ -411,7 +411,7 @@ function lateMinutesNow(workStart: string, graceMinutes: number) {
   return Math.max(0, nowMin - startMin);
 }
 const defaultBranchSetting = (branch: string): BranchSetting => ({ branch, workStart: "09:00", workEnd: "18:00", lateGraceMinutes: 5, gpsLat: null, gpsLng: null, radiusM: 150 });
-const jobTypes: JobType[] = ["DTG Shirt", "UV Print", "Laser Cut", "Signage", "3D Print", "Other"];
+const jobTypes: JobType[] = ["DTG Shirt", "UV Print", "Laser Cut", "Signage", "Acrylic", "3D Print", "Other"];
 const priorities: Priority[] = ["Normal", "Urgent", "Very Urgent", "Today"];
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const appTagline = "คุมงานผลิตครบในที่เดียว";
@@ -533,6 +533,7 @@ const jobTypeLabel: Record<JobType, string> = {
   "UV Print": "พิมพ์ UV",
   "Laser Cut": "เลเซอร์คัต",
   Signage: "ป้าย",
+  Acrylic: "งานอะคริลิค",
   "3D Print": "พิมพ์ 3D",
   Other: "อื่น ๆ"
 };
@@ -658,19 +659,38 @@ type HandoffGate = {
   rejectStatus: JobStatus;
   senderRoles: Role[];
   reviewerRoles: Role[];
+  nextGate?: string;        // ถ้ามี = อนุมัติแล้วส่งต่อด่านถัดไปอัตโนมัติ (ไม่ปิด handoff)
+  branchManager?: boolean;  // ผู้ตรวจต้องเป็นผู้จัดการของสาขาที่ผลิต (productionBranch)
 };
+// flow: กราฟิกส่ง → เซลยืนยัน → (auto) ผจก.สาขาอนุมัติ → พร้อมผลิต (เด้งหาฝ่ายผลิตทั้งสาขา)
 const HANDOFF_GATES: HandoffGate[] = [
   {
     id: "design_review",
-    label: "ส่งแบบให้ตรวจ",
+    label: "ส่งงานให้เซลตรวจ",
     fromStatus: "Designing",
+    reviewStatus: "Waiting for Customer Approval",
+    approveStatus: "Waiting for Customer Approval",
+    rejectStatus: "Designing",
+    senderRoles: ["Designer"],
+    reviewerRoles: ["Sales Staff"],
+    nextGate: "production_approval"
+  },
+  {
+    id: "production_approval",
+    label: "ผู้จัดการสาขาอนุมัติเข้าผลิต",
+    fromStatus: "Waiting for Customer Approval",
     reviewStatus: "Waiting for Customer Approval",
     approveStatus: "Ready for Production",
     rejectStatus: "Designing",
-    senderRoles: ["Designer"],
-    reviewerRoles: ["Sales Staff", "Manager", "Admin"]
+    senderRoles: ["Sales Staff"],
+    reviewerRoles: ["Manager"],
+    branchManager: true
   }
 ];
+// กำหนดสาขาที่รับผิดชอบผลิตตามประเภทงาน: เสื้อ/DTG → พระรามเก้า, นอกนั้น (ป้าย/อะคริลิค/อื่นๆ) → พะเยา
+function branchForJobType(type: JobType): string {
+  return type === "DTG Shirt" ? "พระรามเก้า" : "พะเยา";
+}
 const gateById = (id?: string) => HANDOFF_GATES.find((gate) => gate.id === id);
 const gateFromStatus = (status: JobStatus) => HANDOFF_GATES.find((gate) => gate.fromStatus === status);
 const userHasRole = (member: TeamMember, role: Role) => member.role === role || (member.roles ?? []).includes(role);
@@ -1947,6 +1967,15 @@ export default function Page() {
     }
   }
 
+  // แจ้งเตือนพนักงานเป็นกลุ่มตามสาขา (เด้งหาผจก.สาขา หรือฝ่ายผลิตทั้งสาขา)
+  function notifyBranchStaff(branch: string, roleMatch: (member: TeamMember) => boolean, type: AppNotification["type"], job: Pick<Job, "id" | "title" | "dbId">, message: string) {
+    if (!supabase || !isSupabaseConfigured) return;
+    const rows = teamMembers
+      .filter((member) => member.id !== currentUser.id && roleMatch(member) && (!branch || member.branch === branch) && uuidPattern.test(member.id))
+      .map((member) => ({ recipient_id: member.id, type, job_id: job.dbId ?? null, job_number: job.id, job_title: job.title, message }));
+    if (rows.length) void supabase.from("notifications").insert(rows);
+  }
+
   // มอบหมาย/เปลี่ยนผู้รับผิดชอบ (ออกแบบ/ผลิต) ของงานที่เปิดแล้ว + แจ้งเตือนคนที่ถูกมอบใหม่
   async function assignStaff(jobId: string, designer: string, production: string) {
     if (!can("assign_staff")) {
@@ -2124,14 +2153,36 @@ export default function Page() {
     if (!job || job.handoffStatus !== "pending") return;
     const gate = gateById(job.handoffGate);
     if (!gate) return;
-    if (currentUser.role !== "Owner" && !userHasAnyRole(currentUser, gate.reviewerRoles)) {
-      setDataError("คุณไม่มีสิทธิ์ตรวจรับงานในขั้นตอนนี้");
+    const allowedReviewer = currentUser.role === "Owner" || (gate.branchManager
+      ? userHasRole(currentUser, "Manager") && currentUser.branch === job.productionBranch
+      : userHasAnyRole(currentUser, gate.reviewerRoles));
+    if (!allowedReviewer) {
+      setDataError(gate.branchManager ? "ต้องเป็นผู้จัดการของสาขาที่ผลิตเท่านั้น" : "คุณไม่มีสิทธิ์ตรวจรับงานในขั้นตอนนี้");
       return;
     }
     if (currentUser.role !== "Owner" && job.handoffFromUser && job.handoffFromUser === currentUser.id) {
       setDataError("ผู้ส่งกับผู้รับต้องเป็นคนละคน (กฎกันพลาด)");
       return;
     }
+    const nextGate = gate.nextGate ? gateById(gate.nextGate) : undefined;
+    if (nextGate) {
+      // อนุมัติด่านนี้แล้วส่งต่อด่านถัดไปอัตโนมัติ (เช่น เซลยืนยัน → รอผจก.สาขาอนุมัติ)
+      setJobs((current) => current.map((item) => (item.id === jobId ? { ...item, handoffStatus: "pending", handoffGate: nextGate.id, handoffFromUser: currentUser.id, handoffFromStatus: job.status, handoffNote: undefined, status: gate.approveStatus } : item)));
+      if (supabase && job.dbId) {
+        const { error } = await supabase.from("jobs").update({ status: gate.approveStatus, handoff_status: "pending", handoff_gate: nextGate.id, handoff_from_user: uuidPattern.test(currentUser.id) ? currentUser.id : null, handoff_from_status: job.status, handoff_note: null }).eq("id", job.dbId);
+        if (error) {
+          setDataError(error.message);
+          void refreshWorkspaceData();
+          return;
+        }
+      }
+      void appendAudit(`accepted handoff ${gate.id}`, job.id, "jobs", job.dbId ?? null);
+      if (nextGate.branchManager) {
+        notifyBranchStaff(job.productionBranch ?? "", (member) => userHasRole(member, "Manager"), "assigned", job, `งาน ${job.id} รออนุมัติเข้าผลิต · สาขา ${job.productionBranch || "-"}`);
+      }
+      return;
+    }
+    // ด่านสุดท้าย: อนุมัติเข้าผลิต → เด้งหาฝ่ายผลิตทุกคนในสาขานั้น
     setJobs((current) => current.map((item) => (item.id === jobId ? { ...item, handoffStatus: undefined, handoffGate: undefined, handoffFromUser: undefined, handoffFromStatus: undefined, handoffNote: undefined, status: gate.approveStatus } : item)));
     if (supabase && job.dbId) {
       const { error } = await supabase.from("jobs").update({ status: gate.approveStatus, handoff_status: null, handoff_gate: null, handoff_from_user: null, handoff_from_status: null, handoff_note: null }).eq("id", job.dbId);
@@ -2142,7 +2193,7 @@ export default function Page() {
       }
     }
     void appendAudit(`accepted handoff ${gate.id}`, job.id, "jobs", job.dbId ?? null);
-    notifyAssignees("status_moved", job, `งาน ${job.id} ผ่านการตรวจ → "${statusLabel[gate.approveStatus]}"`);
+    notifyBranchStaff(job.productionBranch ?? "", (member) => userHasRole(member, "Production Staff"), "assigned", job, `งานเข้าผลิต: ${job.id} – ${job.title} · สาขา ${job.productionBranch || "-"}`);
   }
 
   async function rejectHandoff(jobId: string, reason: string) {
@@ -2150,8 +2201,11 @@ export default function Page() {
     if (!job || job.handoffStatus !== "pending") return;
     const gate = gateById(job.handoffGate);
     if (!gate) return;
-    if (currentUser.role !== "Owner" && !userHasAnyRole(currentUser, gate.reviewerRoles)) {
-      setDataError("คุณไม่มีสิทธิ์ตรวจรับงานในขั้นตอนนี้");
+    const allowedReviewer = currentUser.role === "Owner" || (gate.branchManager
+      ? userHasRole(currentUser, "Manager") && currentUser.branch === job.productionBranch
+      : userHasAnyRole(currentUser, gate.reviewerRoles));
+    if (!allowedReviewer) {
+      setDataError(gate.branchManager ? "ต้องเป็นผู้จัดการของสาขาที่ผลิตเท่านั้น" : "คุณไม่มีสิทธิ์ตรวจรับงานในขั้นตอนนี้");
       return;
     }
     if (currentUser.role !== "Owner" && job.handoffFromUser && job.handoffFromUser === currentUser.id) {
@@ -4636,7 +4690,9 @@ function HandoffPanel({ job, currentUser, onSubmit, onAccept, onReject }: {
   const pendingGate = pending ? gateById(job.handoffGate) : undefined;
   const sendGate = !pending ? gateFromStatus(job.status) : undefined;
   const canSend = Boolean(sendGate) && (isOwner || (sendGate ? userHasAnyRole(currentUser, sendGate.senderRoles) : false));
-  const isReviewer = Boolean(pendingGate) && (isOwner || (pendingGate ? userHasAnyRole(currentUser, pendingGate.reviewerRoles) : false));
+  const isReviewer = Boolean(pendingGate) && (isOwner || (pendingGate
+    ? (pendingGate.branchManager ? userHasRole(currentUser, "Manager") && currentUser.branch === job.productionBranch : userHasAnyRole(currentUser, pendingGate.reviewerRoles))
+    : false));
   const isSubmitter = Boolean(job.handoffFromUser) && job.handoffFromUser === currentUser.id;
   const canReview = pending && isReviewer && (isOwner || !isSubmitter);
   if (!pending && !canSend && !job.handoffNote) return null;
@@ -5741,7 +5797,7 @@ function CreateJobView({
   }
 
   const materialOptions = ["อะคริลิค", "พลาสวูด", "ไวนิล", "สติ๊กเกอร์", "เสื้อ Cotton", "อื่น ๆ"];
-  const branchOptions = ["พะเยา", "กรุงเทพ"];
+  const branchOptions = BRANCH_LIST;
   function setMaterialAt(index: number, value: string) {
     setForm((current) => ({ ...current, materials: current.materials.map((m, i) => (i === index ? value : m)) }));
   }
@@ -5814,6 +5870,11 @@ function CreateJobView({
     }));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [teamMembers]);
+
+  // กำหนดสาขาที่ผลิตอัตโนมัติตามประเภทงาน (เสื้อ/DTG → พระรามเก้า, นอกนั้น → พะเยา) ปรับเองทีหลังได้
+  useEffect(() => {
+    setForm((current) => ({ ...current, productionBranch: branchForJobType(current.type) }));
+  }, [form.type]);
 
   return (
     <form

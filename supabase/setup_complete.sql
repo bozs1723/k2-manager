@@ -28,6 +28,7 @@ begin
       'UV Print',
       'Laser Cut',
       'Signage',
+      'Acrylic',
       '3D Print',
       'Other'
     );
