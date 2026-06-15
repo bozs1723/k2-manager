@@ -44,6 +44,7 @@ import {
 import type { LucideIcon } from "lucide-react";
 import { customers as initialCustomers, initialAuditLog, initialJobs, statuses, team as initialTeam } from "@/lib/mock-data";
 import { createSupabaseAuthWorker, isSupabaseConfigured, supabase } from "@/lib/supabase";
+import { CUSTOMER_CODE_ADMINS, CUSTOMER_CODE_PAGES, customerCodeYear, formatCustomerCode, nextCustomerSeq } from "@/lib/customer-code";
 import type { AppNotification, Attendance, AuditEvent, BranchSetting, Customer, ExpressRequest, Holiday, Job, JobStatus, JobType, Lead, LeaveRequest, PaymentStatus, Priority, Quotation, QuoteStatus, Role, TeamMember } from "@/lib/types";
 
 type ImportedCustomer = Pick<Customer, "name" | "phone" | "lineId" | "email"> & {
@@ -1052,41 +1053,7 @@ function auditFromRow(row: { id: string; action: string; target_table: string; t
 }
 
 // ===== ระบบรหัสลูกค้า K2 (SOP v1) =====
-// รูปแบบ: [เพจ]-[แอดมิน]-[ลำดับ]-[ปี] เช่น KS-AOM-0001-26
-// ทะเบียนนี้คือ Source of Truth — ห้ามตั้งรหัสเอง
-const CUSTOMER_CODE_PAGES: { name: string; code: string }[] = [
-  { name: "Sweetdesign", code: "SW" },
-  { name: "K2Sign", code: "KS" },
-  { name: "K2 พะเยา", code: "KP" },
-  { name: "TheDecor", code: "TD" },
-  { name: "MonMon", code: "MM" },
-  { name: "K2STUDIO", code: "ST" },
-  { name: "Fluffi", code: "FF" }
-];
-
-const CUSTOMER_CODE_ADMINS: { name: string; code: string }[] = [
-  { name: "อ้อม", code: "AOM" },
-  { name: "อ้อ", code: "AOR" },
-  { name: "ก้อยพัทยา", code: "KOY" },
-  { name: "เหมียว", code: "MAW" },
-  { name: "แคท", code: "CAT" },
-  { name: "ออย", code: "OYL" },
-  { name: "House / Walk-in (ไม่มีเจ้าของ)", code: "HSE" }
-];
-
-// ปี ค.ศ. 2 หลัก เช่น 2026 -> "26"
-function customerCodeYear(): string {
-  return String(new Date().getFullYear()).slice(-2);
-}
-
-function formatCustomerCode(page: string, admin: string, seq: number, year: string): string {
-  return `${page}-${admin}-${String(seq).padStart(4, "0")}-${year}`;
-}
-
-// เลขวิ่งรวมทั้งบริษัท ไม่รีเซ็ต — เลขถัดไป = เลขสูงสุดที่เคยออก + 1
-function nextCustomerSeq(customers: Customer[]): number {
-  return customers.reduce((max, customer) => Math.max(max, customer.codeSeq ?? 0), 0) + 1;
-}
+// ตรรกะ/ทะเบียนแยกไว้ที่ lib/customer-code.ts เพื่อให้เทสได้ (ดู lib/customer-code.test.mjs)
 
 function customerInsertPayload(customer: Omit<Customer, "id" | "totalOrders" | "lifetimeValue" | "lastOrderDate">) {
   return {

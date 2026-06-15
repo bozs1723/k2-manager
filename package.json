@@ -6,7 +6,8 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint"
+    "lint": "next lint",
+    "test:customer-code": "tsc lib/customer-code.ts --outDir lib/.ccbuild --module es2020 --target es2020 --moduleResolution bundler --skipLibCheck && mv lib/.ccbuild/customer-code.js lib/.ccbuild/customer-code.mjs && node lib/customer-code.test.mjs && rm -rf lib/.ccbuild"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.45.4",
