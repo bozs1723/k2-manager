@@ -3340,48 +3340,6 @@ export default function Page() {
               </div>
             )}
 
-            {!isSupabaseConfigured ? (
-            <>
-            <p className="mb-3 text-sm font-extrabold text-k2-muted">Demo roles</p>
-            <div className="grid gap-3">
-              {teamMembers.map((member) => (
-                <button
-                  key={member.id}
-                  onClick={() => setCurrentUser(member)}
-                  className={`flex items-center justify-between rounded-2xl border p-4 text-left transition ${
-                    currentUser.id === member.id ? "border-violet-300 bg-violet-50/80" : "border-white/80 bg-white/55 hover:bg-white"
-                  }`}
-                >
-                  <span className="flex items-center gap-3">
-                    <MemberAvatar member={member} className="h-11 w-11 rounded-2xl text-sm" />
-                    <span>
-                      <span className="block font-semibold">{member.name}</span>
-                      <span className="text-sm text-k2-muted">{roleLabel[member.role]}</span>
-                    </span>
-                  </span>
-                  <ChevronRight className="h-5 w-5 text-k2-muted" />
-                </button>
-              ))}
-            </div>
-            <div className="mt-5 rounded-2xl bg-white/60 p-4">
-              <p className="mb-2 text-sm font-semibold text-k2-muted">สิทธิ์การใช้งาน</p>
-              <div className="flex flex-wrap gap-2">
-                {roleSummaryPermissions[currentUser.role].map((permission) => (
-                  <span key={permission} className="rounded-full bg-k2-mint px-3 py-1 text-xs font-semibold text-emerald-800">
-                    {permissionLabel[permission] ?? permission}
-                  </span>
-                ))}
-              </div>
-            </div>
-            <button
-              onClick={() => setIsAuthed(true)}
-              className="mt-5 flex w-full items-center justify-center gap-2 rounded-2xl bg-k2-ink px-5 py-4 font-semibold text-white shadow-lg shadow-slate-900/20 transition hover:-translate-y-0.5"
-            >
-              <ShieldCheck className="h-5 w-5" />
-              เข้าสู่ระบบคิวงานแบบทดลอง
-            </button>
-            </>
-            ) : null}
           </motion.div>
         </section>
       </main>
