@@ -1929,6 +1929,52 @@ export default function Page() {
     }
   }
 
+  // แจ้งเตือนพนักงานรายคน (ใช้ตอนมอบหมายงานให้คนใดคนหนึ่ง) — เด้งผ่าน Realtime ในแอปของคนนั้น
+  function notifyUser(name: string, type: AppNotification["type"], job: Pick<Job, "id" | "title" | "dbId">, message: string) {
+    if (!name || name === "Unassigned" || name === currentUser.name) return;
+    if (supabase && isSupabaseConfigured) {
+      const recipientId = teamMembers.find((member) => member.name === name)?.id;
+      if (recipientId && uuidPattern.test(recipientId)) {
+        void supabase.from("notifications").insert({
+          recipient_id: recipientId,
+          type,
+          job_id: job.dbId ?? null,
+          job_number: job.id,
+          job_title: job.title,
+          message
+        });
+      }
+    }
+  }
+
+  // มอบหมาย/เปลี่ยนผู้รับผิดชอบ (ออกแบบ/ผลิต) ของงานที่เปิดแล้ว + แจ้งเตือนคนที่ถูกมอบใหม่
+  async function assignStaff(jobId: string, designer: string, production: string) {
+    if (!can("assign_staff")) {
+      setDataError("บทบาทนี้ยังไม่มีสิทธิ์มอบหมายงาน");
+      return;
+    }
+    const existing = jobs.find((job) => job.id === jobId);
+    if (!existing) return;
+    if (supabase && existing.dbId && uuidPattern.test(existing.dbId)) {
+      const { error } = await supabase
+        .from("jobs")
+        .update({
+          assigned_designer: teamIdByName(teamMembers, designer),
+          assigned_production: teamIdByName(teamMembers, production)
+        })
+        .eq("id", existing.dbId);
+      if (error) {
+        setDataError(error.message);
+        return;
+      }
+    }
+    setJobs((current) => current.map((job) => (job.id === jobId ? { ...job, assignedDesigner: designer, assignedProduction: production } : job)));
+    const updated = { ...existing, assignedDesigner: designer, assignedProduction: production };
+    if (designer !== existing.assignedDesigner) notifyUser(designer, "assigned", updated, `ได้รับมอบหมายงาน ${existing.id} – ${existing.title} (ออกแบบ)`);
+    if (production !== existing.assignedProduction) notifyUser(production, "assigned", updated, `ได้รับมอบหมายงาน ${existing.id} – ${existing.title} (ผลิต)`);
+    void appendAudit("assigned staff", existing.id, "jobs", existing.dbId);
+  }
+
   // แจ้งเตือนตัวเอง (งานใกล้ถึงกำหนด) — โหมด Supabase insert ถึงตัวเอง แล้ว Realtime ส่งกลับ
   function notifyDueSoonSelf(job: Pick<Job, "id" | "title" | "dbId">, message: string) {
     if (supabase && isSupabaseConfigured && uuidPattern.test(currentUser.id)) {
@@ -3693,7 +3739,7 @@ export default function Page() {
                   <>
                   <LineInvitePanel job={selectedJob} customer={customerRecords.find((item) => item.id === selectedJob.customerId)} onMarkFriend={markCustomerLineFriend} />
                   <HandoffPanel job={selectedJob} currentUser={currentUser} onSubmit={submitHandoff} onAccept={acceptHandoff} onReject={rejectHandoff} />
-                  <JobDetail job={selectedJob} companyProfile={companyProfile} canSeeMoney={canSeeMoney} canEditPayment={can("edit_payment")} canDeleteJob={can("delete_job")} canConfirmDeposit={["Owner", "Manager", "Admin"].includes(currentUser.role)} canApproveWaiver={currentUser.role === "Owner"} onPayment={updatePayment} onConfirmDeposit={confirmDeposit} onReceiveBalance={receiveBalance} onComment={addComment} onMove={requestMove} onDelete={removeJob} />
+                  <JobDetail job={selectedJob} companyProfile={companyProfile} canSeeMoney={canSeeMoney} canEditPayment={can("edit_payment")} canDeleteJob={can("delete_job")} canConfirmDeposit={["Owner", "Manager", "Admin"].includes(currentUser.role)} canApproveWaiver={currentUser.role === "Owner"} onPayment={updatePayment} onConfirmDeposit={confirmDeposit} onReceiveBalance={receiveBalance} onComment={addComment} onMove={requestMove} onDelete={removeJob} teamMembers={teamMembers} canAssign={can("assign_staff")} onAssign={assignStaff} />
                   </>
                 ) : (
                   <EmptyState title="ยังไม่มีงานในระบบ" text="เริ่มจากสร้างลูกค้าและสร้างงานแรกได้เลย" action={() => setActiveView("Create Job")} />
@@ -4753,7 +4799,10 @@ function JobDetail({
   onReceiveBalance,
   onComment,
   onMove,
-  onDelete
+  onDelete,
+  teamMembers,
+  canAssign,
+  onAssign
 }: {
   job: Job;
   companyProfile: CompanyProfile;
@@ -4768,8 +4817,19 @@ function JobDetail({
   onComment: (jobId: string, text: string) => void;
   onMove: (jobId: string, status: JobStatus) => void;
   onDelete: (jobId: string) => void;
+  teamMembers: TeamMember[];
+  canAssign: boolean;
+  onAssign: (jobId: string, designer: string, production: string) => void;
 }) {
   const [comment, setComment] = useState("");
+  const [assignDesigner, setAssignDesigner] = useState(job.assignedDesigner);
+  const [assignProduction, setAssignProduction] = useState(job.assignedProduction);
+  useEffect(() => {
+    setAssignDesigner(job.assignedDesigner);
+    setAssignProduction(job.assignedProduction);
+  }, [job.id, job.assignedDesigner, job.assignedProduction]);
+  const designerChoices = teamMembers.filter((member) => member.role === "Designer" || (member.roles ?? []).includes("Designer"));
+  const productionChoices = teamMembers.filter((member) => ["Production Staff", "Admin", "Owner"].includes(member.role) || (member.roles ?? []).includes("Production Staff"));
   const [balanceSlipDraft, setBalanceSlipDraft] = useState("");
   const [balanceDateDraft, setBalanceDateDraft] = useState(todayISO());
   const [balanceError, setBalanceError] = useState("");
@@ -4852,6 +4912,55 @@ function JobDetail({
           <Info label="ผู้รับผิดชอบผลิต" value={staffLabel(job.assignedProduction)} icon={Factory} />
           <Info label="โน้ตภายใน" value={job.internalNotes} icon={ClipboardList} />
         </div>
+
+        {canAssign ? (
+          <div className="mt-5 rounded-3xl bg-white/60 p-5">
+            <h4 className="mb-1 font-semibold">มอบหมายผู้รับผิดชอบ</h4>
+            <p className="mb-3 text-sm font-semibold text-k2-muted">เลือกผู้รับผิดชอบแล้วบันทึก — ระบบจะเด้งแจ้งเตือนในแอปของคนที่ถูกมอบหมาย</p>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <label className="space-y-1">
+                <span className="text-sm font-semibold text-k2-muted">กราฟิก (ออกแบบ)</span>
+                <select
+                  value={assignDesigner}
+                  onChange={(event) => setAssignDesigner(event.target.value)}
+                  className="w-full rounded-2xl border border-white/80 bg-white/85 px-4 py-3 text-sm font-semibold outline-none"
+                >
+                  <option value="Unassigned">ยังไม่มอบหมาย</option>
+                  {assignDesigner !== "Unassigned" && !designerChoices.some((member) => member.name === assignDesigner) ? (
+                    <option value={assignDesigner}>{assignDesigner}</option>
+                  ) : null}
+                  {designerChoices.map((member) => (
+                    <option key={member.id} value={member.name}>{member.name}</option>
+                  ))}
+                </select>
+              </label>
+              <label className="space-y-1">
+                <span className="text-sm font-semibold text-k2-muted">ฝ่ายผลิต</span>
+                <select
+                  value={assignProduction}
+                  onChange={(event) => setAssignProduction(event.target.value)}
+                  className="w-full rounded-2xl border border-white/80 bg-white/85 px-4 py-3 text-sm font-semibold outline-none"
+                >
+                  <option value="Unassigned">ยังไม่มอบหมาย</option>
+                  {assignProduction !== "Unassigned" && !productionChoices.some((member) => member.name === assignProduction) ? (
+                    <option value={assignProduction}>{assignProduction}</option>
+                  ) : null}
+                  {productionChoices.map((member) => (
+                    <option key={member.id} value={member.name}>{member.name}</option>
+                  ))}
+                </select>
+              </label>
+            </div>
+            <button
+              type="button"
+              onClick={() => onAssign(job.id, assignDesigner, assignProduction)}
+              disabled={assignDesigner === job.assignedDesigner && assignProduction === job.assignedProduction}
+              className="mt-3 rounded-2xl bg-k2-ink px-5 py-3 text-sm font-extrabold text-white disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              บันทึกการมอบหมาย
+            </button>
+          </div>
+        ) : null}
 
         <div className="mt-5 rounded-3xl bg-white/60 p-5">
           <div className="mb-3 flex items-center justify-between gap-3">
