@@ -147,6 +147,7 @@ export type Attendance = {
   checkInAt: string | null;
   checkOutAt: string | null;
   checkInSelfie: string | null;
+  checkOutSelfie: string | null;
   checkInLat: number | null;
   checkInLng: number | null;
   lateMinutes: number;

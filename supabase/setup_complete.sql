@@ -797,6 +797,7 @@ create table if not exists public.attendance (
   check_in_at timestamptz,
   check_out_at timestamptz,
   check_in_selfie text,
+  check_out_selfie text,
   check_in_lat numeric,
   check_in_lng numeric,
   late_minutes int not null default 0,

@@ -1017,7 +1017,7 @@ function jobFromRow(
   };
 }
 
-function attendanceFromRow(row: { id: string; profile_id: string; work_date: string; check_in_at: string | null; check_out_at: string | null; check_in_selfie: string | null; check_in_lat: number | string | null; check_in_lng: number | string | null; late_minutes: number | null; status: string | null }): Attendance {
+function attendanceFromRow(row: { id: string; profile_id: string; work_date: string; check_in_at: string | null; check_out_at: string | null; check_in_selfie: string | null; check_out_selfie?: string | null; check_in_lat: number | string | null; check_in_lng: number | string | null; late_minutes: number | null; status: string | null }): Attendance {
   return {
     id: row.id,
     profileId: row.profile_id,
@@ -1025,6 +1025,7 @@ function attendanceFromRow(row: { id: string; profile_id: string; work_date: str
     checkInAt: row.check_in_at,
     checkOutAt: row.check_out_at,
     checkInSelfie: row.check_in_selfie,
+    checkOutSelfie: row.check_out_selfie ?? null,
     checkInLat: row.check_in_lat != null ? Number(row.check_in_lat) : null,
     checkInLng: row.check_in_lng != null ? Number(row.check_in_lng) : null,
     lateMinutes: row.late_minutes ?? 0,
@@ -2786,7 +2787,7 @@ export default function Page() {
     if (!supabase) return;
     const { data, error } = await supabase
       .from("attendance")
-      .select("id, profile_id, work_date, check_in_at, check_out_at, check_in_selfie, check_in_lat, check_in_lng, late_minutes, status")
+      .select("id, profile_id, work_date, check_in_at, check_out_at, check_in_selfie, check_out_selfie, check_in_lat, check_in_lng, late_minutes, status")
       .eq("work_date", todayISO());
     if (error) {
       setDataError(error.message);
@@ -2827,7 +2828,7 @@ export default function Page() {
             }
             await loadAttendance();
           } else {
-            setMyAttendance({ id: crypto.randomUUID(), profileId: currentUser.id, workDate: todayISO(), checkInAt, checkOutAt: null, checkInSelfie: selfie, checkInLat: lat, checkInLng: lng, lateMinutes: late, status });
+            setMyAttendance({ id: crypto.randomUUID(), profileId: currentUser.id, workDate: todayISO(), checkInAt, checkOutAt: null, checkInSelfie: selfie, checkOutSelfie: null, checkInLat: lat, checkInLng: lng, lateMinutes: late, status });
           }
           void appendAudit("checked in", currentUser.name, "attendance", null);
           resolve({ ok: true, msg: late > 0 ? `เช็คอินแล้ว — สาย ${late} นาที` : "เช็คอินตรงเวลา ✓" });
@@ -2838,15 +2839,15 @@ export default function Page() {
     });
   }
 
-  async function checkOut(): Promise<{ ok: boolean; msg: string }> {
+  async function checkOut(selfie: string): Promise<{ ok: boolean; msg: string }> {
     if (!myAttendance) return { ok: false, msg: "ยังไม่ได้เช็คอินวันนี้" };
     const checkOutAt = new Date().toISOString();
     if (supabase && uuidPattern.test(currentUser.id)) {
-      const { error } = await supabase.from("attendance").update({ check_out_at: checkOutAt }).eq("id", myAttendance.id);
+      const { error } = await supabase.from("attendance").update({ check_out_at: checkOutAt, check_out_selfie: selfie || null }).eq("id", myAttendance.id);
       if (error) return { ok: false, msg: error.message };
       await loadAttendance();
     } else {
-      setMyAttendance({ ...myAttendance, checkOutAt });
+      setMyAttendance({ ...myAttendance, checkOutAt, checkOutSelfie: selfie });
     }
     void appendAudit("checked out", currentUser.name, "attendance", null);
     return { ok: true, msg: "เช็คเอาท์แล้ว ✓" };
@@ -8188,7 +8189,7 @@ function AttendanceView({
   teamMembers: TeamMember[];
   isHr: boolean;
   onCheckIn: (selfie: string) => Promise<{ ok: boolean; msg: string }>;
-  onCheckOut: () => Promise<{ ok: boolean; msg: string }>;
+  onCheckOut: (selfie: string) => Promise<{ ok: boolean; msg: string }>;
 }) {
   const [selfie, setSelfie] = useState<string | null>(null);
   const [camOn, setCamOn] = useState(false);
@@ -8227,6 +8228,16 @@ function AttendanceView({
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
     ctx.drawImage(video, 0, 0, 320, 240);
+    // ฝัง timestamp + ชื่อ/สาขา ลงบนรูป (กันแก้ย้อนหลัง)
+    const stamp = new Date().toLocaleString("th-TH", { dateStyle: "medium", timeStyle: "medium" });
+    const who = `${currentUser.name}${currentUser.branch ? " · " + currentUser.branch : ""}`;
+    ctx.fillStyle = "rgba(0,0,0,0.55)";
+    ctx.fillRect(0, 240 - 40, 320, 40);
+    ctx.fillStyle = "#ffffff";
+    ctx.font = "bold 14px sans-serif";
+    ctx.fillText(stamp, 8, 240 - 22);
+    ctx.font = "12px sans-serif";
+    ctx.fillText(who, 8, 240 - 7);
     setSelfie(canvas.toDataURL("image/jpeg", 0.6));
     stopCam();
   }
@@ -8242,10 +8253,15 @@ function AttendanceView({
     if (result.ok) setSelfie(null);
   }
   async function doCheckOut() {
+    if (!selfie) {
+      setMsg("ถ่ายรูปก่อนเช็คเอาท์");
+      return;
+    }
     setBusy(true);
-    const result = await onCheckOut();
+    const result = await onCheckOut(selfie);
     setBusy(false);
     setMsg(result.msg);
+    if (result.ok) setSelfie(null);
   }
 
   const fmtTime = (iso: string | null) => (iso ? new Date(iso).toLocaleTimeString("th-TH", { hour: "2-digit", minute: "2-digit" }) : "-");
@@ -8276,10 +8292,40 @@ function AttendanceView({
                 </span>
                 <span className="text-sm font-semibold text-k2-muted">เข้า {fmtTime(myAttendance.checkInAt)} · ออก {fmtTime(myAttendance.checkOutAt)}</span>
               </div>
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              {myAttendance.checkInSelfie ? <img src={myAttendance.checkInSelfie} alt="selfie" className="h-28 w-28 rounded-2xl object-cover" /> : null}
+              <div className="flex flex-wrap gap-3">
+                {myAttendance.checkInSelfie ? (
+                  <div className="space-y-1">
+                    <p className="text-xs font-bold text-k2-muted">รูปเข้างาน</p>
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img src={myAttendance.checkInSelfie} alt="check-in" className="h-28 w-28 rounded-2xl object-cover" />
+                  </div>
+                ) : null}
+                {myAttendance.checkOutSelfie ? (
+                  <div className="space-y-1">
+                    <p className="text-xs font-bold text-k2-muted">รูปออกงาน</p>
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img src={myAttendance.checkOutSelfie} alt="check-out" className="h-28 w-28 rounded-2xl object-cover" />
+                  </div>
+                ) : null}
+              </div>
               {!myAttendance.checkOutAt ? (
-                <button type="button" disabled={busy} onClick={doCheckOut} className="rounded-2xl bg-k2-ink px-5 py-3 font-bold text-white disabled:opacity-60">เช็คเอาท์</button>
+                camOn ? (
+                  <div className="space-y-3">
+                    <video ref={videoRef} playsInline muted className="h-60 w-full max-w-sm rounded-2xl bg-black object-cover" />
+                    <button type="button" onClick={capture} className="rounded-2xl bg-k2-ink px-5 py-3 font-bold text-white">ถ่ายรูป</button>
+                  </div>
+                ) : selfie ? (
+                  <div className="space-y-3">
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img src={selfie} alt="check-out preview" className="h-60 w-full max-w-sm rounded-2xl object-cover" />
+                    <div className="flex flex-wrap gap-3">
+                      <button type="button" onClick={() => { setSelfie(null); void startCam(); }} className="rounded-2xl bg-white/70 px-4 py-3 font-bold text-k2-muted">ถ่ายใหม่</button>
+                      <button type="button" disabled={busy} onClick={doCheckOut} className="rounded-2xl bg-k2-ink px-5 py-3 font-bold text-white disabled:opacity-60">เช็คเอาท์ (รูป)</button>
+                    </div>
+                  </div>
+                ) : (
+                  <button type="button" onClick={startCam} className="rounded-2xl bg-k2-mint px-5 py-3 font-bold text-k2-ink">เปิดกล้องถ่ายรูปออกงาน</button>
+                )
               ) : (
                 <p className="text-sm font-semibold text-k2-muted">ลงเวลาครบแล้ววันนี้ ✓</p>
               )}
