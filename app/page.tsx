@@ -13,6 +13,7 @@ import {
   CheckCircle2,
   ChevronDown,
   ChevronRight,
+  ChevronLeft,
   ClipboardList,
   ClipboardPlus,
   Clock3,
@@ -1657,6 +1658,33 @@ export default function Page() {
     if (!isAuthed || navigationItems.some((item) => item.label === activeView)) return;
     setActiveView(navigationItems[0]?.label ?? "Dashboard");
   }, [activeView, isAuthed, navigationItems]);
+
+  // ผูกการนำทางเข้ากับ browser history เพื่อให้ปุ่มย้อนกลับ (มือถือ) กลับ view เดิม ไม่หลุดออกจากแอป
+  const historyPopRef = useRef(false);
+  const historyInitRef = useRef(false);
+  useEffect(() => {
+    if (!isAuthed) return;
+    if (historyPopRef.current) { historyPopRef.current = false; return; }
+    const entry = { k2view: activeView, k2job: selectedJobId };
+    if (!historyInitRef.current) {
+      historyInitRef.current = true;
+      window.history.replaceState(entry, "");
+    } else {
+      window.history.pushState(entry, "");
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeView, isAuthed]);
+  useEffect(() => {
+    function onPop(event: PopStateEvent) {
+      const state = event.state as { k2view?: string; k2job?: string } | null;
+      if (!state || typeof state.k2view !== "string") return;
+      historyPopRef.current = true;
+      if (state.k2job) setSelectedJobId(state.k2job);
+      setActiveView(state.k2view);
+    }
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
+  }, []);
 
   useEffect(() => {
     if (!isAuthed) return;
@@ -3466,6 +3494,17 @@ export default function Page() {
           <header className="glass glass-solid sticky top-3 z-30 mb-4 rounded-[1.5rem] p-3">
             <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
               <div className="flex items-center gap-3">
+                {activeView !== (navigationItems[0]?.label ?? "Dashboard") ? (
+                  <button
+                    type="button"
+                    onClick={() => window.history.back()}
+                    className="grid h-11 w-11 shrink-0 place-items-center rounded-2xl bg-white/75 text-k2-ink shadow-sm"
+                    title="กลับ"
+                    aria-label="กลับ"
+                  >
+                    <ChevronLeft className="h-5 w-5" />
+                  </button>
+                ) : null}
                 <KLogoMark className="h-[5.25rem] w-[5.25rem] shrink-0 lg:hidden" />
                 <div>
                   <p className="text-sm font-semibold text-k2-muted">{appTagline}</p>
