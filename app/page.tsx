@@ -390,7 +390,7 @@ const roleSummaryPermissions: Record<Role, string[]> = {
 };
 
 const roles: Role[] = ["Owner", "Manager", "Admin", "HR", "Accounting", "Designer", "Production Staff", "Packing Staff", "Sales Staff"];
-const BRANCH_LIST = ["พะเยา", "กรุงเทพ"];
+const BRANCH_LIST = ["พระรามเก้า", "พะเยา"];
 
 // ระยะห่างระหว่างพิกัด (เมตร) — สูตร haversine
 function distanceMeters(lat1: number, lng1: number, lat2: number, lng2: number) {
