@@ -3340,6 +3340,8 @@ export default function Page() {
               </div>
             )}
 
+            {!isSupabaseConfigured ? (
+            <>
             <p className="mb-3 text-sm font-extrabold text-k2-muted">Demo roles</p>
             <div className="grid gap-3">
               {teamMembers.map((member) => (
@@ -3378,6 +3380,8 @@ export default function Page() {
               <ShieldCheck className="h-5 w-5" />
               เข้าสู่ระบบคิวงานแบบทดลอง
             </button>
+            </>
+            ) : null}
           </motion.div>
         </section>
       </main>
