@@ -5564,9 +5564,9 @@ function CreateJobView({
   prefill?: Partial<Job> | null;
   onCreate: (job: Partial<Job>) => void;
 }) {
-  const designerOptions = useMemo(() => teamMembers.filter((member) => ["Designer", "Admin", "Owner"].includes(member.role)), [teamMembers]);
+  const designerOptions = useMemo(() => teamMembers.filter((member) => member.role === "Designer" || (member.roles ?? []).includes("Designer")), [teamMembers]);
   const productionOptions = useMemo(() => teamMembers.filter((member) => ["Production Staff", "Admin", "Owner"].includes(member.role)), [teamMembers]);
-  const defaultDesigner = designerOptions[0]?.name ?? "Unassigned";
+  const defaultDesigner = "Unassigned";
   const defaultProduction = productionOptions[0]?.name ?? "Unassigned";
   // ฟอร์มสร้างงานเริ่มจากค่าว่างเสมอ เพื่อไม่ให้ข้อมูลจากงานก่อนหน้าค้างมาทำให้สร้างออเดอร์ผิด/ซ้ำ
   const [form, setForm] = useState({
@@ -5698,7 +5698,7 @@ function CreateJobView({
   useEffect(() => {
     setForm((current) => ({
       ...current,
-      assignedDesigner: designerOptions.some((member) => member.name === current.assignedDesigner) ? current.assignedDesigner : defaultDesigner,
+      assignedDesigner: designerOptions.some((member) => member.name === current.assignedDesigner) || current.assignedDesigner === "Unassigned" ? current.assignedDesigner : defaultDesigner,
       assignedProduction: productionOptions.some((member) => member.name === current.assignedProduction) || current.assignedProduction === "Unassigned"
         ? current.assignedProduction
         : defaultProduction
@@ -5732,7 +5732,7 @@ function CreateJobView({
           ...form,
           description: `${form.description}\n\nสเปกใบสั่งงาน:\n${workOrderSpec}`,
           internalNotes: `${form.internalNotes}\n\nข้อมูลฝ่ายผลิต:\n${workOrderSpec}`,
-          assignedDesigner: designerOptions.some((member) => member.name === form.assignedDesigner) ? form.assignedDesigner : defaultDesigner,
+          assignedDesigner: designerOptions.some((member) => member.name === form.assignedDesigner) || form.assignedDesigner === "Unassigned" ? form.assignedDesigner : defaultDesigner,
           assignedProduction: productionOptions.some((member) => member.name === form.assignedProduction) || form.assignedProduction === "Unassigned"
             ? form.assignedProduction
             : defaultProduction,
@@ -5926,6 +5926,7 @@ function CreateJobView({
               {designerOptions.map((member) => (
                 <option key={member.id}>{member.name}</option>
               ))}
+              <option value="Unassigned">ยังไม่มอบหมาย</option>
             </select>
           </label>
           <label className="space-y-2">
