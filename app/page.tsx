@@ -45,6 +45,7 @@ import type { LucideIcon } from "lucide-react";
 import { customers as initialCustomers, initialAuditLog, initialJobs, statuses, team as initialTeam } from "@/lib/mock-data";
 import { createSupabaseAuthWorker, isSupabaseConfigured, supabase } from "@/lib/supabase";
 import { CUSTOMER_CODE_ADMINS, CUSTOMER_CODE_PAGES, customerCodeYear, formatCustomerCode, nextCustomerSeq } from "@/lib/customer-code";
+import { branchForJobType } from "@/lib/job-routing";
 import type { AppNotification, Attendance, AuditEvent, BranchSetting, Customer, ExpressRequest, Holiday, Job, JobStatus, JobType, Lead, LeaveRequest, PaymentStatus, Priority, Quotation, QuoteStatus, Role, TeamMember } from "@/lib/types";
 
 type ImportedCustomer = Pick<Customer, "name" | "phone" | "lineId" | "email"> & {
@@ -687,10 +688,7 @@ const HANDOFF_GATES: HandoffGate[] = [
     branchManager: true
   }
 ];
-// กำหนดสาขาที่รับผิดชอบผลิตตามประเภทงาน: เสื้อ/DTG → พระรามเก้า, นอกนั้น (ป้าย/อะคริลิค/อื่นๆ) → พะเยา
-function branchForJobType(type: JobType): string {
-  return type === "DTG Shirt" ? "พระรามเก้า" : "พะเยา";
-}
+// กำหนดสาขาที่รับผิดชอบผลิตตามประเภทงาน — ดู lib/job-routing.ts (มีเทสที่ lib/job-routing.test.mjs)
 const gateById = (id?: string) => HANDOFF_GATES.find((gate) => gate.id === id);
 const gateFromStatus = (status: JobStatus) => HANDOFF_GATES.find((gate) => gate.fromStatus === status);
 const userHasRole = (member: TeamMember, role: Role) => member.role === role || (member.roles ?? []).includes(role);
