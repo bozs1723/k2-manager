@@ -1027,6 +1027,20 @@ alter table public.customers add column if not exists source_channel text;   -- 
 alter table public.customers add column if not exists source_page text;       -- ชื่อเพจ/ชื่อไลน์ เช่น K2Sign, @k2sign
 
 -- ============================================================
+-- ===== migration: 20260615000000_customer_code =====
+-- ระบบรหัสลูกค้า K2 (SOP v1): [เพจ]-[แอดมิน]-[ลำดับ]-[ปี] เช่น KS-AOM-0001-26
+-- ============================================================
+alter table public.customers add column if not exists customer_code text;
+alter table public.customers add column if not exists code_page text;
+alter table public.customers add column if not exists code_admin text;
+alter table public.customers add column if not exists code_seq integer;
+alter table public.customers add column if not exists code_year text;
+create unique index if not exists customers_code_seq_key
+  on public.customers (code_seq) where code_seq is not null;
+create unique index if not exists customers_customer_code_key
+  on public.customers (customer_code) where customer_code is not null and customer_code <> '';
+
+-- ============================================================
 -- ===== migration: 20260607110000_balance_payment =====
 -- ============================================================
 -- รับเงินส่วนที่เหลือ (ยอดคงเหลือ) + สลิป ตอนปิดงาน
