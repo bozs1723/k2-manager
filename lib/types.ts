@@ -180,6 +180,7 @@ export type FileAsset = {
   name: string;
   type: "image" | "pdf" | "ai" | "zip";
   size: string;
+  url?: string;
 };
 
 export type StatusEvent = {

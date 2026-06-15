@@ -47,7 +47,7 @@ import { customers as initialCustomers, initialAuditLog, initialJobs, statuses, 
 import { createSupabaseAuthWorker, isSupabaseConfigured, supabase } from "@/lib/supabase";
 import { CUSTOMER_CODE_ADMINS, CUSTOMER_CODE_PAGES, customerCodeYear, formatCustomerCode, nextCustomerSeq } from "@/lib/customer-code";
 import { branchForJobType } from "@/lib/job-routing";
-import type { AppNotification, Attendance, AuditEvent, BranchSetting, Customer, ExpressRequest, Holiday, Job, JobStatus, JobType, Lead, LeaveRequest, Overtime, PaymentStatus, Priority, Quotation, QuoteStatus, Role, TeamMember } from "@/lib/types";
+import type { AppNotification, Attendance, AuditEvent, BranchSetting, Customer, ExpressRequest, FileAsset, Holiday, Job, JobStatus, JobType, Lead, LeaveRequest, Overtime, PaymentStatus, Priority, Quotation, QuoteStatus, Role, TeamMember } from "@/lib/types";
 
 type ImportedCustomer = Pick<Customer, "name" | "phone" | "lineId" | "email"> & {
   notes: string;
@@ -944,7 +944,7 @@ function jobFromRow(
   profileNames: Map<string, string>,
   comments: Array<{ id: string; job_id: string; comment: string; created_at: string; author_id: string | null }>,
   history: Array<{ id: string; job_id: string; from_status: JobStatus | null; to_status: JobStatus; created_at: string; changed_by: string | null }>,
-  files: Array<{ id: string; job_id: string; file_name: string; file_type: string; file_size: number | null }>
+  files: Array<{ id: string; job_id: string; file_name: string; file_type: string; file_size: number | null; url?: string | null }>
 ): Job {
   const price = Number(row.price);
   const deposit = Number(row.deposit);
@@ -971,7 +971,8 @@ function jobFromRow(
       id: file.id,
       name: file.file_name,
       type: file.file_type.includes("pdf") ? "pdf" : file.file_type.includes("zip") ? "zip" : file.file_type.includes("ai") ? "ai" : "image",
-      size: file.file_size ? `${Math.max(file.file_size / 1000000, 0.01).toFixed(2)} MB` : "ไฟล์แนบ"
+      size: file.file_size ? `${Math.max(file.file_size / 1000000, 0.01).toFixed(2)} MB` : "ไฟล์แนบ",
+      url: file.url ?? undefined
     })),
     orderDate: row.order_date,
     dueDate: row.due_date,
@@ -1741,7 +1742,7 @@ export default function Page() {
         supabase.from("jobs").select("*").order("created_at", { ascending: false }),
         supabase.from("job_comments").select("id, job_id, comment, created_at, author_id").order("created_at", { ascending: false }),
         supabase.from("job_status_history").select("id, job_id, from_status, to_status, created_at, changed_by").order("created_at", { ascending: true }),
-        supabase.from("job_files").select("id, job_id, file_name, file_type, file_size").order("created_at", { ascending: true }),
+        supabase.from("job_files").select("id, job_id, file_name, file_type, file_size, url").order("created_at", { ascending: true }),
         supabase.from("audit_log").select("id, action, target_table, target_id, metadata, created_at, actor_id").order("created_at", { ascending: false }).limit(80),
         supabase.from("role_permissions").select("role, permissions"),
         supabase.from("shop_state").select("express_orders_enabled").limit(1),
@@ -1785,7 +1786,7 @@ export default function Page() {
           profileNames,
           (commentsResult.data ?? []) as Array<{ id: string; job_id: string; comment: string; created_at: string; author_id: string | null }>,
           (historyResult.data ?? []) as Array<{ id: string; job_id: string; from_status: JobStatus | null; to_status: JobStatus; created_at: string; changed_by: string | null }>,
-          (filesResult.data ?? []) as Array<{ id: string; job_id: string; file_name: string; file_type: string; file_size: number | null }>
+          (filesResult.data ?? []) as Array<{ id: string; job_id: string; file_name: string; file_type: string; file_size: number | null; url?: string | null }>
         )
       );
       setJobs((current) => reuseIfSame(current, nextJobs));
@@ -2412,6 +2413,59 @@ export default function Page() {
     }
     setJobs((current) => current.map((job) => (job.id === jobId ? { ...job, ...fields } : job)));
     void appendAudit("updated job", jobId, "jobs", existing.dbId);
+  }
+
+  // แนบไฟล์เข้างาน (อัปโหลดจริงขึ้น Supabase Storage bucket "job-files") + ดู/ดาวน์โหลดในแอป
+  async function uploadJobFile(job: Job, file: File) {
+    if (!can("edit_job")) {
+      setDataError("บทบาทนี้ยังไม่มีสิทธิ์แนบไฟล์");
+      return;
+    }
+    if (!file) return;
+    if (file.size > 10_000_000) {
+      setDataError("ไฟล์ต้องไม่เกิน 10 MB");
+      return;
+    }
+    const kind: FileAsset["type"] = file.type.includes("pdf") ? "pdf" : file.name.toLowerCase().endsWith(".zip") ? "zip" : file.name.toLowerCase().endsWith(".ai") ? "ai" : "image";
+    const sizeText = `${Math.max(file.size / 1000000, 0.01).toFixed(2)} MB`;
+    if (supabase && isSupabaseConfigured && job.dbId && uuidPattern.test(job.dbId)) {
+      const safeName = file.name.replace(/[^\w.\-]+/g, "_");
+      const path = `${job.dbId}/${Date.now()}-${safeName}`;
+      const { error: upErr } = await supabase.storage.from("job-files").upload(path, file, { contentType: file.type || undefined });
+      if (upErr) {
+        setDataError(`อัปโหลดไฟล์ไม่สำเร็จ: ${upErr.message}`);
+        return;
+      }
+      const { data: pub } = supabase.storage.from("job-files").getPublicUrl(path);
+      const { data: row, error } = await supabase.from("job_files").insert({ job_id: job.dbId, file_name: file.name, file_type: file.type || "file", file_size: file.size, url: pub.publicUrl }).select("id").single();
+      if (error) {
+        setDataError(error.message);
+        return;
+      }
+      const asset: FileAsset = { id: row.id as string, name: file.name, type: kind, size: sizeText, url: pub.publicUrl };
+      setJobs((current) => current.map((item) => (item.id === job.id ? { ...item, files: [...item.files, asset] } : item)));
+    } else {
+      const dataUrl = await readImageAsDataUrl(file);
+      const asset: FileAsset = { id: crypto.randomUUID(), name: file.name, type: kind, size: sizeText, url: dataUrl };
+      setJobs((current) => current.map((item) => (item.id === job.id ? { ...item, files: [...item.files, asset] } : item)));
+    }
+    void appendAudit("attached file", `${job.id} · ${file.name}`, "jobs", job.dbId);
+  }
+
+  async function removeJobFile(job: Job, fileId: string) {
+    if (!can("edit_job")) {
+      setDataError("บทบาทนี้ยังไม่มีสิทธิ์ลบไฟล์");
+      return;
+    }
+    if (supabase && isSupabaseConfigured && uuidPattern.test(fileId)) {
+      const { error } = await supabase.from("job_files").delete().eq("id", fileId);
+      if (error) {
+        setDataError(error.message);
+        return;
+      }
+    }
+    setJobs((current) => current.map((item) => (item.id === job.id ? { ...item, files: item.files.filter((file) => file.id !== fileId) } : item)));
+    void appendAudit("removed file", job.id, "jobs", job.dbId);
   }
 
   async function addComment(jobId: string, text: string) {
@@ -3937,7 +3991,7 @@ export default function Page() {
                   <>
                   <LineInvitePanel job={selectedJob} customer={customerRecords.find((item) => item.id === selectedJob.customerId)} onMarkFriend={markCustomerLineFriend} />
                   <HandoffPanel job={selectedJob} currentUser={currentUser} onSubmit={submitHandoff} onAccept={acceptHandoff} onReject={rejectHandoff} />
-                  <JobDetail job={selectedJob} companyProfile={companyProfile} canSeeMoney={canSeeMoney} canEditPayment={can("edit_payment")} canDeleteJob={can("delete_job")} canConfirmDeposit={["Owner", "Manager", "Admin"].includes(currentUser.role)} canApproveWaiver={currentUser.role === "Owner"} onPayment={updatePayment} onConfirmDeposit={confirmDeposit} onReceiveBalance={receiveBalance} onComment={addComment} onMove={requestMove} onDelete={removeJob} teamMembers={teamMembers} canAssign={can("assign_staff")} onAssign={assignStaff} canEditJob={can("edit_job") && (currentUser.role === "Owner" || !["Ready for Production", "In Production", "QC", "Packing", "Delivered / Picked Up", "Completed", "Cancelled"].includes(selectedJob.status))} onUpdateJob={updateJob} />
+                  <JobDetail job={selectedJob} companyProfile={companyProfile} canSeeMoney={canSeeMoney} canEditPayment={can("edit_payment")} canDeleteJob={can("delete_job")} canConfirmDeposit={["Owner", "Manager", "Admin"].includes(currentUser.role)} canApproveWaiver={currentUser.role === "Owner"} onPayment={updatePayment} onConfirmDeposit={confirmDeposit} onReceiveBalance={receiveBalance} onComment={addComment} onMove={requestMove} onDelete={removeJob} teamMembers={teamMembers} canAssign={can("assign_staff")} onAssign={assignStaff} canEditJob={can("edit_job") && (currentUser.role === "Owner" || !["Ready for Production", "In Production", "QC", "Packing", "Delivered / Picked Up", "Completed", "Cancelled"].includes(selectedJob.status))} onUpdateJob={updateJob} canAttach={can("edit_job")} onUploadFile={uploadJobFile} onDeleteFile={removeJobFile} />
                   </>
                 ) : (
                   <EmptyState title="ยังไม่มีงานในระบบ" text="เริ่มจากสร้างลูกค้าและสร้างงานแรกได้เลย" action={() => setActiveView("Create Job")} />
@@ -5007,7 +5061,10 @@ function JobDetail({
   canAssign,
   onAssign,
   canEditJob,
-  onUpdateJob
+  onUpdateJob,
+  canAttach,
+  onUploadFile,
+  onDeleteFile
 }: {
   job: Job;
   companyProfile: CompanyProfile;
@@ -5027,6 +5084,9 @@ function JobDetail({
   onAssign: (jobId: string, designer: string, production: string) => void;
   canEditJob: boolean;
   onUpdateJob: (jobId: string, fields: { title: string; type: JobType; description: string; quantity: number; dueDate: string; priority: Priority; internalNotes: string }) => void;
+  canAttach: boolean;
+  onUploadFile: (job: Job, file: File) => void;
+  onDeleteFile: (job: Job, fileId: string) => void;
 }) {
   const [comment, setComment] = useState("");
   const [editingJob, setEditingJob] = useState(false);
@@ -5224,19 +5284,44 @@ function JobDetail({
         </div>
 
         <div className="mt-5 rounded-3xl bg-white/60 p-5">
-          <h4 className="mb-4 font-semibold">ไฟล์แนบ</h4>
+          <div className="mb-4 flex items-center justify-between gap-2">
+            <h4 className="font-semibold">ไฟล์แนบ</h4>
+            {canAttach ? (
+              <label className="inline-flex cursor-pointer items-center gap-2 rounded-2xl bg-k2-ink px-4 py-2 text-sm font-bold text-white">
+                <Upload className="h-4 w-4" /> แนบไฟล์
+                <input type="file" className="sr-only" onChange={(event) => { const f = event.target.files?.[0]; if (f) void onUploadFile(job, f); event.target.value = ""; }} />
+              </label>
+            ) : null}
+          </div>
           <div className="grid gap-3 sm:grid-cols-2">
             {job.files.map((file) => (
               <div key={file.id} className="flex items-center gap-3 rounded-2xl bg-white p-3">
-                <div className="grid h-11 w-11 place-items-center rounded-2xl bg-k2-sky">
-                  <FileImage className="h-5 w-5" />
+                {file.url && file.type === "image" ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img src={file.url} alt={file.name} className="h-11 w-11 shrink-0 rounded-2xl object-cover" />
+                ) : (
+                  <div className="grid h-11 w-11 shrink-0 place-items-center rounded-2xl bg-k2-sky">
+                    <FileImage className="h-5 w-5" />
+                  </div>
+                )}
+                <div className="min-w-0 flex-1">
+                  {file.url ? (
+                    <a href={file.url} target="_blank" rel="noreferrer" className="block truncate font-semibold text-k2-ink underline">{file.name}</a>
+                  ) : (
+                    <p className="truncate font-semibold">{file.name}</p>
+                  )}
+                  <p className="text-sm text-k2-muted">{file.type.toUpperCase()} · {file.size}</p>
                 </div>
-                <div>
-                  <p className="font-semibold">{file.name}</p>
-                  <p className="text-sm text-k2-muted">{file.type.toUpperCase()} - {file.size}</p>
-                </div>
+                {canAttach ? (
+                  <button type="button" onClick={() => onDeleteFile(job, file.id)} className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-rose-50 text-rose-600" title="ลบไฟล์">
+                    <Trash2 className="h-4 w-4" />
+                  </button>
+                ) : null}
               </div>
             ))}
+            {job.files.length === 0 ? (
+              <p className="text-sm font-semibold text-k2-muted sm:col-span-2">ยังไม่มีไฟล์แนบ</p>
+            ) : null}
           </div>
         </div>
       </section>
