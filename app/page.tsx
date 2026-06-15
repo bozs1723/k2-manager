@@ -45,6 +45,7 @@ import type { LucideIcon } from "lucide-react";
 import { customers as initialCustomers, initialAuditLog, initialJobs, statuses, team as initialTeam } from "@/lib/mock-data";
 import { createSupabaseAuthWorker, isSupabaseConfigured, supabase } from "@/lib/supabase";
 import { CUSTOMER_CODE_ADMINS, CUSTOMER_CODE_PAGES, customerCodeYear, formatCustomerCode, nextCustomerSeq } from "@/lib/customer-code";
+import { branchForJobType } from "@/lib/job-routing";
 import type { AppNotification, Attendance, AuditEvent, BranchSetting, Customer, ExpressRequest, Holiday, Job, JobStatus, JobType, Lead, LeaveRequest, PaymentStatus, Priority, Quotation, QuoteStatus, Role, TeamMember } from "@/lib/types";
 
 type ImportedCustomer = Pick<Customer, "name" | "phone" | "lineId" | "email"> & {
@@ -390,7 +391,7 @@ const roleSummaryPermissions: Record<Role, string[]> = {
 };
 
 const roles: Role[] = ["Owner", "Manager", "Admin", "HR", "Accounting", "Designer", "Production Staff", "Packing Staff", "Sales Staff"];
-const BRANCH_LIST = ["พะเยา", "กรุงเทพ"];
+const BRANCH_LIST = ["พระรามเก้า", "พะเยา"];
 
 // ระยะห่างระหว่างพิกัด (เมตร) — สูตร haversine
 function distanceMeters(lat1: number, lng1: number, lat2: number, lng2: number) {
@@ -411,7 +412,7 @@ function lateMinutesNow(workStart: string, graceMinutes: number) {
   return Math.max(0, nowMin - startMin);
 }
 const defaultBranchSetting = (branch: string): BranchSetting => ({ branch, workStart: "09:00", workEnd: "18:00", lateGraceMinutes: 5, gpsLat: null, gpsLng: null, radiusM: 150 });
-const jobTypes: JobType[] = ["DTG Shirt", "UV Print", "Laser Cut", "Signage", "3D Print", "Other"];
+const jobTypes: JobType[] = ["DTG Shirt", "UV Print", "Laser Cut", "Signage", "Acrylic", "3D Print", "Other"];
 const priorities: Priority[] = ["Normal", "Urgent", "Very Urgent", "Today"];
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const appTagline = "คุมงานผลิตครบในที่เดียว";
@@ -533,6 +534,7 @@ const jobTypeLabel: Record<JobType, string> = {
   "UV Print": "พิมพ์ UV",
   "Laser Cut": "เลเซอร์คัต",
   Signage: "ป้าย",
+  Acrylic: "งานอะคริลิค",
   "3D Print": "พิมพ์ 3D",
   Other: "อื่น ๆ"
 };
@@ -658,19 +660,35 @@ type HandoffGate = {
   rejectStatus: JobStatus;
   senderRoles: Role[];
   reviewerRoles: Role[];
+  nextGate?: string;        // ถ้ามี = อนุมัติแล้วส่งต่อด่านถัดไปอัตโนมัติ (ไม่ปิด handoff)
+  branchManager?: boolean;  // ผู้ตรวจต้องเป็นผู้จัดการของสาขาที่ผลิต (productionBranch)
 };
+// flow: กราฟิกส่ง → เซลยืนยัน → (auto) ผจก.สาขาอนุมัติ → พร้อมผลิต (เด้งหาฝ่ายผลิตทั้งสาขา)
 const HANDOFF_GATES: HandoffGate[] = [
   {
     id: "design_review",
-    label: "ส่งแบบให้ตรวจ",
+    label: "ส่งงานให้เซลตรวจ",
     fromStatus: "Designing",
+    reviewStatus: "Waiting for Customer Approval",
+    approveStatus: "Waiting for Customer Approval",
+    rejectStatus: "Designing",
+    senderRoles: ["Designer"],
+    reviewerRoles: ["Sales Staff"],
+    nextGate: "production_approval"
+  },
+  {
+    id: "production_approval",
+    label: "ผู้จัดการสาขาอนุมัติเข้าผลิต",
+    fromStatus: "Waiting for Customer Approval",
     reviewStatus: "Waiting for Customer Approval",
     approveStatus: "Ready for Production",
     rejectStatus: "Designing",
-    senderRoles: ["Designer"],
-    reviewerRoles: ["Sales Staff", "Manager", "Admin"]
+    senderRoles: ["Sales Staff"],
+    reviewerRoles: ["Manager"],
+    branchManager: true
   }
 ];
+// กำหนดสาขาที่รับผิดชอบผลิตตามประเภทงาน — ดู lib/job-routing.ts (มีเทสที่ lib/job-routing.test.mjs)
 const gateById = (id?: string) => HANDOFF_GATES.find((gate) => gate.id === id);
 const gateFromStatus = (status: JobStatus) => HANDOFF_GATES.find((gate) => gate.fromStatus === status);
 const userHasRole = (member: TeamMember, role: Role) => member.role === role || (member.roles ?? []).includes(role);
@@ -1929,6 +1947,61 @@ export default function Page() {
     }
   }
 
+  // แจ้งเตือนพนักงานรายคน (ใช้ตอนมอบหมายงานให้คนใดคนหนึ่ง) — เด้งผ่าน Realtime ในแอปของคนนั้น
+  function notifyUser(name: string, type: AppNotification["type"], job: Pick<Job, "id" | "title" | "dbId">, message: string) {
+    if (!name || name === "Unassigned" || name === currentUser.name) return;
+    if (supabase && isSupabaseConfigured) {
+      const recipientId = teamMembers.find((member) => member.name === name)?.id;
+      if (recipientId && uuidPattern.test(recipientId)) {
+        void supabase.from("notifications").insert({
+          recipient_id: recipientId,
+          type,
+          job_id: job.dbId ?? null,
+          job_number: job.id,
+          job_title: job.title,
+          message
+        });
+      }
+    }
+  }
+
+  // แจ้งเตือนพนักงานเป็นกลุ่มตามสาขา (เด้งหาผจก.สาขา หรือฝ่ายผลิตทั้งสาขา)
+  function notifyBranchStaff(branch: string, roleMatch: (member: TeamMember) => boolean, type: AppNotification["type"], job: Pick<Job, "id" | "title" | "dbId">, message: string) {
+    if (!supabase || !isSupabaseConfigured) return;
+    const rows = teamMembers
+      .filter((member) => member.id !== currentUser.id && roleMatch(member) && (!branch || member.branch === branch) && uuidPattern.test(member.id))
+      .map((member) => ({ recipient_id: member.id, type, job_id: job.dbId ?? null, job_number: job.id, job_title: job.title, message }));
+    if (rows.length) void supabase.from("notifications").insert(rows);
+  }
+
+  // มอบหมาย/เปลี่ยนผู้รับผิดชอบ (ออกแบบ/ผลิต) ของงานที่เปิดแล้ว + แจ้งเตือนคนที่ถูกมอบใหม่
+  async function assignStaff(jobId: string, designer: string, production: string) {
+    if (!can("assign_staff")) {
+      setDataError("บทบาทนี้ยังไม่มีสิทธิ์มอบหมายงาน");
+      return;
+    }
+    const existing = jobs.find((job) => job.id === jobId);
+    if (!existing) return;
+    if (supabase && existing.dbId && uuidPattern.test(existing.dbId)) {
+      const { error } = await supabase
+        .from("jobs")
+        .update({
+          assigned_designer: teamIdByName(teamMembers, designer),
+          assigned_production: teamIdByName(teamMembers, production)
+        })
+        .eq("id", existing.dbId);
+      if (error) {
+        setDataError(error.message);
+        return;
+      }
+    }
+    setJobs((current) => current.map((job) => (job.id === jobId ? { ...job, assignedDesigner: designer, assignedProduction: production } : job)));
+    const updated = { ...existing, assignedDesigner: designer, assignedProduction: production };
+    if (designer !== existing.assignedDesigner) notifyUser(designer, "assigned", updated, `ได้รับมอบหมายงาน ${existing.id} – ${existing.title} (ออกแบบ)`);
+    if (production !== existing.assignedProduction) notifyUser(production, "assigned", updated, `ได้รับมอบหมายงาน ${existing.id} – ${existing.title} (ผลิต)`);
+    void appendAudit("assigned staff", existing.id, "jobs", existing.dbId);
+  }
+
   // แจ้งเตือนตัวเอง (งานใกล้ถึงกำหนด) — โหมด Supabase insert ถึงตัวเอง แล้ว Realtime ส่งกลับ
   function notifyDueSoonSelf(job: Pick<Job, "id" | "title" | "dbId">, message: string) {
     if (supabase && isSupabaseConfigured && uuidPattern.test(currentUser.id)) {
@@ -2078,14 +2151,36 @@ export default function Page() {
     if (!job || job.handoffStatus !== "pending") return;
     const gate = gateById(job.handoffGate);
     if (!gate) return;
-    if (currentUser.role !== "Owner" && !userHasAnyRole(currentUser, gate.reviewerRoles)) {
-      setDataError("คุณไม่มีสิทธิ์ตรวจรับงานในขั้นตอนนี้");
+    const allowedReviewer = currentUser.role === "Owner" || (gate.branchManager
+      ? userHasRole(currentUser, "Manager") && currentUser.branch === job.productionBranch
+      : userHasAnyRole(currentUser, gate.reviewerRoles));
+    if (!allowedReviewer) {
+      setDataError(gate.branchManager ? "ต้องเป็นผู้จัดการของสาขาที่ผลิตเท่านั้น" : "คุณไม่มีสิทธิ์ตรวจรับงานในขั้นตอนนี้");
       return;
     }
     if (currentUser.role !== "Owner" && job.handoffFromUser && job.handoffFromUser === currentUser.id) {
       setDataError("ผู้ส่งกับผู้รับต้องเป็นคนละคน (กฎกันพลาด)");
       return;
     }
+    const nextGate = gate.nextGate ? gateById(gate.nextGate) : undefined;
+    if (nextGate) {
+      // อนุมัติด่านนี้แล้วส่งต่อด่านถัดไปอัตโนมัติ (เช่น เซลยืนยัน → รอผจก.สาขาอนุมัติ)
+      setJobs((current) => current.map((item) => (item.id === jobId ? { ...item, handoffStatus: "pending", handoffGate: nextGate.id, handoffFromUser: currentUser.id, handoffFromStatus: job.status, handoffNote: undefined, status: gate.approveStatus } : item)));
+      if (supabase && job.dbId) {
+        const { error } = await supabase.from("jobs").update({ status: gate.approveStatus, handoff_status: "pending", handoff_gate: nextGate.id, handoff_from_user: uuidPattern.test(currentUser.id) ? currentUser.id : null, handoff_from_status: job.status, handoff_note: null }).eq("id", job.dbId);
+        if (error) {
+          setDataError(error.message);
+          void refreshWorkspaceData();
+          return;
+        }
+      }
+      void appendAudit(`accepted handoff ${gate.id}`, job.id, "jobs", job.dbId ?? null);
+      if (nextGate.branchManager) {
+        notifyBranchStaff(job.productionBranch ?? "", (member) => userHasRole(member, "Manager"), "assigned", job, `งาน ${job.id} รออนุมัติเข้าผลิต · สาขา ${job.productionBranch || "-"}`);
+      }
+      return;
+    }
+    // ด่านสุดท้าย: อนุมัติเข้าผลิต → เด้งหาฝ่ายผลิตทุกคนในสาขานั้น
     setJobs((current) => current.map((item) => (item.id === jobId ? { ...item, handoffStatus: undefined, handoffGate: undefined, handoffFromUser: undefined, handoffFromStatus: undefined, handoffNote: undefined, status: gate.approveStatus } : item)));
     if (supabase && job.dbId) {
       const { error } = await supabase.from("jobs").update({ status: gate.approveStatus, handoff_status: null, handoff_gate: null, handoff_from_user: null, handoff_from_status: null, handoff_note: null }).eq("id", job.dbId);
@@ -2096,7 +2191,7 @@ export default function Page() {
       }
     }
     void appendAudit(`accepted handoff ${gate.id}`, job.id, "jobs", job.dbId ?? null);
-    notifyAssignees("status_moved", job, `งาน ${job.id} ผ่านการตรวจ → "${statusLabel[gate.approveStatus]}"`);
+    notifyBranchStaff(job.productionBranch ?? "", (member) => userHasRole(member, "Production Staff"), "assigned", job, `งานเข้าผลิต: ${job.id} – ${job.title} · สาขา ${job.productionBranch || "-"}`);
   }
 
   async function rejectHandoff(jobId: string, reason: string) {
@@ -2104,8 +2199,11 @@ export default function Page() {
     if (!job || job.handoffStatus !== "pending") return;
     const gate = gateById(job.handoffGate);
     if (!gate) return;
-    if (currentUser.role !== "Owner" && !userHasAnyRole(currentUser, gate.reviewerRoles)) {
-      setDataError("คุณไม่มีสิทธิ์ตรวจรับงานในขั้นตอนนี้");
+    const allowedReviewer = currentUser.role === "Owner" || (gate.branchManager
+      ? userHasRole(currentUser, "Manager") && currentUser.branch === job.productionBranch
+      : userHasAnyRole(currentUser, gate.reviewerRoles));
+    if (!allowedReviewer) {
+      setDataError(gate.branchManager ? "ต้องเป็นผู้จัดการของสาขาที่ผลิตเท่านั้น" : "คุณไม่มีสิทธิ์ตรวจรับงานในขั้นตอนนี้");
       return;
     }
     if (currentUser.role !== "Owner" && job.handoffFromUser && job.handoffFromUser === currentUser.id) {
@@ -3340,44 +3438,6 @@ export default function Page() {
               </div>
             )}
 
-            <p className="mb-3 text-sm font-extrabold text-k2-muted">Demo roles</p>
-            <div className="grid gap-3">
-              {teamMembers.map((member) => (
-                <button
-                  key={member.id}
-                  onClick={() => setCurrentUser(member)}
-                  className={`flex items-center justify-between rounded-2xl border p-4 text-left transition ${
-                    currentUser.id === member.id ? "border-violet-300 bg-violet-50/80" : "border-white/80 bg-white/55 hover:bg-white"
-                  }`}
-                >
-                  <span className="flex items-center gap-3">
-                    <MemberAvatar member={member} className="h-11 w-11 rounded-2xl text-sm" />
-                    <span>
-                      <span className="block font-semibold">{member.name}</span>
-                      <span className="text-sm text-k2-muted">{roleLabel[member.role]}</span>
-                    </span>
-                  </span>
-                  <ChevronRight className="h-5 w-5 text-k2-muted" />
-                </button>
-              ))}
-            </div>
-            <div className="mt-5 rounded-2xl bg-white/60 p-4">
-              <p className="mb-2 text-sm font-semibold text-k2-muted">สิทธิ์การใช้งาน</p>
-              <div className="flex flex-wrap gap-2">
-                {roleSummaryPermissions[currentUser.role].map((permission) => (
-                  <span key={permission} className="rounded-full bg-k2-mint px-3 py-1 text-xs font-semibold text-emerald-800">
-                    {permissionLabel[permission] ?? permission}
-                  </span>
-                ))}
-              </div>
-            </div>
-            <button
-              onClick={() => setIsAuthed(true)}
-              className="mt-5 flex w-full items-center justify-center gap-2 rounded-2xl bg-k2-ink px-5 py-4 font-semibold text-white shadow-lg shadow-slate-900/20 transition hover:-translate-y-0.5"
-            >
-              <ShieldCheck className="h-5 w-5" />
-              เข้าสู่ระบบคิวงานแบบทดลอง
-            </button>
           </motion.div>
         </section>
       </main>
@@ -3731,7 +3791,7 @@ export default function Page() {
                   <>
                   <LineInvitePanel job={selectedJob} customer={customerRecords.find((item) => item.id === selectedJob.customerId)} onMarkFriend={markCustomerLineFriend} />
                   <HandoffPanel job={selectedJob} currentUser={currentUser} onSubmit={submitHandoff} onAccept={acceptHandoff} onReject={rejectHandoff} />
-                  <JobDetail job={selectedJob} companyProfile={companyProfile} canSeeMoney={canSeeMoney} canEditPayment={can("edit_payment")} canDeleteJob={can("delete_job")} canConfirmDeposit={["Owner", "Manager", "Admin"].includes(currentUser.role)} canApproveWaiver={currentUser.role === "Owner"} onPayment={updatePayment} onConfirmDeposit={confirmDeposit} onReceiveBalance={receiveBalance} onComment={addComment} onMove={requestMove} onDelete={removeJob} />
+                  <JobDetail job={selectedJob} companyProfile={companyProfile} canSeeMoney={canSeeMoney} canEditPayment={can("edit_payment")} canDeleteJob={can("delete_job")} canConfirmDeposit={["Owner", "Manager", "Admin"].includes(currentUser.role)} canApproveWaiver={currentUser.role === "Owner"} onPayment={updatePayment} onConfirmDeposit={confirmDeposit} onReceiveBalance={receiveBalance} onComment={addComment} onMove={requestMove} onDelete={removeJob} teamMembers={teamMembers} canAssign={can("assign_staff")} onAssign={assignStaff} />
                   </>
                 ) : (
                   <EmptyState title="ยังไม่มีงานในระบบ" text="เริ่มจากสร้างลูกค้าและสร้างงานแรกได้เลย" action={() => setActiveView("Create Job")} />
@@ -4628,7 +4688,9 @@ function HandoffPanel({ job, currentUser, onSubmit, onAccept, onReject }: {
   const pendingGate = pending ? gateById(job.handoffGate) : undefined;
   const sendGate = !pending ? gateFromStatus(job.status) : undefined;
   const canSend = Boolean(sendGate) && (isOwner || (sendGate ? userHasAnyRole(currentUser, sendGate.senderRoles) : false));
-  const isReviewer = Boolean(pendingGate) && (isOwner || (pendingGate ? userHasAnyRole(currentUser, pendingGate.reviewerRoles) : false));
+  const isReviewer = Boolean(pendingGate) && (isOwner || (pendingGate
+    ? (pendingGate.branchManager ? userHasRole(currentUser, "Manager") && currentUser.branch === job.productionBranch : userHasAnyRole(currentUser, pendingGate.reviewerRoles))
+    : false));
   const isSubmitter = Boolean(job.handoffFromUser) && job.handoffFromUser === currentUser.id;
   const canReview = pending && isReviewer && (isOwner || !isSubmitter);
   if (!pending && !canSend && !job.handoffNote) return null;
@@ -4791,7 +4853,10 @@ function JobDetail({
   onReceiveBalance,
   onComment,
   onMove,
-  onDelete
+  onDelete,
+  teamMembers,
+  canAssign,
+  onAssign
 }: {
   job: Job;
   companyProfile: CompanyProfile;
@@ -4806,8 +4871,19 @@ function JobDetail({
   onComment: (jobId: string, text: string) => void;
   onMove: (jobId: string, status: JobStatus) => void;
   onDelete: (jobId: string) => void;
+  teamMembers: TeamMember[];
+  canAssign: boolean;
+  onAssign: (jobId: string, designer: string, production: string) => void;
 }) {
   const [comment, setComment] = useState("");
+  const [assignDesigner, setAssignDesigner] = useState(job.assignedDesigner);
+  const [assignProduction, setAssignProduction] = useState(job.assignedProduction);
+  useEffect(() => {
+    setAssignDesigner(job.assignedDesigner);
+    setAssignProduction(job.assignedProduction);
+  }, [job.id, job.assignedDesigner, job.assignedProduction]);
+  const designerChoices = teamMembers.filter((member) => member.role === "Designer" || (member.roles ?? []).includes("Designer"));
+  const productionChoices = teamMembers.filter((member) => ["Production Staff", "Admin", "Owner"].includes(member.role) || (member.roles ?? []).includes("Production Staff"));
   const [balanceSlipDraft, setBalanceSlipDraft] = useState("");
   const [balanceDateDraft, setBalanceDateDraft] = useState(todayISO());
   const [balanceError, setBalanceError] = useState("");
@@ -4890,6 +4966,55 @@ function JobDetail({
           <Info label="ผู้รับผิดชอบผลิต" value={staffLabel(job.assignedProduction)} icon={Factory} />
           <Info label="โน้ตภายใน" value={job.internalNotes} icon={ClipboardList} />
         </div>
+
+        {canAssign ? (
+          <div className="mt-5 rounded-3xl bg-white/60 p-5">
+            <h4 className="mb-1 font-semibold">มอบหมายผู้รับผิดชอบ</h4>
+            <p className="mb-3 text-sm font-semibold text-k2-muted">เลือกผู้รับผิดชอบแล้วบันทึก — ระบบจะเด้งแจ้งเตือนในแอปของคนที่ถูกมอบหมาย</p>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <label className="space-y-1">
+                <span className="text-sm font-semibold text-k2-muted">กราฟิก (ออกแบบ)</span>
+                <select
+                  value={assignDesigner}
+                  onChange={(event) => setAssignDesigner(event.target.value)}
+                  className="w-full rounded-2xl border border-white/80 bg-white/85 px-4 py-3 text-sm font-semibold outline-none"
+                >
+                  <option value="Unassigned">ยังไม่มอบหมาย</option>
+                  {assignDesigner !== "Unassigned" && !designerChoices.some((member) => member.name === assignDesigner) ? (
+                    <option value={assignDesigner}>{assignDesigner}</option>
+                  ) : null}
+                  {designerChoices.map((member) => (
+                    <option key={member.id} value={member.name}>{member.name}</option>
+                  ))}
+                </select>
+              </label>
+              <label className="space-y-1">
+                <span className="text-sm font-semibold text-k2-muted">ฝ่ายผลิต</span>
+                <select
+                  value={assignProduction}
+                  onChange={(event) => setAssignProduction(event.target.value)}
+                  className="w-full rounded-2xl border border-white/80 bg-white/85 px-4 py-3 text-sm font-semibold outline-none"
+                >
+                  <option value="Unassigned">ยังไม่มอบหมาย</option>
+                  {assignProduction !== "Unassigned" && !productionChoices.some((member) => member.name === assignProduction) ? (
+                    <option value={assignProduction}>{assignProduction}</option>
+                  ) : null}
+                  {productionChoices.map((member) => (
+                    <option key={member.id} value={member.name}>{member.name}</option>
+                  ))}
+                </select>
+              </label>
+            </div>
+            <button
+              type="button"
+              onClick={() => onAssign(job.id, assignDesigner, assignProduction)}
+              disabled={assignDesigner === job.assignedDesigner && assignProduction === job.assignedProduction}
+              className="mt-3 rounded-2xl bg-k2-ink px-5 py-3 text-sm font-extrabold text-white disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              บันทึกการมอบหมาย
+            </button>
+          </div>
+        ) : null}
 
         <div className="mt-5 rounded-3xl bg-white/60 p-5">
           <div className="mb-3 flex items-center justify-between gap-3">
@@ -5602,9 +5727,9 @@ function CreateJobView({
   prefill?: Partial<Job> | null;
   onCreate: (job: Partial<Job>) => void;
 }) {
-  const designerOptions = useMemo(() => teamMembers.filter((member) => ["Designer", "Admin", "Owner"].includes(member.role)), [teamMembers]);
+  const designerOptions = useMemo(() => teamMembers.filter((member) => member.role === "Designer" || (member.roles ?? []).includes("Designer")), [teamMembers]);
   const productionOptions = useMemo(() => teamMembers.filter((member) => ["Production Staff", "Admin", "Owner"].includes(member.role)), [teamMembers]);
-  const defaultDesigner = designerOptions[0]?.name ?? "Unassigned";
+  const defaultDesigner = "Unassigned";
   const defaultProduction = productionOptions[0]?.name ?? "Unassigned";
   // ฟอร์มสร้างงานเริ่มจากค่าว่างเสมอ เพื่อไม่ให้ข้อมูลจากงานก่อนหน้าค้างมาทำให้สร้างออเดอร์ผิด/ซ้ำ
   const [form, setForm] = useState({
@@ -5670,7 +5795,7 @@ function CreateJobView({
   }
 
   const materialOptions = ["อะคริลิค", "พลาสวูด", "ไวนิล", "สติ๊กเกอร์", "เสื้อ Cotton", "อื่น ๆ"];
-  const branchOptions = ["พะเยา", "กรุงเทพ"];
+  const branchOptions = BRANCH_LIST;
   function setMaterialAt(index: number, value: string) {
     setForm((current) => ({ ...current, materials: current.materials.map((m, i) => (i === index ? value : m)) }));
   }
@@ -5736,13 +5861,18 @@ function CreateJobView({
   useEffect(() => {
     setForm((current) => ({
       ...current,
-      assignedDesigner: designerOptions.some((member) => member.name === current.assignedDesigner) ? current.assignedDesigner : defaultDesigner,
+      assignedDesigner: designerOptions.some((member) => member.name === current.assignedDesigner) || current.assignedDesigner === "Unassigned" ? current.assignedDesigner : defaultDesigner,
       assignedProduction: productionOptions.some((member) => member.name === current.assignedProduction) || current.assignedProduction === "Unassigned"
         ? current.assignedProduction
         : defaultProduction
     }));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [teamMembers]);
+
+  // กำหนดสาขาที่ผลิตอัตโนมัติตามประเภทงาน (เสื้อ/DTG → พระรามเก้า, นอกนั้น → พะเยา) ปรับเองทีหลังได้
+  useEffect(() => {
+    setForm((current) => ({ ...current, productionBranch: branchForJobType(current.type) }));
+  }, [form.type]);
 
   return (
     <form
@@ -5770,7 +5900,7 @@ function CreateJobView({
           ...form,
           description: `${form.description}\n\nสเปกใบสั่งงาน:\n${workOrderSpec}`,
           internalNotes: `${form.internalNotes}\n\nข้อมูลฝ่ายผลิต:\n${workOrderSpec}`,
-          assignedDesigner: designerOptions.some((member) => member.name === form.assignedDesigner) ? form.assignedDesigner : defaultDesigner,
+          assignedDesigner: designerOptions.some((member) => member.name === form.assignedDesigner) || form.assignedDesigner === "Unassigned" ? form.assignedDesigner : defaultDesigner,
           assignedProduction: productionOptions.some((member) => member.name === form.assignedProduction) || form.assignedProduction === "Unassigned"
             ? form.assignedProduction
             : defaultProduction,
@@ -5964,6 +6094,7 @@ function CreateJobView({
               {designerOptions.map((member) => (
                 <option key={member.id}>{member.name}</option>
               ))}
+              <option value="Unassigned">ยังไม่มอบหมาย</option>
             </select>
           </label>
           <label className="space-y-2">
