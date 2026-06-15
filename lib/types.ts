@@ -140,6 +140,17 @@ export type Holiday = {
   name: string;
 };
 
+export type Overtime = {
+  id: string;
+  profileId: string;
+  workDate: string;
+  hours: number;
+  note: string;
+  branch?: string;
+  approvedBy?: string;
+  createdAt: string;
+};
+
 export type Attendance = {
   id: string;
   profileId: string;

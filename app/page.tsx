@@ -47,7 +47,7 @@ import { customers as initialCustomers, initialAuditLog, initialJobs, statuses, 
 import { createSupabaseAuthWorker, isSupabaseConfigured, supabase } from "@/lib/supabase";
 import { CUSTOMER_CODE_ADMINS, CUSTOMER_CODE_PAGES, customerCodeYear, formatCustomerCode, nextCustomerSeq } from "@/lib/customer-code";
 import { branchForJobType } from "@/lib/job-routing";
-import type { AppNotification, Attendance, AuditEvent, BranchSetting, Customer, ExpressRequest, Holiday, Job, JobStatus, JobType, Lead, LeaveRequest, PaymentStatus, Priority, Quotation, QuoteStatus, Role, TeamMember } from "@/lib/types";
+import type { AppNotification, Attendance, AuditEvent, BranchSetting, Customer, ExpressRequest, Holiday, Job, JobStatus, JobType, Lead, LeaveRequest, Overtime, PaymentStatus, Priority, Quotation, QuoteStatus, Role, TeamMember } from "@/lib/types";
 
 type ImportedCustomer = Pick<Customer, "name" | "phone" | "lineId" | "email"> & {
   notes: string;
@@ -1154,7 +1154,8 @@ export default function Page() {
   const [leaveRequests, setLeaveRequests] = useState<LeaveRequest[]>([]);
   const [holidays, setHolidays] = useState<Holiday[]>([]);
   const [payrollMonth, setPayrollMonth] = useState(todayISO().slice(0, 7));
-  const [payrollSummary, setPayrollSummary] = useState<Record<string, { present: number; late: number; lateMin: number; leaveDays: number }>>({});
+  const [payrollSummary, setPayrollSummary] = useState<Record<string, { present: number; late: number; lateMin: number; leaveDays: number; otHours: number }>>({});
+  const [overtimeRecords, setOvertimeRecords] = useState<Overtime[]>([]);
   const [notifications, setNotifications] = useState<AppNotification[]>([]);
   const [showNotifPanel, setShowNotifPanel] = useState(false);
   const notifPanelRef = useRef<HTMLDivElement>(null);
@@ -1697,6 +1698,7 @@ export default function Page() {
     if (activeView === "Attendance") {
       void loadBranchSettings();
       void loadAttendance();
+      void loadOvertime(payrollMonth);
     }
     if (activeView === "Leave") {
       void loadLeaves();
@@ -1704,6 +1706,7 @@ export default function Page() {
     }
     if (activeView === "Payroll") {
       void loadHrRecords();
+      void loadOvertime(payrollMonth);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isAuthed, activeView]);
@@ -2953,12 +2956,13 @@ export default function Page() {
     const [year, mon] = month.split("-").map(Number);
     const lastDay = new Date(year, mon, 0).getDate();
     const end = `${month}-${String(lastDay).padStart(2, "0")}`;
-    const [attRes, leaveRes] = await Promise.all([
+    const [attRes, leaveRes, otRes] = await Promise.all([
       supabase.from("attendance").select("profile_id, status, late_minutes, check_in_at").gte("work_date", start).lte("work_date", end),
-      supabase.from("leave_requests").select("profile_id, start_date, end_date, status").eq("status", "approved").lte("start_date", end).gte("end_date", start)
+      supabase.from("leave_requests").select("profile_id, start_date, end_date, status").eq("status", "approved").lte("start_date", end).gte("end_date", start),
+      supabase.from("overtime").select("profile_id, hours").gte("work_date", start).lte("work_date", end)
     ]);
-    const summary: Record<string, { present: number; late: number; lateMin: number; leaveDays: number }> = {};
-    const ensure = (id: string) => (summary[id] = summary[id] ?? { present: 0, late: 0, lateMin: 0, leaveDays: 0 });
+    const summary: Record<string, { present: number; late: number; lateMin: number; leaveDays: number; otHours: number }> = {};
+    const ensure = (id: string) => (summary[id] = summary[id] ?? { present: 0, late: 0, lateMin: 0, leaveDays: 0, otHours: 0 });
     ((attRes.data ?? []) as Array<{ profile_id: string; status: string | null; late_minutes: number | null; check_in_at: string | null }>).forEach((row) => {
       const s = ensure(row.profile_id);
       if (row.check_in_at) s.present += 1;
@@ -2973,7 +2977,77 @@ export default function Page() {
       const le = new Date(row.end_date < end ? row.end_date : end);
       s.leaveDays += Math.max(0, Math.round((le.getTime() - ls.getTime()) / 86400000) + 1);
     });
+    ((otRes.data ?? []) as Array<{ profile_id: string; hours: number | string | null }>).forEach((row) => {
+      ensure(row.profile_id).otHours += Number(row.hours ?? 0);
+    });
     setPayrollSummary(summary);
+  }
+
+  // โหลดรายการ OT ของเดือนที่เลือก (สำหรับผู้จัดการ/HR ดู+จัดการ)
+  async function loadOvertime(month: string) {
+    if (!supabase || !isSupabaseConfigured) return;
+    const start = `${month}-01`;
+    const [year, mon] = month.split("-").map(Number);
+    const end = `${month}-${String(new Date(year, mon, 0).getDate()).padStart(2, "0")}`;
+    const { data, error } = await supabase
+      .from("overtime")
+      .select("id, profile_id, work_date, hours, note, branch, approved_by, created_at")
+      .gte("work_date", start)
+      .lte("work_date", end)
+      .order("work_date", { ascending: false });
+    if (error) return;
+    const next = ((data ?? []) as Array<{ id: string; profile_id: string; work_date: string; hours: number | string | null; note: string | null; branch: string | null; approved_by: string | null; created_at: string }>).map((row) => ({
+      id: row.id,
+      profileId: row.profile_id,
+      workDate: row.work_date,
+      hours: Number(row.hours ?? 0),
+      note: row.note ?? "",
+      branch: row.branch ?? undefined,
+      approvedBy: row.approved_by ?? undefined,
+      createdAt: row.created_at
+    }));
+    setOvertimeRecords((current) => reuseIfSame(current, next));
+  }
+
+  // ผู้จัดการสาขา (หรือ HR/เจ้าของ) เปิด/บันทึก OT ให้พนักงานของสาขาตัวเอง
+  async function addOvertime(profileId: string, workDate: string, hours: number, note: string) {
+    if (!(userHasRole(currentUser, "Manager") || can("manage_hr") || currentUser.role === "Owner")) {
+      setDataError("เฉพาะผู้จัดการสาขา / HR / เจ้าของเท่านั้นที่เปิด OT ได้");
+      return;
+    }
+    if (!profileId || !hours || hours <= 0) {
+      setDataError("เลือกพนักงานและกรอกจำนวนชั่วโมง OT ให้ถูกต้อง");
+      return;
+    }
+    const target = teamMembers.find((member) => member.id === profileId);
+    // ผู้จัดการเปิดได้เฉพาะพนักงานสาขาตัวเอง (เจ้าของ/HR ได้ทุกสาขา)
+    if (userHasRole(currentUser, "Manager") && !can("manage_hr") && currentUser.role !== "Owner" && target?.branch !== currentUser.branch) {
+      setDataError("ผู้จัดการเปิด OT ได้เฉพาะพนักงานสาขาของตัวเอง");
+      return;
+    }
+    if (supabase && isSupabaseConfigured && uuidPattern.test(profileId)) {
+      const { error } = await supabase.from("overtime").insert({
+        profile_id: profileId,
+        work_date: workDate,
+        hours,
+        note: note || null,
+        branch: target?.branch ?? currentUser.branch ?? null,
+        approved_by: uuidPattern.test(currentUser.id) ? currentUser.id : null
+      });
+      if (error) {
+        setDataError(error.message);
+        return;
+      }
+      await loadOvertime(payrollMonth);
+      if (activeView === "Payroll") void loadPayroll(payrollMonth);
+    } else {
+      setOvertimeRecords((current) => [
+        { id: crypto.randomUUID(), profileId, workDate, hours, note, branch: target?.branch, approvedBy: currentUser.id, createdAt: new Date().toISOString() },
+        ...current
+      ]);
+    }
+    void appendAudit("granted overtime", `${target?.name ?? profileId} · ${hours} ชม.`, "overtime", null);
+    notifyUser(target?.name ?? "", "assigned", { id: "OT", title: "OT", dbId: undefined }, `คุณได้รับ OT ${hours} ชม. วันที่ ${workDate}`);
   }
 
   async function saveHrRecord(memberId: string, record: { salary: number; position: string; startDate: string }) {
@@ -3854,6 +3928,9 @@ export default function Page() {
                   isHr={can("manage_hr")}
                   onCheckIn={checkIn}
                   onCheckOut={checkOut}
+                  overtime={overtimeRecords}
+                  canGrantOt={userHasRole(currentUser, "Manager") || can("manage_hr") || currentUser.role === "Owner"}
+                  onAddOvertime={addOvertime}
                 />
               </motion.div>
             )}
@@ -7953,7 +8030,7 @@ function PayrollView({
 }: {
   teamMembers: TeamMember[];
   records: Record<string, { salary: number; position: string; startDate: string }>;
-  summary: Record<string, { present: number; late: number; lateMin: number; leaveDays: number }>;
+  summary: Record<string, { present: number; late: number; lateMin: number; leaveDays: number; otHours: number }>;
   month: string;
   onMonthChange: (month: string) => void;
   companyName: string;
@@ -7961,10 +8038,12 @@ function PayrollView({
   const [deductions, setDeductions] = useState<Record<string, string>>({});
   const [bonuses, setBonuses] = useState<Record<string, string>>({});
   const staff = teamMembers.filter((member) => member.role !== "Owner");
-  const netPay = (id: string, base: number) => Math.max(0, base - (Number(deductions[id]) || 0) + (Number(bonuses[id]) || 0));
+  // ค่า OT = ชั่วโมง × (เงินเดือน/30/8 × 1.5) = เงินเดือน/160 ต่อชั่วโมง (มาตรฐานวันธรรมดา 1.5 เท่า)
+  const otPay = (id: string, base: number) => Math.round((summary[id]?.otHours ?? 0) * (base / 160));
+  const netPay = (id: string, base: number) => Math.max(0, base - (Number(deductions[id]) || 0) + (Number(bonuses[id]) || 0) + otPay(id, base));
 
   function printSlip(member: TeamMember, base: number) {
-    const s = summary[member.id] ?? { present: 0, late: 0, lateMin: 0, leaveDays: 0 };
+    const s = summary[member.id] ?? { present: 0, late: 0, lateMin: 0, leaveDays: 0, otHours: 0 };
     const ded = Number(deductions[member.id]) || 0;
     const bon = Number(bonuses[member.id]) || 0;
     const net = netPay(member.id, base);
@@ -7980,6 +8059,7 @@ function PayrollView({
         `<tr><td>วันมาทำงาน</td><td>${s.present} วัน</td></tr>` +
         `<tr><td>มาสาย</td><td>${s.late} วัน (${s.lateMin} นาที)</td></tr>` +
         `<tr><td>ลา (อนุมัติ)</td><td>${s.leaveDays} วัน</td></tr>` +
+        `<tr><td>OT</td><td>${s.otHours} ชม. (+ ${baht(otPay(member.id, base))} บาท)</td></tr>` +
         `<tr><td>เงินเดือนฐาน</td><td>${baht(base)} บาท</td></tr>` +
         `<tr><td>หักเงิน</td><td>- ${baht(ded)} บาท</td></tr>` +
         `<tr><td>โบนัส/เพิ่ม</td><td>+ ${baht(bon)} บาท</td></tr>` +
@@ -8010,6 +8090,7 @@ function PayrollView({
               <th className="pb-3">มาทำงาน</th>
               <th className="pb-3">สาย</th>
               <th className="pb-3">ลา</th>
+              <th className="pb-3">OT</th>
               <th className="pb-3">เงินเดือนฐาน</th>
               <th className="pb-3">หักเงิน</th>
               <th className="pb-3">โบนัส</th>
@@ -8020,7 +8101,7 @@ function PayrollView({
           <tbody>
             {staff.map((member) => {
               const base = records[member.id]?.salary ?? 0;
-              const s = summary[member.id] ?? { present: 0, late: 0, lateMin: 0, leaveDays: 0 };
+              const s = summary[member.id] ?? { present: 0, late: 0, lateMin: 0, leaveDays: 0, otHours: 0 };
               return (
                 <tr key={member.id} className="border-t border-white/60">
                   <td className="py-3">
@@ -8030,6 +8111,7 @@ function PayrollView({
                   <td className="py-3">{s.present} วัน</td>
                   <td className="py-3">{s.late} วัน{s.lateMin ? ` (${s.lateMin} น.)` : ""}</td>
                   <td className="py-3">{s.leaveDays} วัน</td>
+                  <td className="py-3">{s.otHours} ชม.{s.otHours ? ` (+${money.format(otPay(member.id, base))})` : ""}</td>
                   <td className="py-3">{money.format(base)}</td>
                   <td className="py-3">
                     <input type="number" value={deductions[member.id] ?? ""} onChange={(event) => setDeductions((current) => ({ ...current, [member.id]: event.target.value }))} className="w-24 rounded-xl border border-white/80 bg-white/85 px-2 py-1 outline-none" placeholder="0" />
@@ -8045,7 +8127,7 @@ function PayrollView({
               );
             })}
             {staff.length === 0 ? (
-              <tr><td colSpan={9} className="py-4 text-center text-sm font-semibold text-k2-muted">ยังไม่มีพนักงาน</td></tr>
+              <tr><td colSpan={10} className="py-4 text-center text-sm font-semibold text-k2-muted">ยังไม่มีพนักงาน</td></tr>
             ) : null}
           </tbody>
         </table>
@@ -8180,7 +8262,10 @@ function AttendanceView({
   teamMembers,
   isHr,
   onCheckIn,
-  onCheckOut
+  onCheckOut,
+  overtime,
+  canGrantOt,
+  onAddOvertime
 }: {
   currentUser: TeamMember;
   branchSetting?: BranchSetting;
@@ -8190,8 +8275,15 @@ function AttendanceView({
   isHr: boolean;
   onCheckIn: (selfie: string) => Promise<{ ok: boolean; msg: string }>;
   onCheckOut: (selfie: string) => Promise<{ ok: boolean; msg: string }>;
+  overtime: Overtime[];
+  canGrantOt: boolean;
+  onAddOvertime: (profileId: string, workDate: string, hours: number, note: string) => void;
 }) {
   const [selfie, setSelfie] = useState<string | null>(null);
+  const isOwnerOrHr = currentUser.role === "Owner" || isHr;
+  // ผู้จัดการเปิด OT ให้เฉพาะพนักงานสาขาตัวเอง · เจ้าของ/HR เห็นทุกสาขา
+  const otStaff = teamMembers.filter((member) => member.role !== "Owner" && (isOwnerOrHr || (currentUser.branch && member.branch === currentUser.branch)));
+  const [otForm, setOtForm] = useState({ profileId: "", workDate: todayISO(), hours: "", note: "" });
   const [camOn, setCamOn] = useState(false);
   const [msg, setMsg] = useState("");
   const [busy, setBusy] = useState(false);
@@ -8352,6 +8444,49 @@ function AttendanceView({
             </div>
           )}
           {msg ? <p className="mt-3 text-sm font-semibold text-k2-ink">{msg}</p> : null}
+        </section>
+      ) : null}
+
+      {canGrantOt ? (
+        <section className="glass rounded-[1.5rem] p-5">
+          <h4 className="text-lg font-extrabold">เปิด OT ให้พนักงาน{isOwnerOrHr ? "" : ` · สาขา${currentUser.branch || "-"}`}</h4>
+          <p className="mb-3 text-sm font-semibold text-k2-muted">เลือกพนักงาน + วันที่ + จำนวนชั่วโมง — OT จะไปคำนวณในเงินเดือนอัตโนมัติ</p>
+          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+            <select
+              value={otForm.profileId}
+              onChange={(event) => setOtForm((current) => ({ ...current, profileId: event.target.value }))}
+              className="rounded-2xl border border-white/80 bg-white/85 px-4 py-3 text-sm font-semibold outline-none"
+            >
+              <option value="">เลือกพนักงาน</option>
+              {otStaff.map((member) => (
+                <option key={member.id} value={member.id}>{member.name}{member.branch ? ` · ${member.branch}` : ""}</option>
+              ))}
+            </select>
+            <input type="date" value={otForm.workDate} onChange={(event) => setOtForm((current) => ({ ...current, workDate: event.target.value }))} className="rounded-2xl border border-white/80 bg-white/85 px-4 py-3 text-sm font-semibold outline-none" />
+            <input type="number" min="0" step="0.5" placeholder="ชั่วโมง OT" value={otForm.hours} onChange={(event) => setOtForm((current) => ({ ...current, hours: event.target.value }))} className="rounded-2xl border border-white/80 bg-white/85 px-4 py-3 text-sm font-semibold outline-none" />
+            <input placeholder="หมายเหตุ (ถ้ามี)" value={otForm.note} onChange={(event) => setOtForm((current) => ({ ...current, note: event.target.value }))} className="rounded-2xl border border-white/80 bg-white/85 px-4 py-3 text-sm font-semibold outline-none" />
+          </div>
+          <button
+            type="button"
+            onClick={() => { onAddOvertime(otForm.profileId, otForm.workDate, Number(otForm.hours), otForm.note); setOtForm((current) => ({ ...current, profileId: "", hours: "", note: "" })); }}
+            disabled={!otForm.profileId || !Number(otForm.hours)}
+            className="mt-3 rounded-2xl bg-k2-ink px-5 py-3 text-sm font-extrabold text-white disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            บันทึก OT
+          </button>
+          <div className="mt-4 space-y-2">
+            <p className="text-sm font-bold text-k2-muted">OT เดือนนี้</p>
+            {overtime.filter((row) => isOwnerOrHr || row.branch === currentUser.branch).length === 0 ? (
+              <p className="text-sm font-semibold text-k2-muted">ยังไม่มีรายการ OT</p>
+            ) : (
+              overtime.filter((row) => isOwnerOrHr || row.branch === currentUser.branch).map((row) => (
+                <div key={row.id} className="flex flex-wrap items-center justify-between gap-2 rounded-2xl bg-white/60 px-4 py-2 text-sm">
+                  <span className="font-bold">{nameById(row.profileId)}</span>
+                  <span className="font-semibold text-k2-muted">{row.workDate} · {row.hours} ชม.{row.note ? ` · ${row.note}` : ""}</span>
+                </div>
+              ))
+            )}
+          </div>
         </section>
       ) : null}
 
