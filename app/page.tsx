@@ -2382,6 +2382,38 @@ export default function Page() {
     void appendAudit("received balance payment", jobId, "jobs", existingJob.dbId);
   }
 
+  // แก้ไขข้อมูลงาน (เมื่อกรอกผิด / อัปเดตก่อนอนุมัติเข้าผลิต) — ราคา/มัดจำแก้ผ่านส่วนการเงิน
+  async function updateJob(jobId: string, fields: { title: string; type: JobType; description: string; quantity: number; dueDate: string; priority: Priority; internalNotes: string }) {
+    if (!can("edit_job")) {
+      setDataError("บทบาทนี้ยังไม่มีสิทธิ์แก้ไขงาน");
+      return;
+    }
+    const existing = jobs.find((job) => job.id === jobId);
+    if (!existing) return;
+    const lockedStatuses: JobStatus[] = ["Ready for Production", "In Production", "QC", "Packing", "Delivered / Picked Up", "Completed", "Cancelled"];
+    if (lockedStatuses.includes(existing.status) && currentUser.role !== "Owner") {
+      setDataError("งานนี้อนุมัติเข้าผลิตแล้ว — แก้ไขข้อมูลไม่ได้ (ให้เจ้าของแก้)");
+      return;
+    }
+    if (supabase && existing.dbId && uuidPattern.test(existing.dbId)) {
+      const { error } = await supabase.from("jobs").update({
+        title: fields.title,
+        type: fields.type,
+        description: fields.description,
+        quantity: fields.quantity,
+        due_date: fields.dueDate,
+        priority: fields.priority,
+        internal_notes: fields.internalNotes
+      }).eq("id", existing.dbId);
+      if (error) {
+        setDataError(error.message);
+        return;
+      }
+    }
+    setJobs((current) => current.map((job) => (job.id === jobId ? { ...job, ...fields } : job)));
+    void appendAudit("updated job", jobId, "jobs", existing.dbId);
+  }
+
   async function addComment(jobId: string, text: string) {
     if (!text.trim()) return;
     const existingJob = jobs.find((job) => job.id === jobId);
@@ -3905,7 +3937,7 @@ export default function Page() {
                   <>
                   <LineInvitePanel job={selectedJob} customer={customerRecords.find((item) => item.id === selectedJob.customerId)} onMarkFriend={markCustomerLineFriend} />
                   <HandoffPanel job={selectedJob} currentUser={currentUser} onSubmit={submitHandoff} onAccept={acceptHandoff} onReject={rejectHandoff} />
-                  <JobDetail job={selectedJob} companyProfile={companyProfile} canSeeMoney={canSeeMoney} canEditPayment={can("edit_payment")} canDeleteJob={can("delete_job")} canConfirmDeposit={["Owner", "Manager", "Admin"].includes(currentUser.role)} canApproveWaiver={currentUser.role === "Owner"} onPayment={updatePayment} onConfirmDeposit={confirmDeposit} onReceiveBalance={receiveBalance} onComment={addComment} onMove={requestMove} onDelete={removeJob} teamMembers={teamMembers} canAssign={can("assign_staff")} onAssign={assignStaff} />
+                  <JobDetail job={selectedJob} companyProfile={companyProfile} canSeeMoney={canSeeMoney} canEditPayment={can("edit_payment")} canDeleteJob={can("delete_job")} canConfirmDeposit={["Owner", "Manager", "Admin"].includes(currentUser.role)} canApproveWaiver={currentUser.role === "Owner"} onPayment={updatePayment} onConfirmDeposit={confirmDeposit} onReceiveBalance={receiveBalance} onComment={addComment} onMove={requestMove} onDelete={removeJob} teamMembers={teamMembers} canAssign={can("assign_staff")} onAssign={assignStaff} canEditJob={can("edit_job") && (currentUser.role === "Owner" || !["Ready for Production", "In Production", "QC", "Packing", "Delivered / Picked Up", "Completed", "Cancelled"].includes(selectedJob.status))} onUpdateJob={updateJob} />
                   </>
                 ) : (
                   <EmptyState title="ยังไม่มีงานในระบบ" text="เริ่มจากสร้างลูกค้าและสร้างงานแรกได้เลย" action={() => setActiveView("Create Job")} />
@@ -4973,7 +5005,9 @@ function JobDetail({
   onDelete,
   teamMembers,
   canAssign,
-  onAssign
+  onAssign,
+  canEditJob,
+  onUpdateJob
 }: {
   job: Job;
   companyProfile: CompanyProfile;
@@ -4991,8 +5025,17 @@ function JobDetail({
   teamMembers: TeamMember[];
   canAssign: boolean;
   onAssign: (jobId: string, designer: string, production: string) => void;
+  canEditJob: boolean;
+  onUpdateJob: (jobId: string, fields: { title: string; type: JobType; description: string; quantity: number; dueDate: string; priority: Priority; internalNotes: string }) => void;
 }) {
   const [comment, setComment] = useState("");
+  const [editingJob, setEditingJob] = useState(false);
+  const jobLocked = ["Ready for Production", "In Production", "QC", "Packing", "Delivered / Picked Up", "Completed", "Cancelled"].includes(job.status);
+  const [jobEdit, setJobEdit] = useState({ title: job.title, type: job.type, description: job.description, quantity: job.quantity, dueDate: job.dueDate, priority: job.priority, internalNotes: job.internalNotes });
+  useEffect(() => {
+    setJobEdit({ title: job.title, type: job.type, description: job.description, quantity: job.quantity, dueDate: job.dueDate, priority: job.priority, internalNotes: job.internalNotes });
+    setEditingJob(false);
+  }, [job.id, job.title, job.type, job.description, job.quantity, job.dueDate, job.priority, job.internalNotes]);
   const [assignDesigner, setAssignDesigner] = useState(job.assignedDesigner);
   const [assignProduction, setAssignProduction] = useState(job.assignedProduction);
   useEffect(() => {
@@ -5083,6 +5126,40 @@ function JobDetail({
           <Info label="ผู้รับผิดชอบผลิต" value={staffLabel(job.assignedProduction)} icon={Factory} />
           <Info label="โน้ตภายใน" value={job.internalNotes} icon={ClipboardList} />
         </div>
+
+        {canEditJob ? (
+          <div className="mt-5 rounded-3xl bg-white/60 p-5">
+            <div className="mb-3 flex items-center justify-between gap-2">
+              <h4 className="font-semibold">แก้ไขข้อมูลงาน</h4>
+              {editingJob ? null : (
+                <button type="button" onClick={() => setEditingJob(true)} className="rounded-2xl bg-white/80 px-4 py-2 text-sm font-bold text-k2-ink shadow-sm">✏️ แก้ไข</button>
+              )}
+            </div>
+            {editingJob ? (
+              <div className="grid gap-3 sm:grid-cols-2">
+                <input value={jobEdit.title} onChange={(event) => setJobEdit((current) => ({ ...current, title: event.target.value }))} placeholder="ชื่องาน" className="rounded-2xl border border-white/80 bg-white/85 px-4 py-3 text-sm font-semibold outline-none sm:col-span-2" />
+                <select value={jobEdit.type} onChange={(event) => setJobEdit((current) => ({ ...current, type: event.target.value as JobType }))} className="rounded-2xl border border-white/80 bg-white/85 px-4 py-3 text-sm font-semibold outline-none">
+                  {jobTypes.map((type) => (<option key={type} value={type}>{jobTypeLabel[type]}</option>))}
+                </select>
+                <input type="number" min="1" value={jobEdit.quantity} onChange={(event) => setJobEdit((current) => ({ ...current, quantity: Number(event.target.value) }))} placeholder="จำนวน" className="rounded-2xl border border-white/80 bg-white/85 px-4 py-3 text-sm font-semibold outline-none" />
+                <input type="date" value={jobEdit.dueDate} onChange={(event) => setJobEdit((current) => ({ ...current, dueDate: event.target.value }))} className="rounded-2xl border border-white/80 bg-white/85 px-4 py-3 text-sm font-semibold outline-none" />
+                <select value={jobEdit.priority} onChange={(event) => setJobEdit((current) => ({ ...current, priority: event.target.value as Priority }))} className="rounded-2xl border border-white/80 bg-white/85 px-4 py-3 text-sm font-semibold outline-none">
+                  {(["Normal", "Urgent", "Very Urgent", "Today"] as Priority[]).map((priority) => (<option key={priority} value={priority}>{priorityLabel[priority]}</option>))}
+                </select>
+                <textarea value={jobEdit.description} onChange={(event) => setJobEdit((current) => ({ ...current, description: event.target.value }))} placeholder="รายละเอียดงาน" className="min-h-20 rounded-2xl border border-white/80 bg-white/85 px-4 py-3 text-sm font-semibold outline-none sm:col-span-2" />
+                <textarea value={jobEdit.internalNotes} onChange={(event) => setJobEdit((current) => ({ ...current, internalNotes: event.target.value }))} placeholder="โน้ตภายใน" className="min-h-16 rounded-2xl border border-white/80 bg-white/85 px-4 py-3 text-sm font-semibold outline-none sm:col-span-2" />
+                <div className="flex gap-2 sm:col-span-2">
+                  <button type="button" onClick={() => { onUpdateJob(job.id, jobEdit); setEditingJob(false); }} className="rounded-2xl bg-k2-ink px-5 py-3 text-sm font-extrabold text-white">บันทึก</button>
+                  <button type="button" onClick={() => { setJobEdit({ title: job.title, type: job.type, description: job.description, quantity: job.quantity, dueDate: job.dueDate, priority: job.priority, internalNotes: job.internalNotes }); setEditingJob(false); }} className="rounded-2xl bg-white/70 px-5 py-3 text-sm font-bold text-k2-muted">ยกเลิก</button>
+                </div>
+              </div>
+            ) : (
+              <p className="text-sm font-semibold text-k2-muted">แก้ชื่อ/ประเภท/จำนวน/รายละเอียด/กำหนดส่ง/ความเร่งด่วน/โน้ต ได้ก่อนอนุมัติเข้าผลิต · ราคา/มัดจำแก้ที่ส่วนการเงิน</p>
+            )}
+          </div>
+        ) : jobLocked ? (
+          <p className="mt-5 rounded-3xl bg-white/50 px-4 py-3 text-sm font-semibold text-k2-muted">🔒 งานนี้อนุมัติเข้าผลิตแล้ว — แก้ไขข้อมูลไม่ได้</p>
+        ) : null}
 
         {canAssign ? (
           <div className="mt-5 rounded-3xl bg-white/60 p-5">
