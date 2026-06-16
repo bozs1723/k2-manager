@@ -20,6 +20,7 @@ import {
   Factory,
   Inbox,
   FileImage,
+  Home,
   LayoutDashboard,
   ListTodo,
   Lock,
@@ -1210,6 +1211,8 @@ export default function Page() {
   );
   // เมนูที่แสดงจริง — ตัด "Detail" (เปิดผ่านการเลือกงานเท่านั้น ไม่ใช่ปุ่มเมนู)
   const menuItems = useMemo(() => navigationItems.filter((item) => item.label !== "Detail"), [navigationItems]);
+  // หน้าแรก = เมนูแรกที่ผู้ใช้มีสิทธิ์เห็น
+  const homeView = navigationItems[0]?.label ?? "Dashboard";
 
   useEffect(() => {
     if (!supabase) return;
@@ -3478,6 +3481,17 @@ export default function Page() {
           <header className="glass glass-solid sticky top-3 z-30 mb-4 rounded-[1.5rem] p-3">
             <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
               <div className="flex items-center gap-3">
+                {activeView !== homeView ? (
+                  <button
+                    type="button"
+                    onClick={() => setActiveView(homeView)}
+                    className="inline-flex shrink-0 items-center gap-2 rounded-2xl bg-k2-ink px-4 py-2.5 text-sm font-bold text-white shadow-sm"
+                    title="กลับหน้าแรก"
+                  >
+                    <Home className="h-4 w-4" />
+                    หน้าแรก
+                  </button>
+                ) : null}
                 <KLogoMark className="h-[5.25rem] w-[5.25rem] shrink-0 lg:hidden" />
                 <div>
                   <p className="text-sm font-semibold text-k2-muted">{appTagline}</p>
@@ -3680,6 +3694,19 @@ export default function Page() {
           {dataError ? (
             <div className="mb-4 rounded-3xl border border-rose-100 bg-rose-50 px-5 py-3 text-sm font-extrabold text-rose-700 shadow-sm">
               {dataError}
+            </div>
+          ) : null}
+
+          {/* ปุ่มเช็คอินใหญ่ — โชว์เด่นบนหน้าแรก */}
+          {activeView === homeView ? (
+            <div className="mb-4">
+              <CheckInControl
+                variant="hero"
+                branch={currentUser.branch}
+                myAttendance={myAttendance}
+                onCheckIn={checkIn}
+                onCheckOut={checkOut}
+              />
             </div>
           ) : null}
 
@@ -3921,12 +3948,15 @@ export default function Page() {
         />
       ) : null}
 
-      <CheckInFab
-        branch={currentUser.branch}
-        myAttendance={myAttendance}
-        onCheckIn={checkIn}
-        onCheckOut={checkOut}
-      />
+      {activeView !== homeView ? (
+        <CheckInControl
+          variant="fab"
+          branch={currentUser.branch}
+          myAttendance={myAttendance}
+          onCheckIn={checkIn}
+          onCheckOut={checkOut}
+        />
+      ) : null}
 
     </main>
   );
@@ -8152,13 +8182,15 @@ function LeaveView({
   );
 }
 
-// ปุ่มลอยเช็คอิน/เช็คเอาท์ — เด่นมุมล่างขวา เห็นได้ทุกหน้า (โดยเฉพาะมือถือ)
-function CheckInFab({
+// ปุ่มเช็คอิน/เช็คเอาท์ — variant "hero" = การ์ดใหญ่บนหน้าแรก, "fab" = ปุ่มลอยมุมล่างขวา
+function CheckInControl({
+  variant,
   branch,
   myAttendance,
   onCheckIn,
   onCheckOut
 }: {
+  variant: "hero" | "fab";
   branch?: string;
   myAttendance: Attendance | null;
   onCheckIn: () => Promise<CheckInResult>;
@@ -8212,50 +8244,92 @@ function CheckInFab({
 
   if (!branch) return null;
 
-  return (
-    <>
-      <div className="fixed bottom-5 right-4 z-40 flex flex-col items-end gap-2">
-        {errMsg ? (
-          <span className="max-w-[15rem] rounded-2xl bg-rose-600 px-3 py-2 text-right text-xs font-bold text-white shadow-lg">{errMsg}</span>
-        ) : null}
-        {done ? (
-          <div className="flex items-center gap-2 rounded-full bg-white/90 px-5 py-3 font-extrabold text-emerald-700 shadow-xl ring-1 ring-emerald-200">
-            <Clock3 className="h-5 w-5" />
-            ลงเวลาครบแล้ววันนี้ ✓
+  const trigger = variant === "hero" ? (
+    <section className={`glass rounded-[1.75rem] p-6 shadow-xl ${working ? "ring-2 ring-k2-ink/20" : done ? "" : "ring-2 ring-emerald-300"}`}>
+      <div className="flex flex-col items-center gap-4 sm:flex-row sm:items-center sm:justify-between sm:text-left">
+        <div className="flex items-center gap-4">
+          <motion.span
+            animate={done ? {} : working ? { rotate: [0, 12, -12, 0] } : { scale: [1, 1.1, 1] }}
+            transition={{ repeat: done ? 0 : Infinity, duration: working ? 2 : 1.6 }}
+            className={`grid h-16 w-16 shrink-0 place-items-center rounded-2xl ${done ? "bg-emerald-100 text-emerald-700" : working ? "bg-k2-ink text-white" : "bg-emerald-500 text-white"}`}
+          >
+            <Clock3 className="h-9 w-9" />
+          </motion.span>
+          <div className="text-center sm:text-left">
+            <p className="text-sm font-bold text-k2-muted">{done ? "ลงเวลาวันนี้" : working ? "กำลังทำงาน — เวลาเดินอยู่" : "ลงเวลาเข้างาน"}</p>
+            {working ? (
+              <p className="text-4xl font-black tabular-nums tracking-tight text-k2-ink">{elapsedLabel}</p>
+            ) : done ? (
+              <p className="text-2xl font-extrabold text-emerald-700">ทำงานครบแล้ว ✓</p>
+            ) : (
+              <p className="text-2xl font-extrabold text-k2-ink">สวัสดี! พร้อมเริ่มงานหรือยัง?</p>
+            )}
           </div>
+        </div>
+        {done ? (
+          <span className="rounded-2xl bg-emerald-100 px-5 py-3 font-extrabold text-emerald-700">เจอกันใหม่พรุ่งนี้ 🌙</span>
         ) : (
           <motion.button
             type="button"
             onClick={handleClick}
             disabled={busy}
-            whileTap={{ scale: 0.94 }}
-            className={`flex items-center gap-3 rounded-full px-6 py-4 text-left font-extrabold text-white shadow-2xl disabled:opacity-70 ${
-              working ? "bg-k2-ink" : "bg-emerald-500"
-            }`}
+            whileTap={{ scale: 0.96 }}
+            className={`w-full rounded-2xl px-8 py-4 text-xl font-extrabold text-white shadow-lg disabled:opacity-70 sm:w-auto ${working ? "bg-rose-500" : "bg-emerald-500"}`}
           >
-            <motion.span
-              animate={working ? { rotate: [0, 12, -12, 0] } : { scale: [1, 1.12, 1] }}
-              transition={{ repeat: Infinity, duration: working ? 2 : 1.6 }}
-              className="grid h-11 w-11 shrink-0 place-items-center rounded-full bg-white/20"
-            >
-              <Clock3 className="h-7 w-7" />
-            </motion.span>
-            <span className="flex flex-col leading-tight">
-              {working ? (
-                <>
-                  <span className="text-xs font-bold opacity-80">กำลังทำงาน · แตะเพื่อเช็คเอาท์</span>
-                  <span className="text-2xl tabular-nums tracking-tight">{elapsedLabel}</span>
-                </>
-              ) : (
-                <>
-                  <span className="text-xs font-bold opacity-80">{busy ? "กำลังบันทึก..." : "เริ่มงานวันนี้"}</span>
-                  <span className="text-xl">เช็คอิน</span>
-                </>
-              )}
-            </span>
+            {busy ? "กำลังบันทึก..." : working ? "เช็คเอาท์ออกงาน" : "เช็คอินเข้างาน"}
           </motion.button>
         )}
       </div>
+      {errMsg ? <p className="mt-3 text-center text-sm font-bold text-rose-600 sm:text-left">{errMsg}</p> : null}
+    </section>
+  ) : (
+    <div className="fixed bottom-5 right-4 z-40 flex flex-col items-end gap-2">
+      {errMsg ? (
+        <span className="max-w-[15rem] rounded-2xl bg-rose-600 px-3 py-2 text-right text-xs font-bold text-white shadow-lg">{errMsg}</span>
+      ) : null}
+      {done ? (
+        <div className="flex items-center gap-2 rounded-full bg-white/90 px-5 py-3 font-extrabold text-emerald-700 shadow-xl ring-1 ring-emerald-200">
+          <Clock3 className="h-5 w-5" />
+          ลงเวลาครบแล้ววันนี้ ✓
+        </div>
+      ) : (
+        <motion.button
+          type="button"
+          onClick={handleClick}
+          disabled={busy}
+          whileTap={{ scale: 0.94 }}
+          className={`flex items-center gap-3 rounded-full px-6 py-4 text-left font-extrabold text-white shadow-2xl disabled:opacity-70 ${
+            working ? "bg-k2-ink" : "bg-emerald-500"
+          }`}
+        >
+          <motion.span
+            animate={working ? { rotate: [0, 12, -12, 0] } : { scale: [1, 1.12, 1] }}
+            transition={{ repeat: Infinity, duration: working ? 2 : 1.6 }}
+            className="grid h-11 w-11 shrink-0 place-items-center rounded-full bg-white/20"
+          >
+            <Clock3 className="h-7 w-7" />
+          </motion.span>
+          <span className="flex flex-col leading-tight">
+            {working ? (
+              <>
+                <span className="text-xs font-bold opacity-80">กำลังทำงาน · แตะเพื่อเช็คเอาท์</span>
+                <span className="text-2xl tabular-nums tracking-tight">{elapsedLabel}</span>
+              </>
+            ) : (
+              <>
+                <span className="text-xs font-bold opacity-80">{busy ? "กำลังบันทึก..." : "เริ่มงานวันนี้"}</span>
+                <span className="text-xl">เช็คอิน</span>
+              </>
+            )}
+          </span>
+        </motion.button>
+      )}
+    </div>
+  );
+
+  return (
+    <>
+      {trigger}
 
       {checkInPopup ? (
         <motion.div
