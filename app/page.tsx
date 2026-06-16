@@ -8489,17 +8489,19 @@ function CheckInControl({
   const working = !!(myAttendance && myAttendance.checkInAt && !myAttendance.checkOutAt);
   const done = !!(myAttendance && myAttendance.checkInAt && myAttendance.checkOutAt);
 
-  // เดินนาฬิกาทุกวินาทีระหว่างทำงาน
+  // เดินนาฬิกาทุกวินาที (ทั้งตอนยังไม่เข้างาน=โชว์เวลาปัจจุบัน และตอนทำงาน=นับเวลา)
   useEffect(() => {
-    if (!working) return;
+    if (done) return;
     const timer = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(timer);
-  }, [working]);
+  }, [done]);
 
+  const pad = (n: number) => String(n).padStart(2, "0");
   // เวลาที่ผ่านไปตั้งแต่เช็คอิน -> HH:MM:SS
   const elapsedMs = working && myAttendance?.checkInAt ? Math.max(0, now - new Date(myAttendance.checkInAt).getTime()) : 0;
-  const pad = (n: number) => String(n).padStart(2, "0");
   const elapsedLabel = `${pad(Math.floor(elapsedMs / 3600000))}:${pad(Math.floor((elapsedMs % 3600000) / 60000))}:${pad(Math.floor((elapsedMs % 60000) / 1000))}`;
+  // เวลาปัจจุบัน (เดินสด) -> HH:MM:SS
+  const clockLabel = new Date(now).toLocaleTimeString("th-TH", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
 
   async function handleClick() {
     if (busy || done) return;
@@ -8540,13 +8542,13 @@ function CheckInControl({
             <Clock3 className="h-9 w-9" />
           </motion.span>
           <div className="text-center sm:text-left">
-            <p className="text-sm font-bold text-k2-muted">{done ? "ลงเวลาวันนี้" : working ? "กำลังทำงาน — เวลาเดินอยู่" : "ลงเวลาเข้างาน"}</p>
+            <p className="text-sm font-bold text-k2-muted">{done ? "ลงเวลาวันนี้" : working ? "กำลังทำงาน — เวลาเดินอยู่" : `เวลาตอนนี้ · ${clockLabel}`}</p>
             {working ? (
               <p className="text-4xl font-black tabular-nums tracking-tight text-k2-ink">{elapsedLabel}</p>
             ) : done ? (
               <p className="text-2xl font-extrabold text-emerald-700">ทำงานครบแล้ว ✓</p>
             ) : (
-              <p className="text-2xl font-extrabold text-k2-ink">สวัสดี! พร้อมเริ่มงานหรือยัง?</p>
+              <p className="text-4xl font-black tabular-nums tracking-tight text-k2-ink">{clockLabel}</p>
             )}
           </div>
         </div>
@@ -8601,7 +8603,7 @@ function CheckInControl({
               </>
             ) : (
               <>
-                <span className="text-xs font-bold opacity-80">{busy ? "กำลังบันทึก..." : "เริ่มงานวันนี้"}</span>
+                <span className="text-xs font-bold opacity-80">{busy ? "กำลังบันทึก..." : `เช็คอิน · ${clockLabel}`}</span>
                 <span className="text-xl">เช็คอิน</span>
               </>
             )}
