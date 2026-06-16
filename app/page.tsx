@@ -13,6 +13,7 @@ import {
   CheckCircle2,
   ChevronDown,
   ChevronRight,
+  ChevronLeft,
   ClipboardList,
   ClipboardPlus,
   Clock3,
@@ -47,7 +48,7 @@ import { customers as initialCustomers, initialAuditLog, initialJobs, statuses, 
 import { createSupabaseAuthWorker, isSupabaseConfigured, supabase } from "@/lib/supabase";
 import { CUSTOMER_CODE_ADMINS, CUSTOMER_CODE_PAGES, customerCodeYear, formatCustomerCode, nextCustomerSeq } from "@/lib/customer-code";
 import { branchForJobType } from "@/lib/job-routing";
-import type { AppNotification, Attendance, AuditEvent, BranchSetting, Customer, ExpressRequest, Holiday, Job, JobStatus, JobType, Lead, LeaveRequest, PaymentStatus, Priority, Quotation, QuoteStatus, Role, TeamMember } from "@/lib/types";
+import type { AppNotification, Attendance, AuditEvent, BranchSetting, Customer, ExpressRequest, FileAsset, Holiday, Job, JobStatus, JobType, Lead, LeaveRequest, Overtime, PaymentStatus, Priority, Quotation, QuoteStatus, Role, TeamMember } from "@/lib/types";
 
 type ImportedCustomer = Pick<Customer, "name" | "phone" | "lineId" | "email"> & {
   notes: string;
@@ -946,7 +947,7 @@ function jobFromRow(
   profileNames: Map<string, string>,
   comments: Array<{ id: string; job_id: string; comment: string; created_at: string; author_id: string | null }>,
   history: Array<{ id: string; job_id: string; from_status: JobStatus | null; to_status: JobStatus; created_at: string; changed_by: string | null }>,
-  files: Array<{ id: string; job_id: string; file_name: string; file_type: string; file_size: number | null }>
+  files: Array<{ id: string; job_id: string; file_name: string; file_type: string; file_size: number | null; url?: string | null }>
 ): Job {
   const price = Number(row.price);
   const deposit = Number(row.deposit);
@@ -973,7 +974,8 @@ function jobFromRow(
       id: file.id,
       name: file.file_name,
       type: file.file_type.includes("pdf") ? "pdf" : file.file_type.includes("zip") ? "zip" : file.file_type.includes("ai") ? "ai" : "image",
-      size: file.file_size ? `${Math.max(file.file_size / 1000000, 0.01).toFixed(2)} MB` : "ไฟล์แนบ"
+      size: file.file_size ? `${Math.max(file.file_size / 1000000, 0.01).toFixed(2)} MB` : "ไฟล์แนบ",
+      url: file.url ?? undefined
     })),
     orderDate: row.order_date,
     dueDate: row.due_date,
@@ -1019,7 +1021,7 @@ function jobFromRow(
   };
 }
 
-function attendanceFromRow(row: { id: string; profile_id: string; work_date: string; check_in_at: string | null; check_out_at: string | null; check_in_selfie: string | null; check_in_lat: number | string | null; check_in_lng: number | string | null; late_minutes: number | null; status: string | null }): Attendance {
+function attendanceFromRow(row: { id: string; profile_id: string; work_date: string; check_in_at: string | null; check_out_at: string | null; check_in_selfie: string | null; check_out_selfie?: string | null; check_in_lat: number | string | null; check_in_lng: number | string | null; late_minutes: number | null; status: string | null }): Attendance {
   return {
     id: row.id,
     profileId: row.profile_id,
@@ -1027,6 +1029,7 @@ function attendanceFromRow(row: { id: string; profile_id: string; work_date: str
     checkInAt: row.check_in_at,
     checkOutAt: row.check_out_at,
     checkInSelfie: row.check_in_selfie,
+    checkOutSelfie: row.check_out_selfie ?? null,
     checkInLat: row.check_in_lat != null ? Number(row.check_in_lat) : null,
     checkInLng: row.check_in_lng != null ? Number(row.check_in_lng) : null,
     lateMinutes: row.late_minutes ?? 0,
@@ -1155,7 +1158,8 @@ export default function Page() {
   const [leaveRequests, setLeaveRequests] = useState<LeaveRequest[]>([]);
   const [holidays, setHolidays] = useState<Holiday[]>([]);
   const [payrollMonth, setPayrollMonth] = useState(todayISO().slice(0, 7));
-  const [payrollSummary, setPayrollSummary] = useState<Record<string, { present: number; late: number; lateMin: number; leaveDays: number }>>({});
+  const [payrollSummary, setPayrollSummary] = useState<Record<string, { present: number; late: number; lateMin: number; leaveDays: number; otHours: number }>>({});
+  const [overtimeRecords, setOvertimeRecords] = useState<Overtime[]>([]);
   const [notifications, setNotifications] = useState<AppNotification[]>([]);
   const [showNotifPanel, setShowNotifPanel] = useState(false);
   const notifPanelRef = useRef<HTMLDivElement>(null);
@@ -1665,6 +1669,33 @@ export default function Page() {
     setActiveView(navigationItems[0]?.label ?? "Dashboard");
   }, [activeView, isAuthed, navigationItems]);
 
+  // ผูกการนำทางเข้ากับ browser history เพื่อให้ปุ่มย้อนกลับ (มือถือ) กลับ view เดิม ไม่หลุดออกจากแอป
+  const historyPopRef = useRef(false);
+  const historyInitRef = useRef(false);
+  useEffect(() => {
+    if (!isAuthed) return;
+    if (historyPopRef.current) { historyPopRef.current = false; return; }
+    const entry = { k2view: activeView, k2job: selectedJobId };
+    if (!historyInitRef.current) {
+      historyInitRef.current = true;
+      window.history.replaceState(entry, "");
+    } else {
+      window.history.pushState(entry, "");
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeView, isAuthed]);
+  useEffect(() => {
+    function onPop(event: PopStateEvent) {
+      const state = event.state as { k2view?: string; k2job?: string } | null;
+      if (!state || typeof state.k2view !== "string") return;
+      historyPopRef.current = true;
+      if (state.k2job) setSelectedJobId(state.k2job);
+      setActiveView(state.k2view);
+    }
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
+  }, []);
+
   useEffect(() => {
     if (!isAuthed) return;
     if (activeView === "HR") {
@@ -1675,6 +1706,7 @@ export default function Page() {
     if (activeView === "Attendance") {
       void loadBranchSettings();
       void loadAttendance();
+      void loadOvertime(payrollMonth);
     }
     if (activeView === "Leave") {
       void loadLeaves();
@@ -1682,6 +1714,7 @@ export default function Page() {
     }
     if (activeView === "Payroll") {
       void loadHrRecords();
+      void loadOvertime(payrollMonth);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isAuthed, activeView]);
@@ -1724,7 +1757,7 @@ export default function Page() {
         supabase.from("jobs").select("*").order("created_at", { ascending: false }),
         supabase.from("job_comments").select("id, job_id, comment, created_at, author_id").order("created_at", { ascending: false }),
         supabase.from("job_status_history").select("id, job_id, from_status, to_status, created_at, changed_by").order("created_at", { ascending: true }),
-        supabase.from("job_files").select("id, job_id, file_name, file_type, file_size").order("created_at", { ascending: true }),
+        supabase.from("job_files").select("id, job_id, file_name, file_type, file_size, url").order("created_at", { ascending: true }),
         supabase.from("audit_log").select("id, action, target_table, target_id, metadata, created_at, actor_id").order("created_at", { ascending: false }).limit(80),
         supabase.from("role_permissions").select("role, permissions"),
         supabase.from("shop_state").select("express_orders_enabled").limit(1),
@@ -1768,7 +1801,7 @@ export default function Page() {
           profileNames,
           (commentsResult.data ?? []) as Array<{ id: string; job_id: string; comment: string; created_at: string; author_id: string | null }>,
           (historyResult.data ?? []) as Array<{ id: string; job_id: string; from_status: JobStatus | null; to_status: JobStatus; created_at: string; changed_by: string | null }>,
-          (filesResult.data ?? []) as Array<{ id: string; job_id: string; file_name: string; file_type: string; file_size: number | null }>
+          (filesResult.data ?? []) as Array<{ id: string; job_id: string; file_name: string; file_type: string; file_size: number | null; url?: string | null }>
         )
       );
       setJobs((current) => reuseIfSame(current, nextJobs));
@@ -2365,6 +2398,91 @@ export default function Page() {
     void appendAudit("received balance payment", jobId, "jobs", existingJob.dbId);
   }
 
+  // แก้ไขข้อมูลงาน (เมื่อกรอกผิด / อัปเดตก่อนอนุมัติเข้าผลิต) — ราคา/มัดจำแก้ผ่านส่วนการเงิน
+  async function updateJob(jobId: string, fields: { title: string; type: JobType; description: string; quantity: number; dueDate: string; priority: Priority; internalNotes: string }) {
+    if (!can("edit_job")) {
+      setDataError("บทบาทนี้ยังไม่มีสิทธิ์แก้ไขงาน");
+      return;
+    }
+    const existing = jobs.find((job) => job.id === jobId);
+    if (!existing) return;
+    const lockedStatuses: JobStatus[] = ["Ready for Production", "In Production", "QC", "Packing", "Delivered / Picked Up", "Completed", "Cancelled"];
+    if (lockedStatuses.includes(existing.status) && currentUser.role !== "Owner") {
+      setDataError("งานนี้อนุมัติเข้าผลิตแล้ว — แก้ไขข้อมูลไม่ได้ (ให้เจ้าของแก้)");
+      return;
+    }
+    if (supabase && existing.dbId && uuidPattern.test(existing.dbId)) {
+      const { error } = await supabase.from("jobs").update({
+        title: fields.title,
+        type: fields.type,
+        description: fields.description,
+        quantity: fields.quantity,
+        due_date: fields.dueDate,
+        priority: fields.priority,
+        internal_notes: fields.internalNotes
+      }).eq("id", existing.dbId);
+      if (error) {
+        setDataError(error.message);
+        return;
+      }
+    }
+    setJobs((current) => current.map((job) => (job.id === jobId ? { ...job, ...fields } : job)));
+    void appendAudit("updated job", jobId, "jobs", existing.dbId);
+  }
+
+  // แนบไฟล์เข้างาน (อัปโหลดจริงขึ้น Supabase Storage bucket "job-files") + ดู/ดาวน์โหลดในแอป
+  async function uploadJobFile(job: Job, file: File) {
+    if (!can("edit_job")) {
+      setDataError("บทบาทนี้ยังไม่มีสิทธิ์แนบไฟล์");
+      return;
+    }
+    if (!file) return;
+    if (file.size > 10_000_000) {
+      setDataError("ไฟล์ต้องไม่เกิน 10 MB");
+      return;
+    }
+    const kind: FileAsset["type"] = file.type.includes("pdf") ? "pdf" : file.name.toLowerCase().endsWith(".zip") ? "zip" : file.name.toLowerCase().endsWith(".ai") ? "ai" : "image";
+    const sizeText = `${Math.max(file.size / 1000000, 0.01).toFixed(2)} MB`;
+    if (supabase && isSupabaseConfigured && job.dbId && uuidPattern.test(job.dbId)) {
+      const safeName = file.name.replace(/[^\w.\-]+/g, "_");
+      const path = `${job.dbId}/${Date.now()}-${safeName}`;
+      const { error: upErr } = await supabase.storage.from("job-files").upload(path, file, { contentType: file.type || undefined });
+      if (upErr) {
+        setDataError(`อัปโหลดไฟล์ไม่สำเร็จ: ${upErr.message}`);
+        return;
+      }
+      const { data: pub } = supabase.storage.from("job-files").getPublicUrl(path);
+      const { data: row, error } = await supabase.from("job_files").insert({ job_id: job.dbId, file_name: file.name, file_type: file.type || "file", file_size: file.size, url: pub.publicUrl }).select("id").single();
+      if (error) {
+        setDataError(error.message);
+        return;
+      }
+      const asset: FileAsset = { id: row.id as string, name: file.name, type: kind, size: sizeText, url: pub.publicUrl };
+      setJobs((current) => current.map((item) => (item.id === job.id ? { ...item, files: [...item.files, asset] } : item)));
+    } else {
+      const dataUrl = await readImageAsDataUrl(file);
+      const asset: FileAsset = { id: crypto.randomUUID(), name: file.name, type: kind, size: sizeText, url: dataUrl };
+      setJobs((current) => current.map((item) => (item.id === job.id ? { ...item, files: [...item.files, asset] } : item)));
+    }
+    void appendAudit("attached file", `${job.id} · ${file.name}`, "jobs", job.dbId);
+  }
+
+  async function removeJobFile(job: Job, fileId: string) {
+    if (!can("edit_job")) {
+      setDataError("บทบาทนี้ยังไม่มีสิทธิ์ลบไฟล์");
+      return;
+    }
+    if (supabase && isSupabaseConfigured && uuidPattern.test(fileId)) {
+      const { error } = await supabase.from("job_files").delete().eq("id", fileId);
+      if (error) {
+        setDataError(error.message);
+        return;
+      }
+    }
+    setJobs((current) => current.map((item) => (item.id === job.id ? { ...item, files: item.files.filter((file) => file.id !== fileId) } : item)));
+    void appendAudit("removed file", job.id, "jobs", job.dbId);
+  }
+
   async function addComment(jobId: string, text: string) {
     if (!text.trim()) return;
     const existingJob = jobs.find((job) => job.id === jobId);
@@ -2773,7 +2891,7 @@ export default function Page() {
     if (!supabase) return;
     const { data, error } = await supabase
       .from("attendance")
-      .select("id, profile_id, work_date, check_in_at, check_out_at, check_in_selfie, check_in_lat, check_in_lng, late_minutes, status")
+      .select("id, profile_id, work_date, check_in_at, check_out_at, check_in_selfie, check_out_selfie, check_in_lat, check_in_lng, late_minutes, status")
       .eq("work_date", todayISO());
     if (error) {
       setDataError(error.message);
@@ -2814,7 +2932,7 @@ export default function Page() {
             }
             await loadAttendance();
           } else {
-            setMyAttendance({ id: crypto.randomUUID(), profileId: currentUser.id, workDate: todayISO(), checkInAt, checkOutAt: null, checkInSelfie: null, checkInLat: lat, checkInLng: lng, lateMinutes: late, status });
+            setMyAttendance({ id: crypto.randomUUID(), profileId: currentUser.id, workDate: todayISO(), checkInAt, checkOutAt: null, checkInSelfie: null, checkOutSelfie: null, checkInLat: lat, checkInLng: lng, lateMinutes: late, status });
           }
           void appendAudit("checked in", currentUser.name, "attendance", null);
           resolve({ ok: true, msg: late > 0 ? `เช็คอินแล้ว — สาย ${late} นาที` : "เช็คอินตรงเวลา ✓", checkInAt, status, lateMinutes: late });
@@ -2829,11 +2947,11 @@ export default function Page() {
     if (!myAttendance) return { ok: false, msg: "ยังไม่ได้เช็คอินวันนี้" };
     const checkOutAt = new Date().toISOString();
     if (supabase && uuidPattern.test(currentUser.id)) {
-      const { error } = await supabase.from("attendance").update({ check_out_at: checkOutAt }).eq("id", myAttendance.id);
+      const { error } = await supabase.from("attendance").update({ check_out_at: checkOutAt, check_out_selfie: null }).eq("id", myAttendance.id);
       if (error) return { ok: false, msg: error.message };
       await loadAttendance();
     } else {
-      setMyAttendance({ ...myAttendance, checkOutAt });
+      setMyAttendance({ ...myAttendance, checkOutAt, checkOutSelfie: null });
     }
     void appendAudit("checked out", currentUser.name, "attendance", null);
     return { ok: true, msg: "เช็คเอาท์แล้ว ✓" };
@@ -2939,12 +3057,13 @@ export default function Page() {
     const [year, mon] = month.split("-").map(Number);
     const lastDay = new Date(year, mon, 0).getDate();
     const end = `${month}-${String(lastDay).padStart(2, "0")}`;
-    const [attRes, leaveRes] = await Promise.all([
+    const [attRes, leaveRes, otRes] = await Promise.all([
       supabase.from("attendance").select("profile_id, status, late_minutes, check_in_at").gte("work_date", start).lte("work_date", end),
-      supabase.from("leave_requests").select("profile_id, start_date, end_date, status").eq("status", "approved").lte("start_date", end).gte("end_date", start)
+      supabase.from("leave_requests").select("profile_id, start_date, end_date, status").eq("status", "approved").lte("start_date", end).gte("end_date", start),
+      supabase.from("overtime").select("profile_id, hours").gte("work_date", start).lte("work_date", end)
     ]);
-    const summary: Record<string, { present: number; late: number; lateMin: number; leaveDays: number }> = {};
-    const ensure = (id: string) => (summary[id] = summary[id] ?? { present: 0, late: 0, lateMin: 0, leaveDays: 0 });
+    const summary: Record<string, { present: number; late: number; lateMin: number; leaveDays: number; otHours: number }> = {};
+    const ensure = (id: string) => (summary[id] = summary[id] ?? { present: 0, late: 0, lateMin: 0, leaveDays: 0, otHours: 0 });
     ((attRes.data ?? []) as Array<{ profile_id: string; status: string | null; late_minutes: number | null; check_in_at: string | null }>).forEach((row) => {
       const s = ensure(row.profile_id);
       if (row.check_in_at) s.present += 1;
@@ -2959,7 +3078,77 @@ export default function Page() {
       const le = new Date(row.end_date < end ? row.end_date : end);
       s.leaveDays += Math.max(0, Math.round((le.getTime() - ls.getTime()) / 86400000) + 1);
     });
+    ((otRes.data ?? []) as Array<{ profile_id: string; hours: number | string | null }>).forEach((row) => {
+      ensure(row.profile_id).otHours += Number(row.hours ?? 0);
+    });
     setPayrollSummary(summary);
+  }
+
+  // โหลดรายการ OT ของเดือนที่เลือก (สำหรับผู้จัดการ/HR ดู+จัดการ)
+  async function loadOvertime(month: string) {
+    if (!supabase || !isSupabaseConfigured) return;
+    const start = `${month}-01`;
+    const [year, mon] = month.split("-").map(Number);
+    const end = `${month}-${String(new Date(year, mon, 0).getDate()).padStart(2, "0")}`;
+    const { data, error } = await supabase
+      .from("overtime")
+      .select("id, profile_id, work_date, hours, note, branch, approved_by, created_at")
+      .gte("work_date", start)
+      .lte("work_date", end)
+      .order("work_date", { ascending: false });
+    if (error) return;
+    const next = ((data ?? []) as Array<{ id: string; profile_id: string; work_date: string; hours: number | string | null; note: string | null; branch: string | null; approved_by: string | null; created_at: string }>).map((row) => ({
+      id: row.id,
+      profileId: row.profile_id,
+      workDate: row.work_date,
+      hours: Number(row.hours ?? 0),
+      note: row.note ?? "",
+      branch: row.branch ?? undefined,
+      approvedBy: row.approved_by ?? undefined,
+      createdAt: row.created_at
+    }));
+    setOvertimeRecords((current) => reuseIfSame(current, next));
+  }
+
+  // ผู้จัดการสาขา (หรือ HR/เจ้าของ) เปิด/บันทึก OT ให้พนักงานของสาขาตัวเอง
+  async function addOvertime(profileId: string, workDate: string, hours: number, note: string) {
+    if (!(userHasRole(currentUser, "Manager") || can("manage_hr") || currentUser.role === "Owner")) {
+      setDataError("เฉพาะผู้จัดการสาขา / HR / เจ้าของเท่านั้นที่เปิด OT ได้");
+      return;
+    }
+    if (!profileId || !hours || hours <= 0) {
+      setDataError("เลือกพนักงานและกรอกจำนวนชั่วโมง OT ให้ถูกต้อง");
+      return;
+    }
+    const target = teamMembers.find((member) => member.id === profileId);
+    // ผู้จัดการเปิดได้เฉพาะพนักงานสาขาตัวเอง (เจ้าของ/HR ได้ทุกสาขา)
+    if (userHasRole(currentUser, "Manager") && !can("manage_hr") && currentUser.role !== "Owner" && target?.branch !== currentUser.branch) {
+      setDataError("ผู้จัดการเปิด OT ได้เฉพาะพนักงานสาขาของตัวเอง");
+      return;
+    }
+    if (supabase && isSupabaseConfigured && uuidPattern.test(profileId)) {
+      const { error } = await supabase.from("overtime").insert({
+        profile_id: profileId,
+        work_date: workDate,
+        hours,
+        note: note || null,
+        branch: target?.branch ?? currentUser.branch ?? null,
+        approved_by: uuidPattern.test(currentUser.id) ? currentUser.id : null
+      });
+      if (error) {
+        setDataError(error.message);
+        return;
+      }
+      await loadOvertime(payrollMonth);
+      if (activeView === "Payroll") void loadPayroll(payrollMonth);
+    } else {
+      setOvertimeRecords((current) => [
+        { id: crypto.randomUUID(), profileId, workDate, hours, note, branch: target?.branch, approvedBy: currentUser.id, createdAt: new Date().toISOString() },
+        ...current
+      ]);
+    }
+    void appendAudit("granted overtime", `${target?.name ?? profileId} · ${hours} ชม.`, "overtime", null);
+    notifyUser(target?.name ?? "", "assigned", { id: "OT", title: "OT", dbId: undefined }, `คุณได้รับ OT ${hours} ชม. วันที่ ${workDate}`);
   }
 
   async function saveHrRecord(memberId: string, record: { salary: number; position: string; startDate: string }) {
@@ -3482,15 +3671,26 @@ export default function Page() {
             <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
               <div className="flex items-center gap-3">
                 {activeView !== homeView ? (
-                  <button
-                    type="button"
-                    onClick={() => setActiveView(homeView)}
-                    className="inline-flex shrink-0 items-center gap-2 rounded-2xl bg-k2-ink px-4 py-2.5 text-sm font-bold text-white shadow-sm"
-                    title="กลับหน้าแรก"
-                  >
-                    <Home className="h-4 w-4" />
-                    หน้าแรก
-                  </button>
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => window.history.back()}
+                      className="grid h-11 w-11 shrink-0 place-items-center rounded-2xl bg-white/75 text-k2-ink shadow-sm"
+                      title="กลับ"
+                      aria-label="กลับ"
+                    >
+                      <ChevronLeft className="h-5 w-5" />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setActiveView(homeView)}
+                      className="inline-flex shrink-0 items-center gap-2 rounded-2xl bg-k2-ink px-4 py-2.5 text-sm font-bold text-white shadow-sm"
+                      title="กลับหน้าแรก"
+                    >
+                      <Home className="h-4 w-4" />
+                      หน้าแรก
+                    </button>
+                  </>
                 ) : null}
                 <KLogoMark className="h-[5.25rem] w-[5.25rem] shrink-0 lg:hidden" />
                 <div>
@@ -3831,7 +4031,7 @@ export default function Page() {
                   <>
                   <LineInvitePanel job={selectedJob} customer={customerRecords.find((item) => item.id === selectedJob.customerId)} onMarkFriend={markCustomerLineFriend} />
                   <HandoffPanel job={selectedJob} currentUser={currentUser} onSubmit={submitHandoff} onAccept={acceptHandoff} onReject={rejectHandoff} />
-                  <JobDetail job={selectedJob} companyProfile={companyProfile} canSeeMoney={canSeeMoney} canEditPayment={can("edit_payment")} canDeleteJob={can("delete_job")} canConfirmDeposit={["Owner", "Manager", "Admin"].includes(currentUser.role)} canApproveWaiver={currentUser.role === "Owner"} onPayment={updatePayment} onConfirmDeposit={confirmDeposit} onReceiveBalance={receiveBalance} onComment={addComment} onMove={requestMove} onDelete={removeJob} teamMembers={teamMembers} canAssign={can("assign_staff")} onAssign={assignStaff} />
+                  <JobDetail job={selectedJob} companyProfile={companyProfile} canSeeMoney={canSeeMoney} canEditPayment={can("edit_payment")} canDeleteJob={can("delete_job")} canConfirmDeposit={["Owner", "Manager", "Admin"].includes(currentUser.role)} canApproveWaiver={currentUser.role === "Owner"} onPayment={updatePayment} onConfirmDeposit={confirmDeposit} onReceiveBalance={receiveBalance} onComment={addComment} onMove={requestMove} onDelete={removeJob} teamMembers={teamMembers} canAssign={can("assign_staff")} onAssign={assignStaff} canEditJob={can("edit_job") && (currentUser.role === "Owner" || !["Ready for Production", "In Production", "QC", "Packing", "Delivered / Picked Up", "Completed", "Cancelled"].includes(selectedJob.status))} onUpdateJob={updateJob} canAttach={can("edit_job")} onUploadFile={uploadJobFile} onDeleteFile={removeJobFile} />
                   </>
                 ) : (
                   <EmptyState title="ยังไม่มีงานในระบบ" text="เริ่มจากสร้างลูกค้าและสร้างงานแรกได้เลย" action={() => setActiveView("Create Job")} />
@@ -3854,6 +4054,9 @@ export default function Page() {
                   isHr={can("manage_hr")}
                   onCheckIn={checkIn}
                   onCheckOut={checkOut}
+                  overtime={overtimeRecords}
+                  canGrantOt={userHasRole(currentUser, "Manager") || can("manage_hr") || currentUser.role === "Owner"}
+                  onAddOvertime={addOvertime}
                 />
               </motion.div>
             )}
@@ -4906,7 +5109,12 @@ function JobDetail({
   onDelete,
   teamMembers,
   canAssign,
-  onAssign
+  onAssign,
+  canEditJob,
+  onUpdateJob,
+  canAttach,
+  onUploadFile,
+  onDeleteFile
 }: {
   job: Job;
   companyProfile: CompanyProfile;
@@ -4924,8 +5132,20 @@ function JobDetail({
   teamMembers: TeamMember[];
   canAssign: boolean;
   onAssign: (jobId: string, designer: string, production: string) => void;
+  canEditJob: boolean;
+  onUpdateJob: (jobId: string, fields: { title: string; type: JobType; description: string; quantity: number; dueDate: string; priority: Priority; internalNotes: string }) => void;
+  canAttach: boolean;
+  onUploadFile: (job: Job, file: File) => void;
+  onDeleteFile: (job: Job, fileId: string) => void;
 }) {
   const [comment, setComment] = useState("");
+  const [editingJob, setEditingJob] = useState(false);
+  const jobLocked = ["Ready for Production", "In Production", "QC", "Packing", "Delivered / Picked Up", "Completed", "Cancelled"].includes(job.status);
+  const [jobEdit, setJobEdit] = useState({ title: job.title, type: job.type, description: job.description, quantity: job.quantity, dueDate: job.dueDate, priority: job.priority, internalNotes: job.internalNotes });
+  useEffect(() => {
+    setJobEdit({ title: job.title, type: job.type, description: job.description, quantity: job.quantity, dueDate: job.dueDate, priority: job.priority, internalNotes: job.internalNotes });
+    setEditingJob(false);
+  }, [job.id, job.title, job.type, job.description, job.quantity, job.dueDate, job.priority, job.internalNotes]);
   const [assignDesigner, setAssignDesigner] = useState(job.assignedDesigner);
   const [assignProduction, setAssignProduction] = useState(job.assignedProduction);
   useEffect(() => {
@@ -5017,6 +5237,40 @@ function JobDetail({
           <Info label="โน้ตภายใน" value={job.internalNotes} icon={ClipboardList} />
         </div>
 
+        {canEditJob ? (
+          <div className="mt-5 rounded-3xl bg-white/60 p-5">
+            <div className="mb-3 flex items-center justify-between gap-2">
+              <h4 className="font-semibold">แก้ไขข้อมูลงาน</h4>
+              {editingJob ? null : (
+                <button type="button" onClick={() => setEditingJob(true)} className="rounded-2xl bg-white/80 px-4 py-2 text-sm font-bold text-k2-ink shadow-sm">✏️ แก้ไข</button>
+              )}
+            </div>
+            {editingJob ? (
+              <div className="grid gap-3 sm:grid-cols-2">
+                <input value={jobEdit.title} onChange={(event) => setJobEdit((current) => ({ ...current, title: event.target.value }))} placeholder="ชื่องาน" className="rounded-2xl border border-white/80 bg-white/85 px-4 py-3 text-sm font-semibold outline-none sm:col-span-2" />
+                <select value={jobEdit.type} onChange={(event) => setJobEdit((current) => ({ ...current, type: event.target.value as JobType }))} className="rounded-2xl border border-white/80 bg-white/85 px-4 py-3 text-sm font-semibold outline-none">
+                  {jobTypes.map((type) => (<option key={type} value={type}>{jobTypeLabel[type]}</option>))}
+                </select>
+                <input type="number" min="1" value={jobEdit.quantity} onChange={(event) => setJobEdit((current) => ({ ...current, quantity: Number(event.target.value) }))} placeholder="จำนวน" className="rounded-2xl border border-white/80 bg-white/85 px-4 py-3 text-sm font-semibold outline-none" />
+                <input type="date" value={jobEdit.dueDate} onChange={(event) => setJobEdit((current) => ({ ...current, dueDate: event.target.value }))} className="rounded-2xl border border-white/80 bg-white/85 px-4 py-3 text-sm font-semibold outline-none" />
+                <select value={jobEdit.priority} onChange={(event) => setJobEdit((current) => ({ ...current, priority: event.target.value as Priority }))} className="rounded-2xl border border-white/80 bg-white/85 px-4 py-3 text-sm font-semibold outline-none">
+                  {(["Normal", "Urgent", "Very Urgent", "Today"] as Priority[]).map((priority) => (<option key={priority} value={priority}>{priorityLabel[priority]}</option>))}
+                </select>
+                <textarea value={jobEdit.description} onChange={(event) => setJobEdit((current) => ({ ...current, description: event.target.value }))} placeholder="รายละเอียดงาน" className="min-h-20 rounded-2xl border border-white/80 bg-white/85 px-4 py-3 text-sm font-semibold outline-none sm:col-span-2" />
+                <textarea value={jobEdit.internalNotes} onChange={(event) => setJobEdit((current) => ({ ...current, internalNotes: event.target.value }))} placeholder="โน้ตภายใน" className="min-h-16 rounded-2xl border border-white/80 bg-white/85 px-4 py-3 text-sm font-semibold outline-none sm:col-span-2" />
+                <div className="flex gap-2 sm:col-span-2">
+                  <button type="button" onClick={() => { onUpdateJob(job.id, jobEdit); setEditingJob(false); }} className="rounded-2xl bg-k2-ink px-5 py-3 text-sm font-extrabold text-white">บันทึก</button>
+                  <button type="button" onClick={() => { setJobEdit({ title: job.title, type: job.type, description: job.description, quantity: job.quantity, dueDate: job.dueDate, priority: job.priority, internalNotes: job.internalNotes }); setEditingJob(false); }} className="rounded-2xl bg-white/70 px-5 py-3 text-sm font-bold text-k2-muted">ยกเลิก</button>
+                </div>
+              </div>
+            ) : (
+              <p className="text-sm font-semibold text-k2-muted">แก้ชื่อ/ประเภท/จำนวน/รายละเอียด/กำหนดส่ง/ความเร่งด่วน/โน้ต ได้ก่อนอนุมัติเข้าผลิต · ราคา/มัดจำแก้ที่ส่วนการเงิน</p>
+            )}
+          </div>
+        ) : jobLocked ? (
+          <p className="mt-5 rounded-3xl bg-white/50 px-4 py-3 text-sm font-semibold text-k2-muted">🔒 งานนี้อนุมัติเข้าผลิตแล้ว — แก้ไขข้อมูลไม่ได้</p>
+        ) : null}
+
         {canAssign ? (
           <div className="mt-5 rounded-3xl bg-white/60 p-5">
             <h4 className="mb-1 font-semibold">มอบหมายผู้รับผิดชอบ</h4>
@@ -5080,19 +5334,44 @@ function JobDetail({
         </div>
 
         <div className="mt-5 rounded-3xl bg-white/60 p-5">
-          <h4 className="mb-4 font-semibold">ไฟล์แนบ</h4>
+          <div className="mb-4 flex items-center justify-between gap-2">
+            <h4 className="font-semibold">ไฟล์แนบ</h4>
+            {canAttach ? (
+              <label className="inline-flex cursor-pointer items-center gap-2 rounded-2xl bg-k2-ink px-4 py-2 text-sm font-bold text-white">
+                <Upload className="h-4 w-4" /> แนบไฟล์
+                <input type="file" className="sr-only" onChange={(event) => { const f = event.target.files?.[0]; if (f) void onUploadFile(job, f); event.target.value = ""; }} />
+              </label>
+            ) : null}
+          </div>
           <div className="grid gap-3 sm:grid-cols-2">
             {job.files.map((file) => (
               <div key={file.id} className="flex items-center gap-3 rounded-2xl bg-white p-3">
-                <div className="grid h-11 w-11 place-items-center rounded-2xl bg-k2-sky">
-                  <FileImage className="h-5 w-5" />
+                {file.url && file.type === "image" ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img src={file.url} alt={file.name} className="h-11 w-11 shrink-0 rounded-2xl object-cover" />
+                ) : (
+                  <div className="grid h-11 w-11 shrink-0 place-items-center rounded-2xl bg-k2-sky">
+                    <FileImage className="h-5 w-5" />
+                  </div>
+                )}
+                <div className="min-w-0 flex-1">
+                  {file.url ? (
+                    <a href={file.url} target="_blank" rel="noreferrer" className="block truncate font-semibold text-k2-ink underline">{file.name}</a>
+                  ) : (
+                    <p className="truncate font-semibold">{file.name}</p>
+                  )}
+                  <p className="text-sm text-k2-muted">{file.type.toUpperCase()} · {file.size}</p>
                 </div>
-                <div>
-                  <p className="font-semibold">{file.name}</p>
-                  <p className="text-sm text-k2-muted">{file.type.toUpperCase()} - {file.size}</p>
-                </div>
+                {canAttach ? (
+                  <button type="button" onClick={() => onDeleteFile(job, file.id)} className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-rose-50 text-rose-600" title="ลบไฟล์">
+                    <Trash2 className="h-4 w-4" />
+                  </button>
+                ) : null}
               </div>
             ))}
+            {job.files.length === 0 ? (
+              <p className="text-sm font-semibold text-k2-muted sm:col-span-2">ยังไม่มีไฟล์แนบ</p>
+            ) : null}
           </div>
         </div>
       </section>
@@ -7963,7 +8242,7 @@ function PayrollView({
 }: {
   teamMembers: TeamMember[];
   records: Record<string, { salary: number; position: string; startDate: string }>;
-  summary: Record<string, { present: number; late: number; lateMin: number; leaveDays: number }>;
+  summary: Record<string, { present: number; late: number; lateMin: number; leaveDays: number; otHours: number }>;
   month: string;
   onMonthChange: (month: string) => void;
   companyName: string;
@@ -7971,10 +8250,12 @@ function PayrollView({
   const [deductions, setDeductions] = useState<Record<string, string>>({});
   const [bonuses, setBonuses] = useState<Record<string, string>>({});
   const staff = teamMembers.filter((member) => member.role !== "Owner");
-  const netPay = (id: string, base: number) => Math.max(0, base - (Number(deductions[id]) || 0) + (Number(bonuses[id]) || 0));
+  // ค่า OT = ชั่วโมง × (เงินเดือน/30/8 × 1.5) = เงินเดือน/160 ต่อชั่วโมง (มาตรฐานวันธรรมดา 1.5 เท่า)
+  const otPay = (id: string, base: number) => Math.round((summary[id]?.otHours ?? 0) * (base / 160));
+  const netPay = (id: string, base: number) => Math.max(0, base - (Number(deductions[id]) || 0) + (Number(bonuses[id]) || 0) + otPay(id, base));
 
   function printSlip(member: TeamMember, base: number) {
-    const s = summary[member.id] ?? { present: 0, late: 0, lateMin: 0, leaveDays: 0 };
+    const s = summary[member.id] ?? { present: 0, late: 0, lateMin: 0, leaveDays: 0, otHours: 0 };
     const ded = Number(deductions[member.id]) || 0;
     const bon = Number(bonuses[member.id]) || 0;
     const net = netPay(member.id, base);
@@ -7990,6 +8271,7 @@ function PayrollView({
         `<tr><td>วันมาทำงาน</td><td>${s.present} วัน</td></tr>` +
         `<tr><td>มาสาย</td><td>${s.late} วัน (${s.lateMin} นาที)</td></tr>` +
         `<tr><td>ลา (อนุมัติ)</td><td>${s.leaveDays} วัน</td></tr>` +
+        `<tr><td>OT</td><td>${s.otHours} ชม. (+ ${baht(otPay(member.id, base))} บาท)</td></tr>` +
         `<tr><td>เงินเดือนฐาน</td><td>${baht(base)} บาท</td></tr>` +
         `<tr><td>หักเงิน</td><td>- ${baht(ded)} บาท</td></tr>` +
         `<tr><td>โบนัส/เพิ่ม</td><td>+ ${baht(bon)} บาท</td></tr>` +
@@ -8020,6 +8302,7 @@ function PayrollView({
               <th className="pb-3">มาทำงาน</th>
               <th className="pb-3">สาย</th>
               <th className="pb-3">ลา</th>
+              <th className="pb-3">OT</th>
               <th className="pb-3">เงินเดือนฐาน</th>
               <th className="pb-3">หักเงิน</th>
               <th className="pb-3">โบนัส</th>
@@ -8030,7 +8313,7 @@ function PayrollView({
           <tbody>
             {staff.map((member) => {
               const base = records[member.id]?.salary ?? 0;
-              const s = summary[member.id] ?? { present: 0, late: 0, lateMin: 0, leaveDays: 0 };
+              const s = summary[member.id] ?? { present: 0, late: 0, lateMin: 0, leaveDays: 0, otHours: 0 };
               return (
                 <tr key={member.id} className="border-t border-white/60">
                   <td className="py-3">
@@ -8040,6 +8323,7 @@ function PayrollView({
                   <td className="py-3">{s.present} วัน</td>
                   <td className="py-3">{s.late} วัน{s.lateMin ? ` (${s.lateMin} น.)` : ""}</td>
                   <td className="py-3">{s.leaveDays} วัน</td>
+                  <td className="py-3">{s.otHours} ชม.{s.otHours ? ` (+${money.format(otPay(member.id, base))})` : ""}</td>
                   <td className="py-3">{money.format(base)}</td>
                   <td className="py-3">
                     <input type="number" value={deductions[member.id] ?? ""} onChange={(event) => setDeductions((current) => ({ ...current, [member.id]: event.target.value }))} className="w-24 rounded-xl border border-white/80 bg-white/85 px-2 py-1 outline-none" placeholder="0" />
@@ -8055,7 +8339,7 @@ function PayrollView({
               );
             })}
             {staff.length === 0 ? (
-              <tr><td colSpan={9} className="py-4 text-center text-sm font-semibold text-k2-muted">ยังไม่มีพนักงาน</td></tr>
+              <tr><td colSpan={10} className="py-4 text-center text-sm font-semibold text-k2-muted">ยังไม่มีพนักงาน</td></tr>
             ) : null}
           </tbody>
         </table>
@@ -8396,7 +8680,10 @@ function AttendanceView({
   teamMembers,
   isHr,
   onCheckIn,
-  onCheckOut
+  onCheckOut,
+  overtime,
+  canGrantOt,
+  onAddOvertime
 }: {
   currentUser: TeamMember;
   branchSetting?: BranchSetting;
@@ -8406,7 +8693,14 @@ function AttendanceView({
   isHr: boolean;
   onCheckIn: () => Promise<CheckInResult>;
   onCheckOut: () => Promise<{ ok: boolean; msg: string }>;
+  overtime: Overtime[];
+  canGrantOt: boolean;
+  onAddOvertime: (profileId: string, workDate: string, hours: number, note: string) => void;
 }) {
+  const isOwnerOrHr = currentUser.role === "Owner" || isHr;
+  // ผู้จัดการเปิด OT ให้เฉพาะพนักงานสาขาตัวเอง · เจ้าของ/HR เห็นทุกสาขา
+  const otStaff = teamMembers.filter((member) => member.role !== "Owner" && (isOwnerOrHr || (currentUser.branch && member.branch === currentUser.branch)));
+  const [otForm, setOtForm] = useState({ profileId: "", workDate: todayISO(), hours: "", note: "" });
   const [msg, setMsg] = useState("");
   const [busy, setBusy] = useState(false);
   const [popup, setPopup] = useState<CheckInResult | null>(null);
@@ -8537,6 +8831,49 @@ function AttendanceView({
             <button type="button" onClick={() => setPopup(null)} className="mt-5 w-full rounded-2xl bg-k2-ink px-5 py-3 font-bold text-white">รับทราบ</button>
           </motion.div>
         </motion.div>
+      ) : null}
+
+      {canGrantOt ? (
+        <section className="glass rounded-[1.5rem] p-5">
+          <h4 className="text-lg font-extrabold">เปิด OT ให้พนักงาน{isOwnerOrHr ? "" : ` · สาขา${currentUser.branch || "-"}`}</h4>
+          <p className="mb-3 text-sm font-semibold text-k2-muted">เลือกพนักงาน + วันที่ + จำนวนชั่วโมง — OT จะไปคำนวณในเงินเดือนอัตโนมัติ</p>
+          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+            <select
+              value={otForm.profileId}
+              onChange={(event) => setOtForm((current) => ({ ...current, profileId: event.target.value }))}
+              className="rounded-2xl border border-white/80 bg-white/85 px-4 py-3 text-sm font-semibold outline-none"
+            >
+              <option value="">เลือกพนักงาน</option>
+              {otStaff.map((member) => (
+                <option key={member.id} value={member.id}>{member.name}{member.branch ? ` · ${member.branch}` : ""}</option>
+              ))}
+            </select>
+            <input type="date" value={otForm.workDate} onChange={(event) => setOtForm((current) => ({ ...current, workDate: event.target.value }))} className="rounded-2xl border border-white/80 bg-white/85 px-4 py-3 text-sm font-semibold outline-none" />
+            <input type="number" min="0" step="0.5" placeholder="ชั่วโมง OT" value={otForm.hours} onChange={(event) => setOtForm((current) => ({ ...current, hours: event.target.value }))} className="rounded-2xl border border-white/80 bg-white/85 px-4 py-3 text-sm font-semibold outline-none" />
+            <input placeholder="หมายเหตุ (ถ้ามี)" value={otForm.note} onChange={(event) => setOtForm((current) => ({ ...current, note: event.target.value }))} className="rounded-2xl border border-white/80 bg-white/85 px-4 py-3 text-sm font-semibold outline-none" />
+          </div>
+          <button
+            type="button"
+            onClick={() => { onAddOvertime(otForm.profileId, otForm.workDate, Number(otForm.hours), otForm.note); setOtForm((current) => ({ ...current, profileId: "", hours: "", note: "" })); }}
+            disabled={!otForm.profileId || !Number(otForm.hours)}
+            className="mt-3 rounded-2xl bg-k2-ink px-5 py-3 text-sm font-extrabold text-white disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            บันทึก OT
+          </button>
+          <div className="mt-4 space-y-2">
+            <p className="text-sm font-bold text-k2-muted">OT เดือนนี้</p>
+            {overtime.filter((row) => isOwnerOrHr || row.branch === currentUser.branch).length === 0 ? (
+              <p className="text-sm font-semibold text-k2-muted">ยังไม่มีรายการ OT</p>
+            ) : (
+              overtime.filter((row) => isOwnerOrHr || row.branch === currentUser.branch).map((row) => (
+                <div key={row.id} className="flex flex-wrap items-center justify-between gap-2 rounded-2xl bg-white/60 px-4 py-2 text-sm">
+                  <span className="font-bold">{nameById(row.profileId)}</span>
+                  <span className="font-semibold text-k2-muted">{row.workDate} · {row.hours} ชม.{row.note ? ` · ${row.note}` : ""}</span>
+                </div>
+              ))
+            )}
+          </div>
+        </section>
       ) : null}
 
       {isHr ? (
