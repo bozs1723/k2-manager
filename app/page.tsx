@@ -1208,6 +1208,8 @@ export default function Page() {
       ].filter((item) => item.visible),
     [currentRolePermissions, currentUser.role]
   );
+  // เมนูที่แสดงจริง — ตัด "Detail" (เปิดผ่านการเลือกงานเท่านั้น ไม่ใช่ปุ่มเมนู)
+  const menuItems = useMemo(() => navigationItems.filter((item) => item.label !== "Detail"), [navigationItems]);
 
   useEffect(() => {
     if (!supabase) return;
@@ -3459,7 +3461,7 @@ export default function Page() {
       <div className="mx-auto flex max-w-[1800px] gap-4">
         <aside className="glass sticky top-5 hidden h-[calc(100vh-2.5rem)] w-72 shrink-0 rounded-[1.7rem] p-4 lg:block">
           <BrandBlock currentUser={currentUserPrefs} onEditProfile={() => setShowPersonalization(true)} />
-          <Nav activeView={activeView} items={navigationItems} onChange={setActiveView} />
+          <Nav activeView={activeView} items={menuItems} onChange={setActiveView} />
           <div className="mt-6 rounded-3xl bg-white/55 p-4">
             <p className="text-xs font-bold uppercase tracking-[0.18em] text-k2-muted">สิทธิ์ปัจจุบัน</p>
             <div className="mt-3 flex flex-wrap gap-2">
@@ -3654,16 +3656,17 @@ export default function Page() {
                 </button>
               </div>
             </div>
-            <div className="mt-3 flex gap-2 overflow-x-auto pb-1 lg:hidden">
-              {navigationItems.map(({ label: item }) => (
+            <div className="mt-3 grid grid-cols-4 gap-2 sm:grid-cols-5 lg:hidden">
+              {menuItems.map(({ label: item, icon: Icon }) => (
                 <button
                   key={item}
                   onClick={() => setActiveView(item)}
-                  className={`shrink-0 rounded-full px-4 py-2 text-sm font-semibold ${
+                  className={`flex flex-col items-center justify-center gap-1 rounded-2xl px-1 py-2 text-center text-[11px] font-semibold leading-tight ${
                     activeView === item ? "bg-k2-ink text-white" : "bg-white/70 text-k2-muted"
                   }`}
                 >
-                  {viewLabel[item] ?? item}
+                  <Icon className="h-5 w-5 shrink-0" />
+                  <span>{viewLabel[item] ?? item}</span>
                 </button>
               ))}
             </div>
