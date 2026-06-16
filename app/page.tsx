@@ -6883,10 +6883,10 @@ function SettingsView({
   const canManagePermissions = currentPermissions.includes("manage_permissions");
   const canManageCompany = currentPermissions.includes("manage_company_settings");
   const [newMember, setNewMember] = useState({ name: "", username: "", password: "", role: "Designer" as Role, branch: "" });
-  const newMemberBranchOptions = ["พะเยา", "กรุงเทพ"];
+  const newMemberBranchOptions = BRANCH_LIST;
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingMember, setEditingMember] = useState({ name: "", role: "Designer" as Role, roles: [] as Role[], branch: "" });
-  const memberBranchOptions = ["พะเยา", "กรุงเทพ"];
+  const memberBranchOptions = BRANCH_LIST;
   const [companyDraft, setCompanyDraft] = useState(companyProfile);
   const [facebookPageName, setFacebookPageName] = useState("");
   const [avatarError, setAvatarError] = useState("");
