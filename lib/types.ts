@@ -140,6 +140,17 @@ export type Holiday = {
   name: string;
 };
 
+export type Overtime = {
+  id: string;
+  profileId: string;
+  workDate: string;
+  hours: number;
+  note: string;
+  branch?: string;
+  approvedBy?: string;
+  createdAt: string;
+};
+
 export type Attendance = {
   id: string;
   profileId: string;
@@ -147,6 +158,7 @@ export type Attendance = {
   checkInAt: string | null;
   checkOutAt: string | null;
   checkInSelfie: string | null;
+  checkOutSelfie: string | null;
   checkInLat: number | null;
   checkInLng: number | null;
   lateMinutes: number;
@@ -168,6 +180,7 @@ export type FileAsset = {
   name: string;
   type: "image" | "pdf" | "ai" | "zip";
   size: string;
+  url?: string;
 };
 
 export type StatusEvent = {
