@@ -48,6 +48,7 @@ import { customers as initialCustomers, initialAuditLog, initialJobs, statuses, 
 import { createSupabaseAuthWorker, isSupabaseConfigured, supabase } from "@/lib/supabase";
 import { CUSTOMER_CODE_ADMINS, CUSTOMER_CODE_PAGES, customerCodeYear, formatCustomerCode, nextCustomerSeq } from "@/lib/customer-code";
 import { branchForJobType } from "@/lib/job-routing";
+import { checkGeofence, lateMinutes } from "@/lib/attendance";
 import type { AppNotification, Attendance, AuditEvent, BranchSetting, Customer, ExpressRequest, FileAsset, Holiday, Job, JobStatus, JobType, Lead, LeaveRequest, Overtime, PaymentStatus, Priority, Quotation, QuoteStatus, Role, TeamMember } from "@/lib/types";
 
 type ImportedCustomer = Pick<Customer, "name" | "phone" | "lineId" | "email"> & {
@@ -398,23 +399,6 @@ const BRANCH_LIST = ["พระรามเก้า", "พะเยา"];
 type CheckInResult = { ok: boolean; msg: string; checkInAt?: string; status?: "on_time" | "late"; lateMinutes?: number; geofenced?: boolean };
 
 // ระยะห่างระหว่างพิกัด (เมตร) — สูตร haversine
-function distanceMeters(lat1: number, lng1: number, lat2: number, lng2: number) {
-  const toRad = (deg: number) => (deg * Math.PI) / 180;
-  const R = 6371000;
-  const dLat = toRad(lat2 - lat1);
-  const dLng = toRad(lng2 - lng1);
-  const a = Math.sin(dLat / 2) ** 2 + Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLng / 2) ** 2;
-  return Math.round(R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a)));
-}
-
-// นาทีที่สาย เทียบเวลาเข้างาน + ผ่อนผัน (เช่น 5 นาที)
-function lateMinutesNow(workStart: string, graceMinutes: number) {
-  const [h, m] = workStart.split(":").map((value) => Number(value) || 0);
-  const now = new Date();
-  const nowMin = now.getHours() * 60 + now.getMinutes();
-  const startMin = h * 60 + m + (graceMinutes || 0);
-  return Math.max(0, nowMin - startMin);
-}
 const defaultBranchSetting = (branch: string): BranchSetting => ({ branch, workStart: "09:00", workEnd: "18:00", lateGraceMinutes: 5, gpsLat: null, gpsLng: null, radiusM: 150 });
 const jobTypes: JobType[] = ["DTG Shirt", "UV Print", "Laser Cut", "Signage", "Acrylic", "3D Print", "Other"];
 const priorities: Priority[] = ["Normal", "Urgent", "Very Urgent", "Today"];
@@ -2912,15 +2896,12 @@ export default function Page() {
         async (pos) => {
           const lat = pos.coords.latitude;
           const lng = pos.coords.longitude;
-          const geofenced = !!(setting && setting.gpsLat != null && setting.gpsLng != null);
-          if (geofenced) {
-            const dist = distanceMeters(lat, lng, setting!.gpsLat!, setting!.gpsLng!);
-            if (dist > (setting!.radiusM || 150)) {
-              resolve({ ok: false, msg: `อยู่นอกรัศมีสาขา (${dist} ม. / อนุญาต ${setting!.radiusM} ม.)` });
-              return;
-            }
+          const geo = checkGeofence(setting, lat, lng);
+          if (geo.geofenced && !geo.withinRadius) {
+            resolve({ ok: false, msg: `อยู่นอกรัศมีสาขา (${geo.distance} ม. / อนุญาต ${geo.radius} ม.)` });
+            return;
           }
-          const late = setting ? lateMinutesNow(setting.workStart, setting.lateGraceMinutes) : 0;
+          const late = setting ? lateMinutes(setting.workStart, setting.lateGraceMinutes, new Date()) : 0;
           const status = late > 0 ? "late" : "on_time";
           const checkInAt = new Date().toISOString();
           if (supabase && uuidPattern.test(currentUser.id)) {
@@ -2936,7 +2917,7 @@ export default function Page() {
             setMyAttendance({ id: crypto.randomUUID(), profileId: currentUser.id, workDate: todayISO(), checkInAt, checkOutAt: null, checkInSelfie: null, checkOutSelfie: null, checkInLat: lat, checkInLng: lng, lateMinutes: late, status });
           }
           void appendAudit("checked in", currentUser.name, "attendance", null);
-          resolve({ ok: true, msg: late > 0 ? `เช็คอินแล้ว — สาย ${late} นาที` : "เช็คอินตรงเวลา ✓", checkInAt, status, lateMinutes: late, geofenced });
+          resolve({ ok: true, msg: late > 0 ? `เช็คอินแล้ว — สาย ${late} นาที` : "เช็คอินตรงเวลา ✓", checkInAt, status, lateMinutes: late, geofenced: geo.geofenced });
         },
         () => resolve({ ok: false, msg: "ดึงตำแหน่งไม่สำเร็จ — อนุญาตให้เข้าถึงตำแหน่งก่อน" }),
         { enableHighAccuracy: true, timeout: 10000 }
