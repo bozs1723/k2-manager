@@ -1686,6 +1686,14 @@ export default function Page() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isAuthed, activeView, payrollMonth]);
 
+  // โหลดสถานะลงเวลา + ตั้งค่าสาขา ตั้งแต่ login เพื่อให้ปุ่มลอยเช็คอิน/เช็คเอาท์ทำงานได้ทุกหน้า
+  useEffect(() => {
+    if (!isAuthed) return;
+    void loadBranchSettings();
+    void loadAttendance();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isAuthed]);
+
   async function refreshWorkspaceData(options?: { silent?: boolean }) {
     if (!supabase) return;
     const silent = options?.silent ?? false;
@@ -3909,6 +3917,13 @@ export default function Page() {
           onClose={() => setShowMyProfile(false)}
         />
       ) : null}
+
+      <CheckInFab
+        branch={currentUser.branch}
+        myAttendance={myAttendance}
+        onCheckIn={checkIn}
+        onCheckOut={checkOut}
+      />
 
     </main>
   );
@@ -8131,6 +8146,168 @@ function LeaveView({
         )}
       </section>
     </div>
+  );
+}
+
+// ปุ่มลอยเช็คอิน/เช็คเอาท์ — เด่นมุมล่างขวา เห็นได้ทุกหน้า (โดยเฉพาะมือถือ)
+function CheckInFab({
+  branch,
+  myAttendance,
+  onCheckIn,
+  onCheckOut
+}: {
+  branch?: string;
+  myAttendance: Attendance | null;
+  onCheckIn: () => Promise<CheckInResult>;
+  onCheckOut: () => Promise<{ ok: boolean; msg: string }>;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [now, setNow] = useState(() => Date.now());
+  const [errMsg, setErrMsg] = useState("");
+  const [checkInPopup, setCheckInPopup] = useState<CheckInResult | null>(null);
+  const [checkOutPopup, setCheckOutPopup] = useState<{ hours: number; minutes: number } | null>(null);
+
+  const working = !!(myAttendance && myAttendance.checkInAt && !myAttendance.checkOutAt);
+  const done = !!(myAttendance && myAttendance.checkInAt && myAttendance.checkOutAt);
+
+  // เดินนาฬิกาทุกวินาทีระหว่างทำงาน
+  useEffect(() => {
+    if (!working) return;
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, [working]);
+
+  // เวลาที่ผ่านไปตั้งแต่เช็คอิน -> HH:MM:SS
+  const elapsedMs = working && myAttendance?.checkInAt ? Math.max(0, now - new Date(myAttendance.checkInAt).getTime()) : 0;
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const elapsedLabel = `${pad(Math.floor(elapsedMs / 3600000))}:${pad(Math.floor((elapsedMs % 3600000) / 60000))}:${pad(Math.floor((elapsedMs % 60000) / 1000))}`;
+
+  async function handleClick() {
+    if (busy || done) return;
+    setErrMsg("");
+    setBusy(true);
+    if (working) {
+      const result = await onCheckOut();
+      setBusy(false);
+      if (!result.ok) {
+        setErrMsg(result.msg);
+        return;
+      }
+      const start = myAttendance?.checkInAt ? new Date(myAttendance.checkInAt).getTime() : Date.now();
+      const totalMin = Math.max(0, Math.round((Date.now() - start) / 60000));
+      setCheckOutPopup({ hours: Math.floor(totalMin / 60), minutes: totalMin % 60 });
+    } else {
+      const result = await onCheckIn();
+      setBusy(false);
+      if (!result.ok) {
+        setErrMsg(result.msg);
+        return;
+      }
+      setCheckInPopup(result);
+    }
+  }
+
+  if (!branch) return null;
+
+  return (
+    <>
+      <div className="fixed bottom-5 right-4 z-40 flex flex-col items-end gap-2">
+        {errMsg ? (
+          <span className="max-w-[15rem] rounded-2xl bg-rose-600 px-3 py-2 text-right text-xs font-bold text-white shadow-lg">{errMsg}</span>
+        ) : null}
+        {done ? (
+          <div className="flex items-center gap-2 rounded-full bg-white/90 px-5 py-3 font-extrabold text-emerald-700 shadow-xl ring-1 ring-emerald-200">
+            <Clock3 className="h-5 w-5" />
+            ลงเวลาครบแล้ววันนี้ ✓
+          </div>
+        ) : (
+          <motion.button
+            type="button"
+            onClick={handleClick}
+            disabled={busy}
+            whileTap={{ scale: 0.94 }}
+            className={`flex items-center gap-3 rounded-full px-6 py-4 text-left font-extrabold text-white shadow-2xl disabled:opacity-70 ${
+              working ? "bg-k2-ink" : "bg-emerald-500"
+            }`}
+          >
+            <motion.span
+              animate={working ? { rotate: [0, 12, -12, 0] } : { scale: [1, 1.12, 1] }}
+              transition={{ repeat: Infinity, duration: working ? 2 : 1.6 }}
+              className="grid h-11 w-11 shrink-0 place-items-center rounded-full bg-white/20"
+            >
+              <Clock3 className="h-7 w-7" />
+            </motion.span>
+            <span className="flex flex-col leading-tight">
+              {working ? (
+                <>
+                  <span className="text-xs font-bold opacity-80">กำลังทำงาน · แตะเพื่อเช็คเอาท์</span>
+                  <span className="text-2xl tabular-nums tracking-tight">{elapsedLabel}</span>
+                </>
+              ) : (
+                <>
+                  <span className="text-xs font-bold opacity-80">{busy ? "กำลังบันทึก..." : "เริ่มงานวันนี้"}</span>
+                  <span className="text-xl">เช็คอิน</span>
+                </>
+              )}
+            </span>
+          </motion.button>
+        )}
+      </div>
+
+      {checkInPopup ? (
+        <motion.div
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          className="fixed inset-0 z-50 flex items-center justify-center bg-k2-ink/40 p-6 backdrop-blur-sm"
+          onClick={() => setCheckInPopup(null)}
+        >
+          <motion.div
+            initial={{ scale: 0.8, y: 20 }}
+            animate={{ scale: 1, y: 0 }}
+            transition={{ type: "spring", stiffness: 320, damping: 22 }}
+            className="glass w-full max-w-xs rounded-[1.75rem] p-7 text-center shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="text-6xl">{checkInPopup.status === "late" ? "🦥" : "🎉"}</div>
+            <h3 className="mt-3 text-2xl font-extrabold text-k2-ink">{checkInPopup.status === "late" ? "เช็คอินแล้วน้า~" : "เยี่ยมมาก!"}</h3>
+            <p className="mt-1 text-4xl font-black tabular-nums tracking-tight text-k2-ink">
+              {checkInPopup.checkInAt ? new Date(checkInPopup.checkInAt).toLocaleTimeString("th-TH", { hour: "2-digit", minute: "2-digit" }) : "-"}
+            </p>
+            <span className={`mt-4 inline-block rounded-full px-4 py-1.5 text-sm font-bold ${checkInPopup.status === "late" ? "bg-rose-100 text-rose-700" : "bg-emerald-100 text-emerald-700"}`}>
+              {checkInPopup.status === "late" ? `สาย ${checkInPopup.lateMinutes} นาที 🐢` : "เข้างานตรงเวลา ✓"}
+            </span>
+            <p className="mt-3 text-sm font-semibold text-k2-muted">{checkInPopup.status === "late" ? "พรุ่งนี้มาเช้าอีกนิดนะ 💪" : "เริ่มต้นวันดีๆ ไปด้วยกัน 🌈"}</p>
+            <button type="button" onClick={() => setCheckInPopup(null)} className="mt-5 w-full rounded-2xl bg-k2-ink px-5 py-3 font-bold text-white">เริ่มทำงาน!</button>
+          </motion.div>
+        </motion.div>
+      ) : null}
+
+      {checkOutPopup ? (
+        <motion.div
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          className="fixed inset-0 z-50 flex items-center justify-center bg-k2-ink/40 p-6 backdrop-blur-sm"
+          onClick={() => setCheckOutPopup(null)}
+        >
+          <motion.div
+            initial={{ scale: 0.8, y: 20 }}
+            animate={{ scale: 1, y: 0 }}
+            transition={{ type: "spring", stiffness: 320, damping: 22 }}
+            className="glass w-full max-w-xs rounded-[1.75rem] p-7 text-center shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="text-6xl">🌟</div>
+            <h3 className="mt-3 text-2xl font-extrabold text-k2-ink">เลิกงานแล้ว ขอบคุณนะ! 💖</h3>
+            <p className="mt-3 text-sm font-semibold text-k2-muted">วันนี้ทำงานไป</p>
+            <p className="mt-1 text-4xl font-black tabular-nums tracking-tight text-k2-ink">
+              {checkOutPopup.hours} ชม. {checkOutPopup.minutes} นาที
+            </p>
+            <p className="mt-3 text-sm font-semibold text-k2-muted">พักผ่อนเยอะๆ แล้วเจอกันใหม่พรุ่งนี้ 🌙</p>
+            <button type="button" onClick={() => setCheckOutPopup(null)} className="mt-5 w-full rounded-2xl bg-k2-ink px-5 py-3 font-bold text-white">รับทราบ</button>
+          </motion.div>
+        </motion.div>
+      ) : null}
+    </>
   );
 }
 
