@@ -393,6 +393,8 @@ const roleSummaryPermissions: Record<Role, string[]> = {
 const roles: Role[] = ["Owner", "Manager", "Admin", "HR", "Accounting", "Designer", "Production Staff", "Packing Staff", "Sales Staff"];
 const BRANCH_LIST = ["พระรามเก้า", "พะเยา"];
 
+type CheckInResult = { ok: boolean; msg: string; checkInAt?: string; status?: "on_time" | "late"; lateMinutes?: number };
+
 // ระยะห่างระหว่างพิกัด (เมตร) — สูตร haversine
 function distanceMeters(lat1: number, lng1: number, lat2: number, lng2: number) {
   const toRad = (deg: number) => (deg * Math.PI) / 180;
@@ -2769,8 +2771,8 @@ export default function Page() {
     setMyAttendance(rows.find((row) => row.profileId === currentUser.id) ?? null);
   }
 
-  // พนักงานเช็คอิน: ขอ GPS -> ตรวจอยู่ในรัศมีสาขา -> คำนวณสาย -> บันทึก (พร้อมรูปเซลฟี่)
-  async function checkIn(selfie: string): Promise<{ ok: boolean; msg: string }> {
+  // พนักงานเช็คอิน: ขอ GPS -> ตรวจอยู่ในรัศมีสาขา -> คำนวณสาย -> บันทึก
+  async function checkIn(): Promise<CheckInResult> {
     if (!currentUser.branch) return { ok: false, msg: "ยังไม่ได้กำหนดสาขาประจำ — ให้ HR ตั้งค่าก่อน" };
     const setting = branchSettings[currentUser.branch];
     if (!navigator.geolocation) return { ok: false, msg: "เบราว์เซอร์ไม่รองรับ GPS" };
@@ -2792,17 +2794,17 @@ export default function Page() {
           if (supabase && uuidPattern.test(currentUser.id)) {
             const { error } = await supabase
               .from("attendance")
-              .upsert({ profile_id: currentUser.id, work_date: todayISO(), check_in_at: checkInAt, check_in_selfie: selfie || null, check_in_lat: lat, check_in_lng: lng, late_minutes: late, status }, { onConflict: "profile_id,work_date" });
+              .upsert({ profile_id: currentUser.id, work_date: todayISO(), check_in_at: checkInAt, check_in_selfie: null, check_in_lat: lat, check_in_lng: lng, late_minutes: late, status }, { onConflict: "profile_id,work_date" });
             if (error) {
               resolve({ ok: false, msg: error.message });
               return;
             }
             await loadAttendance();
           } else {
-            setMyAttendance({ id: crypto.randomUUID(), profileId: currentUser.id, workDate: todayISO(), checkInAt, checkOutAt: null, checkInSelfie: selfie, checkInLat: lat, checkInLng: lng, lateMinutes: late, status });
+            setMyAttendance({ id: crypto.randomUUID(), profileId: currentUser.id, workDate: todayISO(), checkInAt, checkOutAt: null, checkInSelfie: null, checkInLat: lat, checkInLng: lng, lateMinutes: late, status });
           }
           void appendAudit("checked in", currentUser.name, "attendance", null);
-          resolve({ ok: true, msg: late > 0 ? `เช็คอินแล้ว — สาย ${late} นาที` : "เช็คอินตรงเวลา ✓" });
+          resolve({ ok: true, msg: late > 0 ? `เช็คอินแล้ว — สาย ${late} นาที` : "เช็คอินตรงเวลา ✓", checkInAt, status, lateMinutes: late });
         },
         () => resolve({ ok: false, msg: "ดึงตำแหน่งไม่สำเร็จ — อนุญาตให้เข้าถึงตำแหน่งก่อน" }),
         { enableHighAccuracy: true, timeout: 10000 }
@@ -6604,10 +6606,10 @@ function SettingsView({
   const canManagePermissions = currentPermissions.includes("manage_permissions");
   const canManageCompany = currentPermissions.includes("manage_company_settings");
   const [newMember, setNewMember] = useState({ name: "", username: "", password: "", role: "Designer" as Role, branch: "" });
-  const newMemberBranchOptions = ["พะเยา", "กรุงเทพ"];
+  const newMemberBranchOptions = BRANCH_LIST;
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingMember, setEditingMember] = useState({ name: "", role: "Designer" as Role, roles: [] as Role[], branch: "" });
-  const memberBranchOptions = ["พะเยา", "กรุงเทพ"];
+  const memberBranchOptions = BRANCH_LIST;
   const [companyDraft, setCompanyDraft] = useState(companyProfile);
   const [facebookPageName, setFacebookPageName] = useState("");
   const [avatarError, setAvatarError] = useState("");
@@ -8148,59 +8150,23 @@ function AttendanceView({
   allAttendance: Attendance[];
   teamMembers: TeamMember[];
   isHr: boolean;
-  onCheckIn: (selfie: string) => Promise<{ ok: boolean; msg: string }>;
+  onCheckIn: () => Promise<CheckInResult>;
   onCheckOut: () => Promise<{ ok: boolean; msg: string }>;
 }) {
-  const [selfie, setSelfie] = useState<string | null>(null);
-  const [camOn, setCamOn] = useState(false);
   const [msg, setMsg] = useState("");
   const [busy, setBusy] = useState(false);
-  const videoRef = useRef<HTMLVideoElement | null>(null);
-  const streamRef = useRef<MediaStream | null>(null);
+  const [popup, setPopup] = useState<CheckInResult | null>(null);
 
-  function stopCam() {
-    streamRef.current?.getTracks().forEach((track) => track.stop());
-    streamRef.current = null;
-    setCamOn(false);
-  }
-  useEffect(() => () => stopCam(), []);
-  async function startCam() {
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "user" } });
-      streamRef.current = stream;
-      setCamOn(true);
-      setTimeout(() => {
-        if (videoRef.current) {
-          videoRef.current.srcObject = stream;
-          void videoRef.current.play();
-        }
-      }, 60);
-    } catch {
-      setMsg("เปิดกล้องไม่ได้ — กรุณาอนุญาตการใช้กล้องก่อน");
-    }
-  }
-  function capture() {
-    const video = videoRef.current;
-    if (!video) return;
-    const canvas = document.createElement("canvas");
-    canvas.width = 320;
-    canvas.height = 240;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
-    ctx.drawImage(video, 0, 0, 320, 240);
-    setSelfie(canvas.toDataURL("image/jpeg", 0.6));
-    stopCam();
-  }
   async function doCheckIn() {
-    if (!selfie) {
-      setMsg("ถ่ายเซลฟี่ก่อนเช็คอิน");
-      return;
-    }
     setBusy(true);
-    const result = await onCheckIn(selfie);
+    const result = await onCheckIn();
     setBusy(false);
-    setMsg(result.msg);
-    if (result.ok) setSelfie(null);
+    if (result.ok) {
+      setMsg("");
+      setPopup(result);
+    } else {
+      setMsg(result.msg);
+    }
   }
   async function doCheckOut() {
     setBusy(true);
@@ -8211,6 +8177,40 @@ function AttendanceView({
 
   const fmtTime = (iso: string | null) => (iso ? new Date(iso).toLocaleTimeString("th-TH", { hour: "2-digit", minute: "2-digit" }) : "-");
   const nameById = (id: string) => teamMembers.find((member) => member.id === id)?.name ?? "พนักงาน";
+  const branchById = (id: string) => teamMembers.find((member) => member.id === id)?.branch ?? "ไม่ระบุสาขา";
+  const statusLabel = (row: Attendance) => (row.status === "late" ? `สาย ${row.lateMinutes} นาที` : "ตรงเวลา");
+
+  // ส่งออก Excel การลงเวลา — แยกเป็น 1 ชีตต่อ 1 สาขา
+  function exportAttendanceExcel() {
+    const workbook = XLSX.utils.book_new();
+    const byBranch = new Map<string, Attendance[]>();
+    allAttendance.forEach((row) => {
+      const branch = branchById(row.profileId);
+      const list = byBranch.get(branch) ?? [];
+      list.push(row);
+      byBranch.set(branch, list);
+    });
+    const branches = [...byBranch.keys()].sort((a, b) => a.localeCompare(b, "th"));
+    branches.forEach((branch) => {
+      const rows = (byBranch.get(branch) ?? [])
+        .slice()
+        .sort((a, b) => nameById(a.profileId).localeCompare(nameById(b.profileId), "th"))
+        .map((row) => ({
+          พนักงาน: nameById(row.profileId),
+          สาขา: branch,
+          วันที่: row.workDate,
+          เวลาเข้า: fmtTime(row.checkInAt),
+          เวลาออก: fmtTime(row.checkOutAt),
+          สถานะ: statusLabel(row),
+          สายนาที: row.status === "late" ? row.lateMinutes : 0
+        }));
+      const sheet = XLSX.utils.json_to_sheet(rows);
+      // ชื่อชีต Excel จำกัด 31 ตัวอักษรและห้ามใช้อักขระบางตัว
+      const safeName = branch.replace(/[\\/?*[\]:]/g, " ").slice(0, 31) || "สาขา";
+      XLSX.utils.book_append_sheet(workbook, sheet, safeName);
+    });
+    XLSX.writeFile(workbook, `ลงเวลา_${todayISO()}.xlsx`);
+  }
 
   return (
     <div className="space-y-4">
@@ -8237,8 +8237,6 @@ function AttendanceView({
                 </span>
                 <span className="text-sm font-semibold text-k2-muted">เข้า {fmtTime(myAttendance.checkInAt)} · ออก {fmtTime(myAttendance.checkOutAt)}</span>
               </div>
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              {myAttendance.checkInSelfie ? <img src={myAttendance.checkInSelfie} alt="selfie" className="h-28 w-28 rounded-2xl object-cover" /> : null}
               {!myAttendance.checkOutAt ? (
                 <button type="button" disabled={busy} onClick={doCheckOut} className="rounded-2xl bg-k2-ink px-5 py-3 font-bold text-white disabled:opacity-60">เช็คเอาท์</button>
               ) : (
@@ -8247,39 +8245,66 @@ function AttendanceView({
             </div>
           ) : (
             <div className="space-y-3">
-              {camOn ? (
-                <div className="space-y-3">
-                  <video ref={videoRef} playsInline muted className="h-60 w-full max-w-sm rounded-2xl bg-black object-cover" />
-                  <button type="button" onClick={capture} className="rounded-2xl bg-k2-ink px-5 py-3 font-bold text-white">ถ่ายรูป</button>
-                </div>
-              ) : selfie ? (
-                <div className="space-y-3">
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img src={selfie} alt="selfie" className="h-60 w-full max-w-sm rounded-2xl object-cover" />
-                  <div className="flex flex-wrap gap-3">
-                    <button type="button" onClick={() => { setSelfie(null); void startCam(); }} className="rounded-2xl bg-white/70 px-4 py-3 font-bold text-k2-muted">ถ่ายใหม่</button>
-                    <button type="button" disabled={busy} onClick={doCheckIn} className="rounded-2xl bg-emerald-500 px-5 py-3 font-bold text-white disabled:opacity-60">เช็คอิน (GPS + รูป)</button>
-                  </div>
-                </div>
-              ) : (
-                <button type="button" onClick={startCam} className="rounded-2xl bg-k2-mint px-5 py-3 font-bold text-k2-ink">เปิดกล้องถ่ายเซลฟี่</button>
-              )}
+              <p className="text-sm font-semibold text-k2-muted">กดปุ่มเดียวจบ — ระบบจะเช็ค GPS แล้วบันทึกเวลาเข้างานให้อัตโนมัติ</p>
+              <button type="button" disabled={busy} onClick={doCheckIn} className="rounded-2xl bg-emerald-500 px-6 py-3 font-bold text-white disabled:opacity-60">{busy ? "กำลังเช็คอิน..." : "เช็คอินเข้างาน"}</button>
             </div>
           )}
-          {msg ? <p className="mt-3 text-sm font-semibold text-k2-ink">{msg}</p> : null}
+          {msg ? <p className="mt-3 text-sm font-semibold text-rose-600">{msg}</p> : null}
         </section>
+      ) : null}
+
+      {popup ? (
+        <motion.div
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          className="fixed inset-0 z-50 flex items-center justify-center bg-k2-ink/40 p-6 backdrop-blur-sm"
+          onClick={() => setPopup(null)}
+        >
+          <motion.div
+            initial={{ scale: 0.8, y: 20 }}
+            animate={{ scale: 1, y: 0 }}
+            transition={{ type: "spring", stiffness: 320, damping: 22 }}
+            className="glass w-full max-w-xs rounded-[1.75rem] p-7 text-center shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="text-6xl">{popup.status === "late" ? "🦥" : "🎉"}</div>
+            <h3 className="mt-3 text-2xl font-extrabold text-k2-ink">
+              {popup.status === "late" ? "เช็คอินแล้วน้า~" : "เยี่ยมมาก!"}
+            </h3>
+            <p className="mt-1 text-4xl font-black tabular-nums tracking-tight text-k2-ink">
+              {fmtTime(popup.checkInAt ?? null)}
+            </p>
+            <span className={`mt-4 inline-block rounded-full px-4 py-1.5 text-sm font-bold ${popup.status === "late" ? "bg-rose-100 text-rose-700" : "bg-emerald-100 text-emerald-700"}`}>
+              {popup.status === "late" ? `สาย ${popup.lateMinutes} นาที 🐢` : "เข้างานตรงเวลา ✓"}
+            </span>
+            <p className="mt-3 text-sm font-semibold text-k2-muted">
+              {popup.status === "late" ? "พรุ่งนี้มาเช้าอีกนิดนะ 💪" : "เริ่มต้นวันดีๆ ไปด้วยกัน 🌈"}
+            </p>
+            <button type="button" onClick={() => setPopup(null)} className="mt-5 w-full rounded-2xl bg-k2-ink px-5 py-3 font-bold text-white">รับทราบ</button>
+          </motion.div>
+        </motion.div>
       ) : null}
 
       {isHr ? (
         <section className="glass rounded-[1.5rem] p-5">
-          <h4 className="mb-3 text-lg font-extrabold">สรุปการลงเวลาวันนี้</h4>
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+            <h4 className="text-lg font-extrabold">สรุปการลงเวลาวันนี้</h4>
+            <button
+              type="button"
+              onClick={exportAttendanceExcel}
+              disabled={allAttendance.length === 0}
+              className="rounded-2xl bg-emerald-500 px-4 py-2 text-sm font-bold text-white disabled:opacity-50"
+            >
+              ส่งออก Excel (แยกสาขา)
+            </button>
+          </div>
           {allAttendance.length === 0 ? (
             <p className="text-sm font-semibold text-k2-muted">ยังไม่มีพนักงานเช็คอินวันนี้</p>
           ) : (
             <div className="space-y-2">
               {allAttendance.map((row) => (
                 <div key={row.id} className="flex flex-wrap items-center justify-between gap-2 rounded-2xl bg-white/60 px-4 py-3">
-                  <span className="font-bold">{nameById(row.profileId)}</span>
+                  <span className="font-bold">{nameById(row.profileId)} <span className="text-xs font-semibold text-k2-muted">· {branchById(row.profileId)}</span></span>
                   <span className="text-sm font-semibold text-k2-muted">เข้า {fmtTime(row.checkInAt)} · ออก {fmtTime(row.checkOutAt)}</span>
                   <span className={`rounded-full px-3 py-1 text-xs font-bold ${row.status === "late" ? "bg-rose-100 text-rose-700" : "bg-emerald-100 text-emerald-700"}`}>
                     {row.status === "late" ? `สาย ${row.lateMinutes} นาที` : "ตรงเวลา"}
