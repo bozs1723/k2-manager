@@ -395,7 +395,7 @@ const roleSummaryPermissions: Record<Role, string[]> = {
 const roles: Role[] = ["Owner", "Manager", "Admin", "HR", "Accounting", "Designer", "Production Staff", "Packing Staff", "Sales Staff"];
 const BRANCH_LIST = ["พระรามเก้า", "พะเยา"];
 
-type CheckInResult = { ok: boolean; msg: string; checkInAt?: string; status?: "on_time" | "late"; lateMinutes?: number };
+type CheckInResult = { ok: boolean; msg: string; checkInAt?: string; status?: "on_time" | "late"; lateMinutes?: number; geofenced?: boolean };
 
 // ระยะห่างระหว่างพิกัด (เมตร) — สูตร haversine
 function distanceMeters(lat1: number, lng1: number, lat2: number, lng2: number) {
@@ -2912,10 +2912,11 @@ export default function Page() {
         async (pos) => {
           const lat = pos.coords.latitude;
           const lng = pos.coords.longitude;
-          if (setting && setting.gpsLat != null && setting.gpsLng != null) {
-            const dist = distanceMeters(lat, lng, setting.gpsLat, setting.gpsLng);
-            if (dist > (setting.radiusM || 150)) {
-              resolve({ ok: false, msg: `อยู่นอกรัศมีสาขา (${dist} ม. / อนุญาต ${setting.radiusM} ม.)` });
+          const geofenced = !!(setting && setting.gpsLat != null && setting.gpsLng != null);
+          if (geofenced) {
+            const dist = distanceMeters(lat, lng, setting!.gpsLat!, setting!.gpsLng!);
+            if (dist > (setting!.radiusM || 150)) {
+              resolve({ ok: false, msg: `อยู่นอกรัศมีสาขา (${dist} ม. / อนุญาต ${setting!.radiusM} ม.)` });
               return;
             }
           }
@@ -2935,7 +2936,7 @@ export default function Page() {
             setMyAttendance({ id: crypto.randomUUID(), profileId: currentUser.id, workDate: todayISO(), checkInAt, checkOutAt: null, checkInSelfie: null, checkOutSelfie: null, checkInLat: lat, checkInLng: lng, lateMinutes: late, status });
           }
           void appendAudit("checked in", currentUser.name, "attendance", null);
-          resolve({ ok: true, msg: late > 0 ? `เช็คอินแล้ว — สาย ${late} นาที` : "เช็คอินตรงเวลา ✓", checkInAt, status, lateMinutes: late });
+          resolve({ ok: true, msg: late > 0 ? `เช็คอินแล้ว — สาย ${late} นาที` : "เช็คอินตรงเวลา ✓", checkInAt, status, lateMinutes: late, geofenced });
         },
         () => resolve({ ok: false, msg: "ดึงตำแหน่งไม่สำเร็จ — อนุญาตให้เข้าถึงตำแหน่งก่อน" }),
         { enableHighAccuracy: true, timeout: 10000 }
@@ -8640,6 +8641,9 @@ function CheckInControl({
               {checkInPopup.status === "late" ? `สาย ${checkInPopup.lateMinutes} นาที 🐢` : "เข้างานตรงเวลา ✓"}
             </span>
             <p className="mt-3 text-sm font-semibold text-k2-muted">{checkInPopup.status === "late" ? "พรุ่งนี้มาเช้าอีกนิดนะ 💪" : "เริ่มต้นวันดีๆ ไปด้วยกัน 🌈"}</p>
+            {checkInPopup.geofenced === false ? (
+              <p className="mt-3 rounded-2xl bg-amber-100 px-3 py-2 text-xs font-bold text-amber-700">⚠️ สาขานี้ยังไม่ได้ตั้งพิกัด GPS — เช็คอินได้จากทุกที่ (ให้ HR ไปตั้งพิกัดที่เมนู HR)</p>
+            ) : null}
             <button type="button" onClick={() => setCheckInPopup(null)} className="mt-5 w-full rounded-2xl bg-k2-ink px-5 py-3 font-bold text-white">เริ่มทำงาน!</button>
           </motion.div>
         </motion.div>
@@ -8830,6 +8834,9 @@ function AttendanceView({
             <p className="mt-3 text-sm font-semibold text-k2-muted">
               {popup.status === "late" ? "พรุ่งนี้มาเช้าอีกนิดนะ 💪" : "เริ่มต้นวันดีๆ ไปด้วยกัน 🌈"}
             </p>
+            {popup.geofenced === false ? (
+              <p className="mt-3 rounded-2xl bg-amber-100 px-3 py-2 text-xs font-bold text-amber-700">⚠️ สาขานี้ยังไม่ได้ตั้งพิกัด GPS — เช็คอินได้จากทุกที่ (ตั้งพิกัดที่เมนู HR)</p>
+            ) : null}
             <button type="button" onClick={() => setPopup(null)} className="mt-5 w-full rounded-2xl bg-k2-ink px-5 py-3 font-bold text-white">รับทราบ</button>
           </motion.div>
         </motion.div>
