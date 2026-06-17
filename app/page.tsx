@@ -3900,7 +3900,7 @@ export default function Page() {
                           className={`flex flex-col items-center justify-center gap-1 rounded-2xl px-1 py-2 text-center text-[11px] font-semibold leading-tight transition active:scale-95 ${
                             activeView === item
                               ? "bg-k2-ink text-white shadow-md"
-                              : "bg-white/70 text-k2-muted hover:bg-k2-mint hover:text-k2-ink hover:shadow"
+                              : "bg-white/70 text-k2-muted hover:bg-k2-mint hover:text-k2-ink hover:shadow hover:ring-2 hover:ring-k2-ink/40"
                           }`}
                         >
                           <Icon className="h-5 w-5 shrink-0" />
@@ -4585,7 +4585,7 @@ function Nav({
           className={`flex items-center gap-3 rounded-2xl px-4 py-3 text-left text-sm font-semibold transition active:scale-[0.98] ${
             activeView === label
               ? "bg-k2-ink text-white shadow-lg shadow-slate-900/15"
-              : "text-k2-muted hover:bg-k2-mint hover:text-k2-ink hover:shadow-md hover:translate-x-0.5"
+              : "text-k2-muted hover:bg-k2-mint hover:text-k2-ink hover:shadow-md hover:ring-2 hover:ring-k2-ink/30"
           }`}
         >
           <Icon className="h-5 w-5" />
