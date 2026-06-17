@@ -27,6 +27,7 @@ import {
   ListTodo,
   Lock,
   LogOut,
+  Menu,
   MessageSquare,
   Pencil,
   Plus,
@@ -1202,6 +1203,8 @@ export default function Page() {
   const menuItems = useMemo(() => navigationItems.filter((item) => item.label !== "Detail"), [navigationItems]);
   // หน้าแรก = เมนูแรกที่ผู้ใช้มีสิทธิ์เห็น
   const homeView = navigationItems[0]?.label ?? "Dashboard";
+  // เมนูมือถือแบบหุบ/กางได้ (ประหยัดพื้นที่ ไม่บังเนื้อหา)
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
   useEffect(() => {
     if (!supabase) return;
@@ -3868,19 +3871,46 @@ export default function Page() {
                 </button>
               </div>
             </div>
-            <div className="mt-3 grid grid-cols-4 gap-2 sm:grid-cols-5 lg:hidden">
-              {menuItems.map(({ label: item, icon: Icon }) => (
-                <button
-                  key={item}
-                  onClick={() => setActiveView(item)}
-                  className={`flex flex-col items-center justify-center gap-1 rounded-2xl px-1 py-2 text-center text-[11px] font-semibold leading-tight ${
-                    activeView === item ? "bg-k2-ink text-white" : "bg-white/70 text-k2-muted"
-                  }`}
-                >
-                  <Icon className="h-5 w-5 shrink-0" />
-                  <span>{viewLabel[item] ?? item}</span>
-                </button>
-              ))}
+            <div className="mt-3 lg:hidden">
+              <button
+                type="button"
+                onClick={() => setMobileMenuOpen((open) => !open)}
+                className="flex w-full items-center justify-between rounded-2xl bg-k2-ink px-4 py-3 text-sm font-bold text-white shadow-sm transition active:scale-[0.98]"
+              >
+                <span className="flex items-center gap-2">
+                  <Menu className="h-4 w-4" />
+                  เมนู · {viewLabel[activeView] ?? activeView}
+                </span>
+                <ChevronDown className={`h-5 w-5 transition-transform duration-300 ${mobileMenuOpen ? "rotate-180" : ""}`} />
+              </button>
+              <AnimatePresence initial={false}>
+                {mobileMenuOpen ? (
+                  <motion.div
+                    initial={{ height: 0, opacity: 0 }}
+                    animate={{ height: "auto", opacity: 1 }}
+                    exit={{ height: 0, opacity: 0 }}
+                    transition={{ duration: 0.22 }}
+                    className="overflow-hidden"
+                  >
+                    <div className="mt-2 grid grid-cols-4 gap-2 sm:grid-cols-5">
+                      {menuItems.map(({ label: item, icon: Icon }) => (
+                        <button
+                          key={item}
+                          onClick={() => { setActiveView(item); setMobileMenuOpen(false); }}
+                          className={`flex flex-col items-center justify-center gap-1 rounded-2xl px-1 py-2 text-center text-[11px] font-semibold leading-tight transition active:scale-95 ${
+                            activeView === item
+                              ? "bg-k2-ink text-white shadow-md"
+                              : "bg-white/70 text-k2-muted hover:bg-k2-mint hover:text-k2-ink hover:shadow"
+                          }`}
+                        >
+                          <Icon className="h-5 w-5 shrink-0" />
+                          <span>{viewLabel[item] ?? item}</span>
+                        </button>
+                      ))}
+                    </div>
+                  </motion.div>
+                ) : null}
+              </AnimatePresence>
             </div>
           </header>
 
@@ -4552,8 +4582,10 @@ function Nav({
         <button
           key={label}
           onClick={() => onChange(label)}
-          className={`flex items-center gap-3 rounded-2xl px-4 py-3 text-left text-sm font-semibold transition ${
-            activeView === label ? "bg-k2-ink text-white shadow-lg shadow-slate-900/15" : "text-k2-muted hover:bg-white/70"
+          className={`flex items-center gap-3 rounded-2xl px-4 py-3 text-left text-sm font-semibold transition active:scale-[0.98] ${
+            activeView === label
+              ? "bg-k2-ink text-white shadow-lg shadow-slate-900/15"
+              : "text-k2-muted hover:bg-k2-mint hover:text-k2-ink hover:shadow-md hover:translate-x-0.5"
           }`}
         >
           <Icon className="h-5 w-5" />
