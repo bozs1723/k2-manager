@@ -465,6 +465,7 @@ const viewLabel: Record<string, string> = {
   Dashboard: "แดชบอร์ด",
   "My Jobs": "งานของฉัน",
   Board: "บอร์ดคิวงาน",
+  Completed: "งานที่เสร็จแล้ว",
   Leads: "กล่องลูกค้า",
   Quotations: "ใบเสนอราคา",
   "Create Job": "สร้างงาน",
@@ -1181,6 +1182,7 @@ export default function Page() {
         { label: "Dashboard", icon: LayoutDashboard, visible: currentRolePermissions.includes("view_dashboard") },
         { label: "My Jobs", icon: ListTodo, visible: true },
         { label: "Board", icon: ClipboardList, visible: currentRolePermissions.includes("view_dashboard") },
+        { label: "Completed", icon: CheckCircle2, visible: currentRolePermissions.includes("assign_staff") },
         { label: "Leads", icon: Inbox, visible: currentRolePermissions.includes("create_job") },
         { label: "Quotations", icon: ReceiptText, visible: currentRolePermissions.includes("create_job") },
         { label: "Create Job", icon: ClipboardPlus, visible: currentRolePermissions.includes("create_job") },
@@ -3975,6 +3977,11 @@ export default function Page() {
                 />
               </motion.div>
             )}
+            {activeView === "Completed" && (
+              <motion.div key="completed" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }}>
+                <CompletedJobsView jobs={branchScopedJobs} canSeeMoney={canSeeMoney} onSelect={openJobDetail} />
+              </motion.div>
+            )}
             {activeView === "Calendar" && (
               <motion.div key="calendar" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }}>
                 <CalendarView jobs={filteredJobs} customers={customerRecords} onSelect={openJobDetail} />
@@ -4657,6 +4664,160 @@ function MyJobsView({
           </div>
         </div>
       ) : null}
+    </div>
+  );
+}
+
+// แปลงวันที่จาก statusHistory (รูปแบบ en-GB "dd/mm/yyyy, hh:mm:ss") → ISO "yyyy-mm-dd"
+function parseEnGbDate(value: string): string | null {
+  const datePart = value.split(",")[0]?.trim();
+  const match = datePart?.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+  if (!match) return null;
+  return `${match[3]}-${match[2]}-${match[1]}`;
+}
+
+// วันที่ปิดงานจริง = ครั้งล่าสุดที่เปลี่ยนสถานะเป็น "เสร็จสิ้น/ยกเลิก" (ถ้าหาไม่เจอใช้กำหนดส่งแทน)
+function jobClosedDate(job: Job): string {
+  const closed = [...job.statusHistory].reverse().find((event) => event.to === "Completed" || event.to === "Cancelled");
+  return (closed ? parseEnGbDate(closed.at) : null) ?? job.dueDate;
+}
+
+// หน้ารวมงานที่เสร็จ/ปิดแล้วทั้งหมด (สำหรับหัวหน้า/แอดมิน) — มีตัวค้นหาข้อความ ช่วงวันที่ และสถานะ
+function CompletedJobsView({ jobs, canSeeMoney, onSelect }: { jobs: Job[]; canSeeMoney: boolean; onSelect: (id: string) => void }) {
+  const [query, setQuery] = useState("");
+  const [statusFilter, setStatusFilter] = useState<"all" | "Completed" | "Cancelled">("all");
+  const [fromDate, setFromDate] = useState("");
+  const [toDate, setToDate] = useState("");
+
+  const closedJobs = useMemo(
+    () => jobs.filter((job) => job.status === "Completed" || job.status === "Cancelled"),
+    [jobs]
+  );
+
+  const results = useMemo(() => {
+    const normalized = query.trim().toLowerCase();
+    return closedJobs
+      .map((job) => ({ job, closedDate: jobClosedDate(job) }))
+      .filter(({ job, closedDate }) => {
+        if (statusFilter !== "all" && job.status !== statusFilter) return false;
+        if (fromDate && closedDate < fromDate) return false;
+        if (toDate && closedDate > toDate) return false;
+        if (normalized) {
+          const haystack = [job.id, job.customerName, job.title, job.type, job.assignedDesigner, job.assignedProduction]
+            .join(" ")
+            .toLowerCase();
+          if (!haystack.includes(normalized)) return false;
+        }
+        return true;
+      })
+      .sort((a, b) => b.closedDate.localeCompare(a.closedDate));
+  }, [closedJobs, query, statusFilter, fromDate, toDate]);
+
+  const hasFilters = Boolean(query.trim() || statusFilter !== "all" || fromDate || toDate);
+  const completedCount = results.filter(({ job }) => job.status === "Completed").length;
+  const cancelledCount = results.filter(({ job }) => job.status === "Cancelled").length;
+
+  function clearFilters() {
+    setQuery("");
+    setStatusFilter("all");
+    setFromDate("");
+    setToDate("");
+  }
+
+  const filterButtons: Array<{ key: "all" | "Completed" | "Cancelled"; label: string }> = [
+    { key: "all", label: "ทั้งหมด" },
+    { key: "Completed", label: "เสร็จสิ้น" },
+    { key: "Cancelled", label: "ยกเลิก" }
+  ];
+
+  return (
+    <div className="space-y-4">
+      <div className="glass flex flex-wrap items-center gap-3 rounded-[1.5rem] p-5">
+        <div>
+          <p className="text-sm font-semibold text-k2-muted">รวมงานที่ปิดแล้วทั้งหมด</p>
+          <h3 className="text-2xl font-semibold">งานที่เสร็จแล้ว</h3>
+        </div>
+        <div className="ml-auto flex flex-wrap gap-2 text-xs font-bold">
+          <span className="rounded-full bg-emerald-100 px-3 py-1.5 text-emerald-700">เสร็จสิ้น {completedCount}</span>
+          <span className="rounded-full bg-k2-rose px-3 py-1.5 text-rose-700">ยกเลิก {cancelledCount}</span>
+          <span className="rounded-full bg-white/70 px-3 py-1.5 text-k2-muted">แสดง {results.length}</span>
+        </div>
+      </div>
+
+      <div className="glass space-y-3 rounded-[1.5rem] p-5">
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-center">
+          <label className="flex min-w-0 flex-1 items-center gap-2 rounded-2xl border border-white/70 bg-white/70 px-3 py-2 shadow-sm">
+            <Search className="h-4 w-4 shrink-0 text-k2-muted" />
+            <input
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              placeholder="ค้นหาเลขงาน ลูกค้า ชื่องาน หรือทีมงาน"
+              className="w-full min-w-0 bg-transparent text-sm outline-none"
+            />
+          </label>
+          <div className="flex flex-wrap gap-2">
+            {filterButtons.map((button) => (
+              <button
+                key={button.key}
+                type="button"
+                onClick={() => setStatusFilter(button.key)}
+                className={`rounded-full px-4 py-2 text-xs font-bold transition ${
+                  statusFilter === button.key
+                    ? "bg-k2-ink text-white shadow"
+                    : "bg-white/70 text-k2-muted hover:bg-k2-mint hover:text-k2-ink"
+                }`}
+              >
+                {button.label}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+          <label className="flex items-center gap-2 rounded-2xl border border-white/70 bg-white/70 px-3 py-2 text-sm shadow-sm">
+            <span className="shrink-0 font-semibold text-k2-muted">ตั้งแต่</span>
+            <input
+              type="date"
+              value={fromDate}
+              max={toDate || undefined}
+              onChange={(event) => setFromDate(event.target.value)}
+              className="bg-transparent text-sm outline-none"
+            />
+          </label>
+          <label className="flex items-center gap-2 rounded-2xl border border-white/70 bg-white/70 px-3 py-2 text-sm shadow-sm">
+            <span className="shrink-0 font-semibold text-k2-muted">ถึง</span>
+            <input
+              type="date"
+              value={toDate}
+              min={fromDate || undefined}
+              onChange={(event) => setToDate(event.target.value)}
+              className="bg-transparent text-sm outline-none"
+            />
+          </label>
+          {hasFilters ? (
+            <button
+              type="button"
+              onClick={clearFilters}
+              className="rounded-full bg-white/70 px-4 py-2 text-xs font-bold text-k2-muted shadow-sm transition hover:bg-k2-rose hover:text-rose-700"
+            >
+              ล้างตัวกรอง
+            </button>
+          ) : null}
+        </div>
+      </div>
+
+      <div className="glass rounded-[1.5rem] p-5">
+        {results.length ? (
+          <div className="space-y-3">
+            {results.map(({ job }) => (
+              <JobRow key={job.id} job={job} canSeeMoney={canSeeMoney} onSelect={onSelect} />
+            ))}
+          </div>
+        ) : (
+          <div className="rounded-2xl border border-dashed border-white/90 bg-white/40 px-4 py-10 text-center text-sm font-semibold text-k2-muted">
+            {closedJobs.length ? "ไม่พบงานที่ตรงกับตัวกรอง" : "ยังไม่มีงานที่เสร็จหรือปิดแล้ว"}
+          </div>
+        )}
+      </div>
     </div>
   );
 }
