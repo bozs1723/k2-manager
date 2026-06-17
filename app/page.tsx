@@ -22,6 +22,7 @@ import {
   Inbox,
   FileImage,
   Home,
+  KeyRound,
   LayoutDashboard,
   ListTodo,
   Lock,
@@ -3215,6 +3216,21 @@ export default function Page() {
   }
 
   // เปลี่ยนรหัสผ่านของตัวเอง (ผ่าน Supabase Auth) — คืนค่า true ถ้าสำเร็จ
+  // เจ้าของรีเซ็ตรหัสผ่านให้พนักงานคนอื่น (ผ่าน Edge Function ที่ตรวจสิทธิ์ Owner ฝั่งเซิร์ฟเวอร์)
+  async function resetMemberPassword(memberId: string): Promise<{ ok: boolean; password?: string; msg: string }> {
+    if (currentUser.role !== "Owner") return { ok: false, msg: "เฉพาะเจ้าของเท่านั้นที่รีเซ็ตรหัสผู้อื่นได้" };
+    if (!supabase || !isSupabaseConfigured) return { ok: false, msg: "ใช้ได้เมื่อเชื่อมต่อ Supabase แล้วเท่านั้น" };
+    // รหัสตัวเลข 6 หลัก สุ่มแบบปลอดภัย
+    const rnd = new Uint32Array(1);
+    crypto.getRandomValues(rnd);
+    const newPassword = String(100000 + (rnd[0] % 900000));
+    const { data, error } = await supabase.functions.invoke("admin-reset-password", { body: { userId: memberId, newPassword } });
+    if (error) return { ok: false, msg: error.message };
+    if (data && (data as { error?: string }).error) return { ok: false, msg: (data as { error: string }).error };
+    void appendAudit("reset member password", currentUser.name, "profiles", memberId);
+    return { ok: true, password: newPassword, msg: "รีเซ็ตรหัสผ่านแล้ว" };
+  }
+
   async function changeOwnPassword(newPassword: string): Promise<boolean> {
     if (newPassword.length < 6) {
       setDataError("รหัสผ่านต้องมีอย่างน้อย 6 ตัวอักษร");
@@ -4001,6 +4017,7 @@ export default function Page() {
                   onUpdateMember={updateTeamMember}
                   onUpdateMemberAvatar={updateTeamMemberAvatar}
                   onRemoveMember={removeTeamMember}
+                  onResetMemberPassword={resetMemberPassword}
                   permissionMatrix={permissionMatrix}
                   onUpdateRolePermission={updateRolePermission}
                   onResetRolePermissions={resetRolePermissions}
@@ -6893,6 +6910,7 @@ function SettingsView({
   onUpdateMember,
   onUpdateMemberAvatar,
   onRemoveMember,
+  onResetMemberPassword,
   permissionMatrix,
   onUpdateRolePermission,
   onResetRolePermissions
@@ -6906,6 +6924,7 @@ function SettingsView({
   onUpdateMember: (memberId: string, updates: Pick<TeamMember, "name" | "role" | "branch"> & { roles?: Role[] }) => void;
   onUpdateMemberAvatar: (memberId: string, avatarUrl: string) => void;
   onRemoveMember: (memberId: string) => void;
+  onResetMemberPassword: (memberId: string) => Promise<{ ok: boolean; password?: string; msg: string }>;
   permissionMatrix: Record<Role, PermissionKey[]>;
   onUpdateRolePermission: (role: Role, permission: PermissionKey, enabled: boolean) => void;
   onResetRolePermissions: () => void;
@@ -6914,6 +6933,17 @@ function SettingsView({
   const canManageTeam = currentPermissions.includes("manage_users");
   const canManagePermissions = currentPermissions.includes("manage_permissions");
   const canManageCompany = currentPermissions.includes("manage_company_settings");
+  const isOwner = currentRole === "Owner";
+  const [pwBusyId, setPwBusyId] = useState<string | null>(null);
+  const [pwResult, setPwResult] = useState<{ memberId: string; ok: boolean; password?: string; msg: string } | null>(null);
+  async function handleResetPassword(member: TeamMember) {
+    if (!confirm(`รีเซ็ตรหัสผ่านของ ${member.name}? รหัสเดิมจะใช้ไม่ได้ทันที`)) return;
+    setPwBusyId(member.id);
+    setPwResult(null);
+    const result = await onResetMemberPassword(member.id);
+    setPwBusyId(null);
+    setPwResult({ memberId: member.id, ...result });
+  }
   const [newMember, setNewMember] = useState({ name: "", username: "", password: "", role: "Designer" as Role, branch: "" });
   const newMemberBranchOptions = BRANCH_LIST;
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -7233,6 +7263,17 @@ function SettingsView({
                         <Pencil className="h-4 w-4" />
                       </button>
                     )}
+                    {isOwner ? (
+                      <button
+                        type="button"
+                        onClick={() => handleResetPassword(member)}
+                        disabled={pwBusyId === member.id}
+                        className="grid h-10 w-10 place-items-center rounded-2xl bg-amber-50 text-amber-600 disabled:opacity-45"
+                        title="รีเซ็ตรหัสผ่าน"
+                      >
+                        <KeyRound className="h-4 w-4" />
+                      </button>
+                    ) : null}
                     <button
                       type="button"
                       onClick={() => onRemoveMember(member.id)}
@@ -7244,6 +7285,16 @@ function SettingsView({
                     </button>
                   </div>
                 </div>
+                {pwResult && pwResult.memberId === member.id ? (
+                  pwResult.ok ? (
+                    <div className="mt-3 rounded-2xl bg-amber-50 px-4 py-3 text-sm font-bold text-amber-800">
+                      ✅ รหัสผ่านใหม่ของ {member.name}: <span className="text-lg font-black tracking-wider">{pwResult.password}</span>
+                      <span className="ml-2 font-semibold text-amber-700">(ก็อปแจก แล้วให้เปลี่ยนตอนเข้าครั้งแรก)</span>
+                    </div>
+                  ) : (
+                    <div className="mt-3 rounded-2xl bg-rose-50 px-4 py-3 text-sm font-bold text-rose-700">❌ {pwResult.msg}</div>
+                  )
+                ) : null}
               </div>
             );
           })}
