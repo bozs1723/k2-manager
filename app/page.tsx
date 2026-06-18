@@ -2056,6 +2056,12 @@ export default function Page() {
     }
   }
 
+  // แจ้งเตือนเจ้าของผ่าน LINE ทุกครั้งที่เช็คอินสำเร็จ (ยิงผ่าน Edge Function — เงียบไว้ถ้าล้มเหลว ไม่กระทบการเช็คอิน)
+  function notifyOwnerCheckInLine(payload: { checkInAt: string; status: "on_time" | "late"; lateMinutes: number }) {
+    if (!supabase || !isSupabaseConfigured) return;
+    void supabase.functions.invoke("notify-checkin-line", { body: payload }).catch(() => {});
+  }
+
   function markAllNotifsRead() {
     setNotifications((current) => current.map((item) => ({ ...item, read: true })));
     if (supabase && isSupabaseConfigured && uuidPattern.test(currentUser.id)) {
@@ -2919,6 +2925,7 @@ export default function Page() {
               return;
             }
             await loadAttendance();
+            notifyOwnerCheckInLine({ checkInAt, status, lateMinutes: late });
           } else {
             setMyAttendance({ id: crypto.randomUUID(), profileId: currentUser.id, workDate: todayISO(), checkInAt, checkOutAt: null, checkInSelfie: null, checkOutSelfie: null, checkInLat: lat, checkInLng: lng, lateMinutes: late, status });
           }
