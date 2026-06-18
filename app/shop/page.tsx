@@ -20,10 +20,14 @@ import {
   ProductCategory,
   SelectedOption,
   ShopSettings,
+  areaPricePerSqm,
+  areaSqm,
   formatBaht,
   mapCategory,
   mapProduct,
   mapSettings,
+  matrixTierForQty,
+  matrixUnitPrice,
   netUnitPrice,
   startingPrice,
   totalPrice
@@ -58,7 +62,8 @@ const FALLBACK_PRODUCTS: Product[] = [
     priceTiers: [{ minQty: 1, price: 970 }, { minQty: 6, price: 920 }, { minQty: 12, price: 870 }],
     minQty: 1,
     active: true,
-    sort: 1
+    sort: 1,
+    pricingMode: "fixed"
   },
   {
     id: "demo-tee",
@@ -75,7 +80,8 @@ const FALLBACK_PRODUCTS: Product[] = [
     priceTiers: [{ minQty: 1, price: 250 }, { minQty: 10, price: 220 }, { minQty: 50, price: 190 }],
     minQty: 1,
     active: true,
-    sort: 1
+    sort: 1,
+    pricingMode: "fixed"
   }
 ];
 
@@ -245,10 +251,16 @@ function ProductCard({ product, onSelect }: { product: Product; onSelect: () => 
         {product.description && <p className="mt-1 text-sm text-k2-muted line-clamp-2">{product.description}</p>}
         <div className="mt-3 flex items-end justify-between">
           <div>
-            <p className="text-xs text-k2-muted">เริ่มต้น</p>
-            <p className="text-xl font-extrabold text-k2-ink">{formatBaht(startingPrice(product))}</p>
+            {product.pricingMode === "quote" ? (
+              <p className="text-lg font-extrabold text-k2-ink">ขอใบเสนอราคา</p>
+            ) : (
+              <>
+                <p className="text-xs text-k2-muted">{product.pricingMode === "area" ? `เริ่มต้น (ต่อ ${product.unit})` : "เริ่มต้น"}</p>
+                <p className="text-xl font-extrabold text-k2-ink">{formatBaht(startingPrice(product))}</p>
+              </>
+            )}
           </div>
-          <span className="rounded-xl bg-k2-ink px-4 py-2 text-sm font-bold text-white">เลือก / สั่งซื้อ</span>
+          <span className="rounded-xl bg-k2-ink px-4 py-2 text-sm font-bold text-white">{product.pricingMode === "quote" ? "ดูรายละเอียด" : "เลือก / สั่งซื้อ"}</span>
         </div>
       </div>
     </motion.button>
@@ -256,24 +268,64 @@ function ProductCard({ product, onSelect }: { product: Product; onSelect: () => 
 }
 
 function ProductModal({ product, settings, onClose }: { product: Product; settings: ShopSettings; onClose: () => void }) {
+  const mode = product.pricingMode;
   const [qty, setQty] = useState(Math.max(product.minQty, 1));
   const [opts, setOpts] = useState<SelectedOption[]>(
     product.options.map((o) => ({ name: o.name, value: o.choices[0]?.label ?? "" }))
   );
+  // matrix (พวงกุญแจ)
+  const [sizeIndex, setSizeIndex] = useState(0);
+  const [matrixAddons, setMatrixAddons] = useState<string[]>([]);
+  // area (ไวนิล/สติกเกอร์)
+  const [material, setMaterial] = useState(product.area?.materials[0]?.name ?? "");
+  const [width, setWidth] = useState(1);
+  const [height, setHeight] = useState(1);
+  const [pieces, setPieces] = useState(1);
+  const [areaAddons, setAreaAddons] = useState<string[]>([]);
+
   const [form, setForm] = useState({ name: "", phone: "", lineId: "", note: "" });
   const [submitting, setSubmitting] = useState(false);
   const [done, setDone] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const unit = netUnitPrice(product, qty, opts);
-  const total = totalPrice(product, qty, opts);
-
   const setOpt = (name: string, value: string) => setOpts((cur) => cur.map((o) => (o.name === name ? { name, value } : o)));
+  const toggleIn = (list: string[], set: (v: string[]) => void, name: string) =>
+    set(list.includes(name) ? list.filter((x) => x !== name) : [...list, name]);
+
+  // คำนวณราคาตามรูปแบบสินค้า
+  const priced = useMemo(() => {
+    if (mode === "matrix" && product.matrix) {
+      const cfg = product.matrix;
+      const unit = matrixUnitPrice(cfg, sizeIndex, qty, matrixAddons);
+      const selected: SelectedOption[] = [
+        { name: cfg.sizeLabel, value: cfg.sizes[sizeIndex] ?? "" },
+        ...matrixAddons.map((a) => ({ name: a, value: "เลือก" }))
+      ];
+      return { unit, total: unit * Math.max(qty, 1), selected, orderQty: qty, hasPrice: true };
+    }
+    if (mode === "area" && product.area) {
+      const cfg = product.area;
+      const sqm = areaSqm(width, height, cfg.minSqm ?? 0);
+      const rate = areaPricePerSqm(cfg, material, sqm, areaAddons);
+      const selected: SelectedOption[] = [
+        { name: "วัสดุ", value: material },
+        { name: "ขนาด", value: `${width}×${height} ม. (${sqm.toFixed(2)} ${cfg.unitLabel ?? "ตร.ม."})` },
+        ...(pieces > 1 ? [{ name: "จำนวนแผ่น", value: String(pieces) }] : []),
+        ...areaAddons.map((a) => ({ name: a, value: "เลือก" }))
+      ];
+      return { unit: rate, total: sqm * rate * Math.max(pieces, 1), selected, orderQty: pieces, hasPrice: true };
+    }
+    if (mode === "quote") {
+      return { unit: 0, total: 0, selected: opts, orderQty: qty, hasPrice: false };
+    }
+    return { unit: netUnitPrice(product, qty, opts), total: totalPrice(product, qty, opts), selected: opts, orderQty: qty, hasPrice: true };
+  }, [mode, product, qty, opts, sizeIndex, matrixAddons, material, width, height, pieces, areaAddons]);
 
   const orderSummary = useCallback(() => {
-    const optText = opts.map((o) => `${o.name}: ${o.value}`).join(", ");
-    return `สนใจสั่ง: ${product.name} x${qty}${optText ? ` (${optText})` : ""} · รวม ${formatBaht(total)}`;
-  }, [opts, product.name, qty, total]);
+    const optText = priced.selected.map((o) => `${o.name}: ${o.value}`).join(", ");
+    const priceText = priced.hasPrice ? ` · รวม ${formatBaht(priced.total)}` : " · ขอใบเสนอราคา";
+    return `สนใจสั่ง: ${product.name} x${priced.orderQty}${optText ? ` (${optText})` : ""}${priceText}`;
+  }, [priced, product.name]);
 
   async function submit() {
     setError(null);
@@ -291,10 +343,10 @@ function ProductModal({ product, settings, onClose }: { product: Product; settin
           customer_name: form.name.trim(),
           customer_phone: form.phone.trim(),
           line_id: form.lineId.trim() || null,
-          quantity: qty,
-          options: opts,
-          unit_price: unit,
-          total_price: total,
+          quantity: priced.orderQty,
+          options: priced.selected,
+          unit_price: priced.unit,
+          total_price: priced.total,
           note: form.note.trim() || null
         });
         if (err) throw err;
@@ -312,6 +364,7 @@ function ProductModal({ product, settings, onClose }: { product: Product; settin
   const lineHref = settings.lineUrl
     ? `${settings.lineUrl}${settings.lineUrl.includes("?") ? "&" : "?"}text=${encodeURIComponent(orderSummary())}`
     : null;
+  const matrixTier = mode === "matrix" && product.matrix ? matrixTierForQty(product.matrix, qty) : null;
 
   return (
     <motion.div
@@ -365,8 +418,8 @@ function ProductModal({ product, settings, onClose }: { product: Product; settin
                 </p>
               )}
 
-              {/* ตัวเลือก */}
-              {product.options.map((o) => (
+              {/* ===== ตัวเลือกแบบ fixed/quote ===== */}
+              {(mode === "fixed" || mode === "quote") && product.options.map((o) => (
                 <div key={o.name} className="mt-4">
                   <p className="text-sm font-bold text-k2-ink mb-2">{o.name}</p>
                   <div className="flex flex-wrap gap-2">
@@ -387,44 +440,125 @@ function ProductModal({ product, settings, onClose }: { product: Product; settin
                 </div>
               ))}
 
-              {/* ราคาขั้นบันได */}
-              {product.priceTiers.length > 1 && (
-                <div className="mt-4 rounded-2xl bg-white/55 p-3">
-                  <p className="text-sm font-bold text-k2-ink mb-2">ยิ่งสั่งเยอะยิ่งคุ้ม</p>
-                  <div className="flex flex-wrap gap-2 text-sm">
-                    {[...product.priceTiers].sort((a, b) => a.minQty - b.minQty).map((t) => (
-                      <span key={t.minQty} className={`rounded-lg px-2.5 py-1 ${qty >= t.minQty ? "bg-k2-mint text-k2-ink font-bold" : "bg-white/70 text-k2-muted"}`}>
-                        ≥{t.minQty} {product.unit} · {formatBaht(t.price)}
-                      </span>
-                    ))}
+              {/* ===== matrix: เลือกขนาด + ตัวเลือกเสริม (พวงกุญแจ) ===== */}
+              {mode === "matrix" && product.matrix && (
+                <>
+                  {product.matrix.freebie && (
+                    <p className="mt-3 inline-flex items-center gap-1.5 rounded-full bg-k2-mint/60 px-3 py-1.5 text-sm font-bold text-k2-ink">🎁 {product.matrix.freebie}</p>
+                  )}
+                  <div className="mt-4">
+                    <p className="text-sm font-bold text-k2-ink mb-2">{product.matrix.sizeLabel}</p>
+                    <div className="flex flex-wrap gap-2">
+                      {product.matrix.sizes.map((s, i) => (
+                        <button key={s} onClick={() => setSizeIndex(i)} className={`rounded-xl px-3 py-2 text-sm font-bold ${sizeIndex === i ? "bg-k2-ink text-white" : "bg-white/70 text-k2-ink"}`}>{s}</button>
+                      ))}
+                    </div>
+                  </div>
+                  {(product.matrix.addons ?? []).length > 0 && (
+                    <div className="mt-4">
+                      <p className="text-sm font-bold text-k2-ink mb-2">ตัวเลือกเสริม</p>
+                      <div className="flex flex-wrap gap-2">
+                        {product.matrix.addons!.map((a) => (
+                          <button key={a.name} onClick={() => toggleIn(matrixAddons, setMatrixAddons, a.name)} className={`rounded-xl px-3 py-2 text-sm font-bold ${matrixAddons.includes(a.name) ? "bg-k2-ink text-white" : "bg-white/70 text-k2-ink"}`}>
+                            {a.name} <span className="opacity-80">(+{formatBaht(a.perSize[sizeIndex] ?? 0)})</span>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  {matrixTier && (
+                    <div className="mt-4 rounded-2xl bg-white/55 p-3">
+                      <p className="text-sm font-bold text-k2-ink mb-2">ยิ่งสั่งเยอะยิ่งถูก (ขนาด {product.matrix.sizes[sizeIndex]})</p>
+                      <div className="flex flex-wrap gap-2 text-sm">
+                        {[...product.matrix.tiers].sort((a, b) => a.minQty - b.minQty).map((t) => (
+                          <span key={t.minQty} className={`rounded-lg px-2.5 py-1 ${t.minQty === matrixTier.minQty ? "bg-k2-mint text-k2-ink font-bold" : "bg-white/70 text-k2-muted"}`}>
+                            {t.label ?? `≥${t.minQty}`} · {formatBaht(t.prices[sizeIndex] ?? 0)}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </>
+              )}
+
+              {/* ===== area: เลือกวัสดุ + ใส่ขนาด (ไวนิล/สติกเกอร์) ===== */}
+              {mode === "area" && product.area && (
+                <>
+                  <div className="mt-4">
+                    <p className="text-sm font-bold text-k2-ink mb-2">เลือกวัสดุ</p>
+                    <select value={material} onChange={(e) => setMaterial(e.target.value)} className="w-full rounded-xl bg-white/80 px-3 py-2.5 text-k2-ink font-bold">
+                      {product.area.materials.map((m) => (
+                        <option key={m.name} value={m.name}>{m.name} · {formatBaht(m.tiers[0]?.price ?? 0)}/{product.area!.unitLabel ?? "ตร.ม."}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="mt-4 grid grid-cols-3 gap-3">
+                    <label className="text-sm font-bold text-k2-ink">กว้าง (ม.)
+                      <input type="number" step="0.1" min={0} value={width} onChange={(e) => setWidth(Math.max(0, Number(e.target.value)))} className="mt-1 w-full rounded-xl bg-white/80 px-3 py-2 text-k2-ink" />
+                    </label>
+                    <label className="text-sm font-bold text-k2-ink">ยาว (ม.)
+                      <input type="number" step="0.1" min={0} value={height} onChange={(e) => setHeight(Math.max(0, Number(e.target.value)))} className="mt-1 w-full rounded-xl bg-white/80 px-3 py-2 text-k2-ink" />
+                    </label>
+                    <label className="text-sm font-bold text-k2-ink">จำนวนแผ่น
+                      <input type="number" min={1} value={pieces} onChange={(e) => setPieces(Math.max(1, Number(e.target.value) || 1))} className="mt-1 w-full rounded-xl bg-white/80 px-3 py-2 text-k2-ink" />
+                    </label>
+                  </div>
+                  {(product.area.addons ?? []).length > 0 && (
+                    <div className="mt-4">
+                      <p className="text-sm font-bold text-k2-ink mb-2">บริการเสริม (ต่อ {product.area.unitLabel ?? "ตร.ม."})</p>
+                      <div className="flex flex-wrap gap-2">
+                        {product.area.addons!.map((a) => (
+                          <button key={a.name} onClick={() => toggleIn(areaAddons, setAreaAddons, a.name)} className={`rounded-xl px-3 py-2 text-sm font-bold ${areaAddons.includes(a.name) ? "bg-k2-ink text-white" : "bg-white/70 text-k2-ink"}`}>
+                            {a.name} <span className="opacity-80">(+{formatBaht(a.pricePerSqm)})</span>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </>
+              )}
+
+              {/* ===== จำนวน (fixed/quote) ===== */}
+              {(mode === "fixed" || mode === "quote") && (
+                <div className="mt-4 flex items-center gap-3">
+                  <p className="text-sm font-bold text-k2-ink">จำนวน ({product.unit})</p>
+                  <div className="flex items-center gap-2">
+                    <button onClick={() => setQty((q) => Math.max(product.minQty, q - 1))} className="h-9 w-9 rounded-xl bg-white/80 text-k2-ink font-bold">−</button>
+                    <input type="number" min={product.minQty} value={qty} onChange={(e) => setQty(Math.max(product.minQty, Number(e.target.value) || product.minQty))} className="h-9 w-20 rounded-xl bg-white/80 text-center font-bold text-k2-ink" />
+                    <button onClick={() => setQty((q) => q + 1)} className="h-9 w-9 rounded-xl bg-white/80 text-k2-ink font-bold">+</button>
                   </div>
                 </div>
               )}
 
-              {/* จำนวน */}
-              <div className="mt-4 flex items-center gap-3">
-                <p className="text-sm font-bold text-k2-ink">จำนวน ({product.unit})</p>
-                <div className="flex items-center gap-2">
-                  <button onClick={() => setQty((q) => Math.max(product.minQty, q - 1))} className="h-9 w-9 rounded-xl bg-white/80 text-k2-ink font-bold">−</button>
-                  <input
-                    type="number"
-                    min={product.minQty}
-                    value={qty}
-                    onChange={(e) => setQty(Math.max(product.minQty, Number(e.target.value) || product.minQty))}
-                    className="h-9 w-20 rounded-xl bg-white/80 text-center font-bold text-k2-ink"
-                  />
-                  <button onClick={() => setQty((q) => q + 1)} className="h-9 w-9 rounded-xl bg-white/80 text-k2-ink font-bold">+</button>
+              {/* ===== จำนวน (matrix) ===== */}
+              {mode === "matrix" && (
+                <div className="mt-4 flex items-center gap-3">
+                  <p className="text-sm font-bold text-k2-ink">จำนวน ({product.unit})</p>
+                  <div className="flex items-center gap-2">
+                    <button onClick={() => setQty((q) => Math.max(1, q - 1))} className="h-9 w-9 rounded-xl bg-white/80 text-k2-ink font-bold">−</button>
+                    <input type="number" min={1} value={qty} onChange={(e) => setQty(Math.max(1, Number(e.target.value) || 1))} className="h-9 w-24 rounded-xl bg-white/80 text-center font-bold text-k2-ink" />
+                    <button onClick={() => setQty((q) => q + 1)} className="h-9 w-9 rounded-xl bg-white/80 text-k2-ink font-bold">+</button>
+                  </div>
                 </div>
-              </div>
+              )}
 
-              {/* สรุปราคา */}
-              <div className="mt-4 rounded-2xl bg-k2-cloud p-4 flex items-center justify-between">
-                <div>
-                  <p className="text-xs text-k2-muted">ต่อหน่วย {formatBaht(unit)}</p>
-                  <p className="text-2xl font-extrabold text-k2-ink">รวม {formatBaht(total)}</p>
+              {/* ===== สรุปราคา ===== */}
+              {priced.hasPrice ? (
+                <div className="mt-4 rounded-2xl bg-k2-cloud p-4 flex items-center justify-between">
+                  <div>
+                    <p className="text-xs text-k2-muted">
+                      {mode === "area" ? `${formatBaht(priced.unit)}/${product.unit}` : `ต่อหน่วย ${formatBaht(priced.unit)}`}
+                    </p>
+                    <p className="text-2xl font-extrabold text-k2-ink">รวม {formatBaht(priced.total)}</p>
+                  </div>
+                  <span className="text-sm text-k2-muted">ราคาประเมิน*</span>
                 </div>
-                <span className="text-sm text-k2-muted">ราคาประเมิน*</span>
-              </div>
+              ) : (
+                <div className="mt-4 rounded-2xl bg-k2-cloud p-4">
+                  <p className="text-lg font-extrabold text-k2-ink">สินค้าสั่งทำ — ขอใบเสนอราคา</p>
+                  <p className="text-sm text-k2-muted">กรอกรายละเอียด/ขนาดงานในช่องหมายเหตุ ทีมงานจะประเมินราคาและติดต่อกลับ</p>
+                </div>
+              )}
 
               {/* ฟอร์มสั่งซื้อ */}
               <div className="mt-5 grid gap-3 sm:grid-cols-2">
@@ -438,7 +572,7 @@ function ProductModal({ product, settings, onClose }: { product: Product; settin
 
               <div className="mt-5 flex flex-col sm:flex-row gap-3">
                 <button onClick={submit} disabled={submitting} className="flex-1 rounded-2xl bg-k2-ink px-6 py-3.5 font-bold text-white disabled:opacity-60">
-                  {submitting ? "กำลังส่ง…" : "ยืนยันสั่งซื้อ"}
+                  {submitting ? "กำลังส่ง…" : mode === "quote" ? "ส่งขอใบเสนอราคา" : "ยืนยันสั่งซื้อ"}
                 </button>
                 {lineHref && (
                   <a href={lineHref} target="_blank" rel="noreferrer" className="flex-1 text-center rounded-2xl bg-white/80 px-6 py-3.5 font-bold text-k2-ink inline-flex items-center justify-center gap-2">

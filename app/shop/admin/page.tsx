@@ -134,7 +134,17 @@ const EMPTY_PRODUCT: Partial<Product> = {
   priceTiers: [],
   minQty: 1,
   active: true,
-  sort: 0
+  sort: 0,
+  pricingMode: "fixed",
+  matrix: null,
+  area: null
+};
+
+const MODE_LABEL: Record<string, string> = {
+  fixed: "ราคาตามขนาด/ตัวเลือก (× จำนวน)",
+  matrix: "ตาราง จำนวน × ขนาด (เช่น พวงกุญแจ)",
+  area: "ราคาต่อ ตร.ม. (เช่น ไวนิล/สติกเกอร์)",
+  quote: "ขอใบเสนอราคา (ไม่คำนวณราคา)"
 };
 
 function ProductsTab() {
@@ -231,6 +241,9 @@ function ProductForm({ draft, categories, onClose, onSaved }: { draft: Partial<P
       images: d.images ?? [],
       options: d.options ?? [],
       price_tiers: d.priceTiers ?? [],
+      pricing_mode: d.pricingMode ?? "fixed",
+      matrix: d.pricingMode === "matrix" ? (d.matrix ?? null) : null,
+      area: d.pricingMode === "area" ? (d.area ?? null) : null,
       min_qty: Number(d.minQty) || 1,
       active: d.active ?? true,
       sort: Number(d.sort) || 0,
@@ -262,6 +275,11 @@ function ProductForm({ draft, categories, onClose, onSaved }: { draft: Partial<P
         <Field label="ป้ายมุมการ์ด เช่น ขายดี"><input value={d.badge ?? ""} onChange={(e) => set({ badge: e.target.value })} className={inputCls} /></Field>
         <Field label="ลำดับการแสดง"><input type="number" value={d.sort ?? 0} onChange={(e) => set({ sort: Number(e.target.value) })} className={inputCls} /></Field>
         <Field label="ขั้นต่ำ (ชิ้น)"><input type="number" value={d.minQty ?? 1} onChange={(e) => set({ minQty: Number(e.target.value) })} className={inputCls} /></Field>
+        <Field label="รูปแบบราคา">
+          <select value={d.pricingMode ?? "fixed"} onChange={(e) => set({ pricingMode: e.target.value as Product["pricingMode"] })} className={inputCls}>
+            {Object.entries(MODE_LABEL).map(([k, label]) => <option key={k} value={k}>{label}</option>)}
+          </select>
+        </Field>
       </div>
 
       <Field label="รายละเอียด"><textarea value={d.description ?? ""} onChange={(e) => set({ description: e.target.value })} rows={3} className={inputCls} /></Field>
@@ -290,11 +308,36 @@ function ProductForm({ draft, categories, onClose, onSaved }: { draft: Partial<P
         }} className={inputCls + " mt-2"} />
       </div>
 
-      {/* ราคาขั้นบันได */}
-      <TiersEditor tiers={d.priceTiers ?? []} unit={d.unit ?? "ชิ้น"} onChange={(t) => set({ priceTiers: t })} />
+      {/* fixed: ราคาขั้นบันได + ตัวเลือก */}
+      {d.pricingMode === "fixed" && (
+        <>
+          <TiersEditor tiers={d.priceTiers ?? []} unit={d.unit ?? "ชิ้น"} onChange={(t) => set({ priceTiers: t })} />
+          <OptionsEditor options={d.options ?? []} onChange={(o) => set({ options: o })} />
+        </>
+      )}
 
-      {/* ตัวเลือก */}
-      <OptionsEditor options={d.options ?? []} onChange={(o) => set({ options: o })} />
+      {/* quote: ตัวเลือกอย่างเดียว (ไม่มีราคา) */}
+      {d.pricingMode === "quote" && (
+        <OptionsEditor options={d.options ?? []} onChange={(o) => set({ options: o })} />
+      )}
+
+      {/* matrix / area: แก้ค่าแบบ JSON (ตั้งครั้งเดียว) */}
+      {d.pricingMode === "matrix" && (
+        <JsonConfigEditor
+          label="ตารางราคา (matrix)"
+          hint='โครงสร้าง: {"sizeLabel","sizes":[...],"tiers":[{"label","minQty","prices":[...]}],"addons":[{"name","perSize":[...]}],"freebie"} — จำนวนตัวเลขใน prices/perSize ต้องเท่ากับจำนวน sizes'
+          value={d.matrix ?? null}
+          onChange={(v) => set({ matrix: v as Product["matrix"] })}
+        />
+      )}
+      {d.pricingMode === "area" && (
+        <JsonConfigEditor
+          label="ราคาต่อ ตร.ม. (area)"
+          hint='โครงสร้าง: {"unitLabel":"ตร.ม.","minSqm":1,"materials":[{"name","tiers":[{"minSqm","price"}]}],"addons":[{"name","pricePerSqm"}]}'
+          value={d.area ?? null}
+          onChange={(v) => set({ area: v as Product["area"] })}
+        />
+      )}
 
       <label className="mt-4 flex items-center gap-2 text-k2-ink font-bold">
         <input type="checkbox" checked={d.active ?? true} onChange={(e) => set({ active: e.target.checked })} /> เปิดขาย (แสดงบนหน้าร้าน)
@@ -306,6 +349,35 @@ function ProductForm({ draft, categories, onClose, onSaved }: { draft: Partial<P
         </button>
         <button onClick={onClose} className="rounded-2xl bg-white/80 px-6 py-3 font-bold text-k2-ink">ยกเลิก</button>
       </div>
+    </div>
+  );
+}
+
+function JsonConfigEditor({ label, hint, value, onChange }: { label: string; hint: string; value: unknown; onChange: (v: unknown) => void }) {
+  const [text, setText] = useState(value ? JSON.stringify(value, null, 2) : "");
+  const [err, setErr] = useState<string | null>(null);
+
+  function apply(t: string) {
+    setText(t);
+    if (!t.trim()) {
+      setErr(null);
+      onChange(null);
+      return;
+    }
+    try {
+      onChange(JSON.parse(t));
+      setErr(null);
+    } catch {
+      setErr("รูปแบบ JSON ไม่ถูกต้อง");
+    }
+  }
+
+  return (
+    <div className="mt-4 rounded-2xl bg-white/55 p-4">
+      <p className="text-sm font-bold text-k2-ink">{label}</p>
+      <p className="text-xs text-k2-muted mt-1 mb-2">{hint}</p>
+      <textarea value={text} onChange={(e) => apply(e.target.value)} rows={12} className="w-full rounded-xl bg-white/90 px-3 py-2.5 text-k2-ink font-mono text-xs soft-scrollbar" spellCheck={false} />
+      {err && <p className="mt-2 text-sm font-bold text-rose-600">{err}</p>}
     </div>
   );
 }
