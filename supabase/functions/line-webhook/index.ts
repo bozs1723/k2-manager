@@ -85,26 +85,33 @@ const MENU = [
   "• เมนู — แสดงคำสั่งทั้งหมด"
 ].join("\n");
 
-// สร้างรายงานสดของสาขาที่ผูกกับกลุ่มนี้
-async function liveReport(admin: ReturnType<typeof createClient>, groupId: string, kind: "checkin" | "checkout"): Promise<string> {
-  const { data: g } = await admin.from("branch_line_groups").select("branch").eq("line_group_id", groupId).maybeSingle();
-  if (!g?.branch) return "กลุ่มนี้ยังไม่ได้ผูกกับสาขา — พิมพ์ \"id\" เพื่อเอา Group ID ไปผูกในระบบก่อนครับ";
+// สร้างรายงานสดของ "ทุกสาขา" ที่ผูกกับกลุ่มนี้ — คืนเป็นข้อความแยกสาขา (สูงสุด 5 ข้อความ/ครั้งตามลิมิต LINE)
+async function liveReport(admin: ReturnType<typeof createClient>, groupId: string, kind: "checkin" | "checkout"): Promise<string[]> {
+  const { data: rows } = await admin.from("branch_line_groups").select("branch").eq("line_group_id", groupId);
+  const branches = Array.from(new Set((rows ?? []).map((r) => r.branch as string))).sort((a, b) => a.localeCompare(b, "th"));
+  if (!branches.length) return ["กลุ่มนี้ยังไม่ได้ผูกกับสาขา — พิมพ์ \"id\" เพื่อเอา Group ID ไปผูกในระบบก่อนครับ"];
 
-  const branch = g.branch as string;
   const today = bangkokDateISO();
-  const { data: profs } = await admin.from("profiles").select("id, full_name, branch, role").eq("branch", branch);
-  const members = ((profs ?? []) as Member[])
-    .filter((p) => p.role !== "Owner")
-    .sort((a, b) => (a.full_name || "").localeCompare(b.full_name || "", "th"));
-  if (!members.length) return `สาขา ${branch} ยังไม่มีพนักงานในระบบ`;
-
   const { data: att } = await admin
     .from("attendance")
     .select("profile_id, check_in_at, check_out_at, late_minutes, status")
     .eq("work_date", today);
   const attMap = new Map<string, Att>((att ?? []).map((a) => [a.profile_id, a as Att]));
 
-  return kind === "checkin" ? buildCheckin(branch, today, members, attMap) : buildCheckout(branch, today, members, attMap);
+  const { data: profs } = await admin.from("profiles").select("id, full_name, branch, role").in("branch", branches);
+
+  const messages: string[] = [];
+  for (const branch of branches) {
+    const members = ((profs ?? []) as Member[])
+      .filter((p) => p.branch === branch && p.role !== "Owner")
+      .sort((a, b) => (a.full_name || "").localeCompare(b.full_name || "", "th"));
+    if (!members.length) {
+      messages.push(`สาขา ${branch} ยังไม่มีพนักงานในระบบ`);
+      continue;
+    }
+    messages.push(kind === "checkin" ? buildCheckin(branch, today, members, attMap) : buildCheckout(branch, today, members, attMap));
+  }
+  return messages.slice(0, 5);
 }
 
 Deno.serve(async (req) => {
@@ -125,26 +132,26 @@ Deno.serve(async (req) => {
     const message = (ev.message ?? {}) as { type?: string; text?: string };
     const text = (message.text ?? "").trim().toLowerCase();
 
-    let reply = "";
+    let replies: string[] = [];
 
     if (["id", "groupid", "group id", "ไอดี"].includes(text)) {
-      if (src.groupId) reply = `📌 Group ID ของกลุ่มนี้:\n${src.groupId}\n\nนำไปผูกกับสาขาในตาราง branch_line_groups`;
-      else if (src.roomId) reply = `📌 Room ID:\n${src.roomId}`;
-      else if (src.userId) reply = `📌 User ID:\n${src.userId}`;
+      if (src.groupId) replies = [`📌 Group ID ของกลุ่มนี้:\n${src.groupId}\n\nนำไปผูกกับสาขาในตาราง branch_line_groups`];
+      else if (src.roomId) replies = [`📌 Room ID:\n${src.roomId}`];
+      else if (src.userId) replies = [`📌 User ID:\n${src.userId}`];
     } else if (["เมนู", "help", "คำสั่ง", "?"].includes(text)) {
-      reply = MENU;
+      replies = [MENU];
     } else if (["รายงาน", "เช็คอิน", "เช็คชื่อ", "checkin", "report"].includes(text)) {
-      reply = src.groupId && admin ? await liveReport(admin, src.groupId, "checkin") : "ใช้คำสั่งนี้ได้เฉพาะในกลุ่มที่ผูกสาขาแล้วครับ";
+      replies = src.groupId && admin ? await liveReport(admin, src.groupId, "checkin") : ["ใช้คำสั่งนี้ได้เฉพาะในกลุ่มที่ผูกสาขาแล้วครับ"];
     } else if (["เช็คเอาท์", "เช็คเอ้าท์", "checkout", "ออกงาน"].includes(text)) {
-      reply = src.groupId && admin ? await liveReport(admin, src.groupId, "checkout") : "ใช้คำสั่งนี้ได้เฉพาะในกลุ่มที่ผูกสาขาแล้วครับ";
+      replies = src.groupId && admin ? await liveReport(admin, src.groupId, "checkout") : ["ใช้คำสั่งนี้ได้เฉพาะในกลุ่มที่ผูกสาขาแล้วครับ"];
     }
 
-    if (!reply) continue; // ข้อความอื่น — เงียบ
+    if (!replies.length) continue; // ข้อความอื่น — เงียบ
 
     await fetch(LINE_REPLY, {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${lineToken}` },
-      body: JSON.stringify({ replyToken, messages: [{ type: "text", text: reply }] })
+      body: JSON.stringify({ replyToken, messages: replies.slice(0, 5).map((t) => ({ type: "text", text: t })) })
     }).catch(() => {});
   }
 

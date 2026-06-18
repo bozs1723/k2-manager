@@ -1,10 +1,13 @@
--- รายงานลงเวลา: จับคู่ "สาขา" → "กลุ่ม LINE" สำหรับส่งรายงานเช็คอิน/เช็คเอาท์เข้ากลุ่มแยกตามสาขา
+-- รายงานลงเวลา: จับคู่ "สาขา" → "กลุ่ม LINE"
+-- รองรับ 1 กลุ่มรับได้หลายสาขา (กลุ่มหุ้นส่วน) และ 1 สาขาส่งได้หลายกลุ่ม
 -- ปลอดภัย/รันซ้ำได้ (idempotent)
 
 create table if not exists public.branch_line_groups (
-  branch text primary key,
+  id uuid primary key default gen_random_uuid(),
+  branch text not null,
   line_group_id text not null,
-  updated_at timestamptz not null default now()
+  updated_at timestamptz not null default now(),
+  unique (branch, line_group_id)
 );
 
 alter table public.branch_line_groups enable row level security;
