@@ -283,6 +283,7 @@ function ProductModal({ product, settings, onClose }: { product: Product; settin
   const [pieces, setPieces] = useState(1);
   const [areaAddons, setAreaAddons] = useState<string[]>([]);
 
+  const [activeImg, setActiveImg] = useState(0);
   const [form, setForm] = useState({ name: "", phone: "", lineId: "", note: "" });
   const [submitting, setSubmitting] = useState(false);
   const [done, setDone] = useState(false);
@@ -382,14 +383,24 @@ function ProductModal({ product, settings, onClose }: { product: Product; settin
         className="glass w-full max-w-3xl max-h-[92vh] overflow-y-auto soft-scrollbar rounded-t-[2rem] sm:rounded-[2rem]"
       >
         <div className="relative">
-          {product.images[0] && (
+          {product.images[activeImg] && (
             // eslint-disable-next-line @next/next/no-img-element
-            <img src={product.images[0]} alt={product.name} className="h-56 w-full object-cover rounded-t-[2rem]" />
+            <img src={product.images[activeImg]} alt={product.name} className="h-64 w-full object-cover rounded-t-[2rem]" />
           )}
           <button onClick={onClose} className="absolute top-3 right-3 rounded-full bg-white/90 p-2 text-k2-ink">
             <X className="h-5 w-5" />
           </button>
         </div>
+        {product.images.length > 1 && (
+          <div className="flex gap-2 overflow-x-auto soft-scrollbar px-4 pt-3">
+            {product.images.map((img, i) => (
+              <button key={img + i} onClick={() => setActiveImg(i)} className={`h-14 w-14 flex-shrink-0 rounded-xl overflow-hidden border-2 ${i === activeImg ? "border-k2-ink" : "border-transparent"}`}>
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img src={img} alt="" className="h-full w-full object-cover" />
+              </button>
+            ))}
+          </div>
+        )}
 
         <div className="p-6">
           {done ? (
