@@ -7,7 +7,8 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
-    "test": "npm run test:customer-code && npm run test:job-routing && npm run test:attendance",
+    "test": "npm run test:customer-code && npm run test:job-routing && npm run test:attendance && npm run test:vat",
+    "test:vat": "tsc lib/vat.ts --outDir lib/.vatbuild --module es2020 --target es2020 --moduleResolution bundler --skipLibCheck && mv lib/.vatbuild/vat.js lib/.vatbuild/vat.mjs && node lib/vat.test.mjs && rm -rf lib/.vatbuild",
     "test:customer-code": "tsc lib/customer-code.ts --outDir lib/.ccbuild --module es2020 --target es2020 --moduleResolution bundler --skipLibCheck && mv lib/.ccbuild/customer-code.js lib/.ccbuild/customer-code.mjs && node lib/customer-code.test.mjs && rm -rf lib/.ccbuild",
     "test:job-routing": "tsc lib/job-routing.ts --outDir lib/.jrbuild --module es2020 --target es2020 --moduleResolution bundler --skipLibCheck && mv lib/.jrbuild/job-routing.js lib/.jrbuild/job-routing.mjs && node lib/job-routing.test.mjs && rm -rf lib/.jrbuild",
     "test:attendance": "tsc lib/attendance.ts --outDir lib/.atbuild --module es2020 --target es2020 --moduleResolution bundler --skipLibCheck && mv lib/.atbuild/attendance.js lib/.atbuild/attendance.mjs && node lib/attendance.test.mjs && rm -rf lib/.atbuild"
