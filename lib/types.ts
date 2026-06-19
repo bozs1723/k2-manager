@@ -243,6 +243,7 @@ export type Job = {
   assignedProduction: string;
   createdBy?: string;
   price: number;
+  vatMode?: import("./vat").VatMode;
   deposit: number;
   depositSlip?: string;
   depositReceivedDate?: string;

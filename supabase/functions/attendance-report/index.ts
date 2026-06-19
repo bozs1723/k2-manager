@@ -49,6 +49,12 @@ function bangkokTime(iso: string | null): string {
 
 type Member = { id: string; full_name: string | null; branch: string | null; role: string | null };
 type Att = { profile_id: string; check_in_at: string | null; check_out_at: string | null; late_minutes: number | null; status: string | null };
+type Ot = { profile_id: string; hours: number | null; note: string | null };
+
+// รวมชั่วโมง OT แบบอ่านง่าย: 1.5 -> "1.5", 2 -> "2"
+function fmtHours(n: number): string {
+  return Number.isInteger(n) ? String(n) : String(Math.round(n * 100) / 100);
+}
 
 function buildCheckin(branch: string, dateISO: string, members: Member[], att: Map<string, Att>): string {
   const present: string[] = [];
@@ -75,10 +81,18 @@ function buildCheckin(branch: string, dateISO: string, members: Member[], att: M
   ].join("\n");
 }
 
-function buildCheckout(branch: string, dateISO: string, members: Member[], att: Map<string, Att>): string {
+function buildCheckout(
+  branch: string,
+  dateISO: string,
+  members: Member[],
+  att: Map<string, Att>,
+  ot: Map<string, number>
+): string {
   const out: string[] = [];
   const notOut: string[] = [];
   const absent: string[] = [];
+  const otLines: string[] = [];
+  let otTotal = 0;
   for (const m of members) {
     const name = m.full_name || "พนักงาน";
     const a = att.get(m.id);
@@ -88,6 +102,11 @@ function buildCheckout(branch: string, dateISO: string, members: Member[], att: 
       out.push(`• ${name} — ${bangkokTime(a.check_out_at)}`);
     } else {
       notOut.push(`• ${name} (เข้า ${bangkokTime(a.check_in_at)})`);
+    }
+    const hours = ot.get(m.id) ?? 0;
+    if (hours > 0) {
+      otTotal += hours;
+      otLines.push(`• ${name} — ${fmtHours(hours)} ชม.`);
     }
   }
   return [
@@ -101,7 +120,10 @@ function buildCheckout(branch: string, dateISO: string, members: Member[], att: 
     notOut.length ? notOut.join("\n") : "— ไม่มี —",
     ``,
     `🚫 ขาด/ไม่มา (${absent.length})`,
-    absent.length ? absent.join("\n") : "— ไม่มี —"
+    absent.length ? absent.join("\n") : "— ไม่มี —",
+    ``,
+    `🕐 OT วันนี้ (รวม ${fmtHours(otTotal)} ชม.)`,
+    otLines.length ? otLines.join("\n") : "— ไม่มี —"
   ].join("\n");
 }
 
@@ -136,6 +158,18 @@ Deno.serve(async (req) => {
 
     const attByProfile = new Map<string, Att>((att ?? []).map((a) => [a.profile_id, a as Att]));
 
+    // OT ของวันนี้ (เฉพาะรอบเช็คเอาท์) — รวมชั่วโมงต่อคน (เผื่อมีหลายรายการ)
+    const otByProfile = new Map<string, number>();
+    if (kind === "checkout") {
+      const { data: ot } = await admin
+        .from("overtime")
+        .select("profile_id, hours, note")
+        .eq("work_date", today);
+      for (const row of (ot ?? []) as Ot[]) {
+        otByProfile.set(row.profile_id, (otByProfile.get(row.profile_id) ?? 0) + (Number(row.hours) || 0));
+      }
+    }
+
     const results: Array<Record<string, unknown>> = [];
     for (const g of groups) {
       // พนักงานของสาขานี้ (ตัดเจ้าของออก เพราะปกติไม่ลงเวลา) เรียงตามชื่อ
@@ -146,7 +180,7 @@ Deno.serve(async (req) => {
 
       const text = kind === "checkin"
         ? buildCheckin(g.branch, today, members, attByProfile)
-        : buildCheckout(g.branch, today, members, attByProfile);
+        : buildCheckout(g.branch, today, members, attByProfile, otByProfile);
 
       const res = await fetch(LINE_PUSH, {
         method: "POST",

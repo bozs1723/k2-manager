@@ -51,6 +51,7 @@ import { createSupabaseAuthWorker, isSupabaseConfigured, supabase } from "@/lib/
 import { CUSTOMER_CODE_ADMINS, CUSTOMER_CODE_PAGES, customerCodeYear, formatCustomerCode, nextCustomerSeq } from "@/lib/customer-code";
 import { branchForJobType } from "@/lib/job-routing";
 import { checkGeofence, lateMinutes } from "@/lib/attendance";
+import { computeVat, normalizeVatMode, vatModeLabel, VAT_MODES, type VatMode } from "@/lib/vat";
 import type { AppNotification, Attendance, AuditEvent, BranchSetting, Customer, ExpressRequest, FileAsset, Holiday, Job, JobStatus, JobType, Lead, LeaveRequest, Overtime, PaymentStatus, Priority, Quotation, QuoteStatus, Role, TeamMember } from "@/lib/types";
 
 type ImportedCustomer = Pick<Customer, "name" | "phone" | "lineId" | "email"> & {
@@ -173,6 +174,7 @@ type SupabaseJobRow = {
   assigned_designer: string | null;
   assigned_production: string | null;
   price: number | string;
+  vat_mode?: string | null;
   deposit: number | string;
   remaining_balance: number | string;
   payment_status: PaymentStatus;
@@ -980,6 +982,7 @@ function jobFromRow(
     assignedDesigner: row.assigned_designer ? profileNames.get(row.assigned_designer) ?? "Unassigned" : "Unassigned",
     assignedProduction: row.assigned_production ? profileNames.get(row.assigned_production) ?? "Unassigned" : "Unassigned",
     price,
+    vatMode: normalizeVatMode(row.vat_mode),
     deposit,
     depositSlip: row.deposit_slip ?? undefined,
     depositReceivedDate: row.deposit_received_date ?? undefined,
@@ -2635,6 +2638,7 @@ export default function Page() {
               assigned_designer: teamIdByName(teamMembers, input?.assignedDesigner),
               assigned_production: teamIdByName(teamMembers, input?.assignedProduction),
               price,
+              vat_mode: normalizeVatMode(input?.vatMode),
               deposit,
               internal_notes: input?.internalNotes ?? "",
               created_by: uuidPattern.test(currentUser.id) ? currentUser.id : null
@@ -2713,6 +2717,7 @@ export default function Page() {
       assignedProduction: input?.assignedProduction ?? "Unassigned",
       createdBy: currentUser.name,
       price,
+      vatMode: normalizeVatMode(input?.vatMode),
       deposit,
       remainingBalance: Math.max(price - deposit, 0),
       paymentStatus: getPaymentStatus(price, deposit),
@@ -5191,6 +5196,12 @@ function PrintableDoc({ job, company, docType, docNumber, onClose }: { job: Job;
   const title = printDocTitle[docType];
   const isReceipt = docType === "receipt";
   const today = new Date().toLocaleDateString("th-TH", { year: "numeric", month: "long", day: "numeric" });
+  const vatMode = normalizeVatMode(job.vatMode);
+  const hasVat = vatMode !== "none";
+  const { base: priceBase, vat: priceVat, total: priceTotal } = computeVat(job.price, vatMode);
+  // คงเหลือคิดจากยอดรวม (รวม VAT) ลบมัดจำ — งานจ่ายครบแล้วถือว่าชำระเต็มยอดรวม
+  const fullyPaid = isReceipt && job.remainingBalance <= 0;
+  const outstanding = fullyPaid ? priceTotal : Math.max(priceTotal - job.deposit, 0);
   return (
     <div className="fixed inset-0 z-[60] flex items-start justify-center overflow-y-auto bg-slate-900/50 p-4 backdrop-blur-sm" onClick={onClose}>
       <div className="my-4 w-full max-w-3xl">
@@ -5253,11 +5264,17 @@ function PrintableDoc({ job, company, docType, docNumber, onClose }: { job: Job;
           <div className="mt-3 flex justify-end">
             <table style={{ fontSize: "13px", minWidth: 260 }}>
               <tbody>
-                <tr><td className="px-2 py-1">ราคารวม</td><td className="px-2 py-1 text-right" style={{ fontWeight: 700 }}>{money.format(job.price)}</td></tr>
+                {hasVat ? (
+                  <>
+                    <tr><td className="px-2 py-1">ราคาก่อนภาษี</td><td className="px-2 py-1 text-right">{money.format(priceBase)}</td></tr>
+                    <tr><td className="px-2 py-1">ภาษีมูลค่าเพิ่ม 7%</td><td className="px-2 py-1 text-right">{money.format(priceVat)}</td></tr>
+                  </>
+                ) : null}
+                <tr><td className="px-2 py-1">{hasVat ? "ราคารวมภาษี" : "ราคารวม"}</td><td className="px-2 py-1 text-right" style={{ fontWeight: 700 }}>{money.format(priceTotal)}</td></tr>
                 {job.deposit > 0 ? <tr><td className="px-2 py-1">มัดจำ{job.depositReceivedDate ? ` (${job.depositReceivedDate})` : ""}</td><td className="px-2 py-1 text-right">{money.format(job.deposit)}</td></tr> : null}
                 <tr style={{ borderTop: "2px solid #334155" }}>
-                  <td className="px-2 py-1" style={{ fontWeight: 800 }}>{isReceipt && job.remainingBalance <= 0 ? "ชำระแล้วทั้งหมด" : "คงเหลือ"}</td>
-                  <td className="px-2 py-1 text-right" style={{ fontWeight: 800 }}>{money.format(isReceipt && job.remainingBalance <= 0 ? job.price : job.remainingBalance)}</td>
+                  <td className="px-2 py-1" style={{ fontWeight: 800 }}>{fullyPaid ? "ชำระแล้วทั้งหมด" : "คงเหลือ"}</td>
+                  <td className="px-2 py-1 text-right" style={{ fontWeight: 800 }}>{money.format(outstanding)}</td>
                 </tr>
               </tbody>
             </table>
@@ -5573,6 +5590,12 @@ function JobDetail({
           <h4 className="mb-4 text-xl font-semibold">การชำระเงิน</h4>
           <div className="grid gap-3">
             <MoneyLine label="ราคารวม" value={job.price} visible={canSeeMoney} />
+            {normalizeVatMode(job.vatMode) !== "none" ? (
+              <div className="flex items-center justify-between text-xs font-semibold text-k2-muted">
+                <span>{vatModeLabel[normalizeVatMode(job.vatMode)]}</span>
+                <span>{canSeeMoney ? `VAT ${money.format(computeVat(job.price, normalizeVatMode(job.vatMode)).vat)} · รวม ${money.format(computeVat(job.price, normalizeVatMode(job.vatMode)).total)}` : "ซ่อนข้อมูล"}</span>
+              </div>
+            ) : null}
             <MoneyLine label="มัดจำ" value={job.deposit} visible={canSeeMoney} />
             <MoneyLine label="ยอดคงเหลือ" value={job.remainingBalance} visible={canSeeMoney} />
           </div>
@@ -5752,9 +5775,9 @@ function QuoteDocumentPreview({
   quoteNumber: string;
   canSeeMoney: boolean;
 }) {
-  const subtotal = job.price;
-  const vat = subtotal * 0.07;
-  const total = subtotal + vat;
+  const vatMode = normalizeVatMode(job.vatMode);
+  const hasVat = vatMode !== "none";
+  const { base: subtotal, vat, total } = computeVat(job.price, vatMode);
   const unitPrice = job.quantity > 0 ? subtotal / job.quantity : subtotal;
   const moneyText = (value: number) => (canSeeMoney ? `${quoteMoney.format(value)} บาท` : "ซ่อนข้อมูล");
   const plainMoneyText = (value: number) => (canSeeMoney ? quoteMoney.format(value) : "ซ่อนข้อมูล");
@@ -5818,7 +5841,7 @@ function QuoteDocumentPreview({
               <td className="border border-slate-300 px-3 py-3">{job.quantity}</td>
               <td className="border border-slate-300 px-3 py-3">{plainMoneyText(unitPrice)}</td>
               <td className="border border-slate-300 px-3 py-3">-</td>
-              <td className="border border-slate-300 px-3 py-3">7%</td>
+              <td className="border border-slate-300 px-3 py-3">{hasVat ? "7%" : "-"}</td>
               <td className="border border-slate-300 px-3 py-3">ไม่หัก</td>
               <td className="border border-slate-300 px-3 py-3">{plainMoneyText(subtotal)}</td>
             </tr>
@@ -5843,8 +5866,8 @@ function QuoteDocumentPreview({
           <div className="divide-y divide-slate-300">
             {[
               ["รวมเป็นเงิน", subtotal],
-              ["มูลค่าที่ไม่มี/ยกเว้นภาษี", 0],
-              ["มูลค่าที่คำนวณภาษี", subtotal],
+              ["มูลค่าที่ไม่มี/ยกเว้นภาษี", hasVat ? 0 : subtotal],
+              ["มูลค่าที่คำนวณภาษี", hasVat ? subtotal : 0],
               ["ภาษีมูลค่าเพิ่ม", vat],
               ["จำนวนเงินรวมทั้งสิ้น", total],
               ["หักภาษี ณ ที่จ่ายทั้งสิ้น", 0],
@@ -6275,6 +6298,7 @@ function CreateJobView({
     assignedDesigner: defaultDesigner,
     assignedProduction: defaultProduction,
     price: prefill?.price ?? 0,
+    vatMode: (prefill?.vatMode ?? "none") as VatMode,
     deposit: 0,
     depositReceivedDate: todayISO(),
     depositSlip: "",
@@ -6632,6 +6656,28 @@ function CreateJobView({
             </select>
           </label>
           <NumberField label="ราคา" value={form.price} onChange={(value) => setField("price", value)} />
+          <label className="space-y-2">
+            <span className="text-sm font-semibold text-k2-muted">ภาษีมูลค่าเพิ่ม (VAT 7%)</span>
+            <select
+              value={form.vatMode}
+              onChange={(event) => setField("vatMode", event.target.value as VatMode)}
+              className="w-full rounded-2xl border border-white/80 bg-white/80 px-4 py-3 outline-none"
+            >
+              {VAT_MODES.map((mode) => (
+                <option key={mode} value={mode}>{vatModeLabel[mode]}</option>
+              ))}
+            </select>
+            {(() => {
+              const v = computeVat(Number(form.price) || 0, form.vatMode);
+              return form.vatMode === "none" ? (
+                <p className="text-xs font-semibold text-k2-muted">ไม่คิดภาษี — ยอดรวม {money.format(v.total)}</p>
+              ) : (
+                <p className="text-xs font-semibold text-k2-muted">
+                  ก่อนภาษี {money.format(v.base)} · VAT {money.format(v.vat)} · <span className="text-k2-ink">รวม {money.format(v.total)}</span>
+                </p>
+              );
+            })()}
+          </label>
           <NumberField label="มัดจำ" value={form.deposit} onChange={(value) => setField("deposit", value)} />
           <TextField
             label="วันที่รับเงินมัดจำ"

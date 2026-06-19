@@ -16,3 +16,7 @@ lib/.ccbuild/
 lib/.jrbuild/
 lib/.atbuild/
 scripts/credentials.local.*
+
+# Python
+__pycache__/
+*.pyc
