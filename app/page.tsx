@@ -2938,6 +2938,17 @@ export default function Page() {
 
   async function checkOut(): Promise<{ ok: boolean; msg: string }> {
     if (!myAttendance) return { ok: false, msg: "ยังไม่ได้เช็คอินวันนี้" };
+    // กติกา: ออกงานได้ตั้งแต่เวลาเลิกงานของสาขา (default 18:00) เป็นต้นไป — กันกดออกงานพลาดตอนเช้า
+    const workEnd = branchSettings[currentUser.branch ?? ""]?.workEnd || "18:00";
+    const toMin = (t: string) => {
+      const [h, m] = t.split(":").map((v) => Number(v) || 0);
+      return h * 60 + m;
+    };
+    const bkk = new Intl.DateTimeFormat("en-GB", { timeZone: "Asia/Bangkok", hour: "2-digit", minute: "2-digit", hour12: false }).formatToParts(new Date());
+    const nowMin = Number(bkk.find((p) => p.type === "hour")?.value ?? 0) * 60 + Number(bkk.find((p) => p.type === "minute")?.value ?? 0);
+    if (nowMin < toMin(workEnd)) {
+      return { ok: false, msg: `ยังไม่ถึงเวลาเลิกงาน — ออกงานได้ตั้งแต่ ${workEnd} น.` };
+    }
     const checkOutAt = new Date().toISOString();
     if (supabase && uuidPattern.test(currentUser.id)) {
       const { error } = await supabase.from("attendance").update({ check_out_at: checkOutAt, check_out_selfie: null }).eq("id", myAttendance.id);
