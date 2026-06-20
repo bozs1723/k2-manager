@@ -8757,6 +8757,10 @@ function CheckInControl({
   const [errMsg, setErrMsg] = useState("");
   const [checkInPopup, setCheckInPopup] = useState<CheckInResult | null>(null);
   const [checkOutPopup, setCheckOutPopup] = useState<{ hours: number; minutes: number } | null>(null);
+  const [confirmOut, setConfirmOut] = useState(false);
+
+  // กันกดพลาด: ถ้าเพิ่งเช็คอินไม่ถึงเท่านี้ (นาที) จะเตือนเป็นพิเศษตอนยืนยันออกงาน
+  const RECENT_CHECKIN_MINUTES = 5;
 
   const working = !!(myAttendance && myAttendance.checkInAt && !myAttendance.checkOutAt);
   const done = !!(myAttendance && myAttendance.checkInAt && myAttendance.checkOutAt);
@@ -8778,26 +8782,35 @@ function CheckInControl({
   async function handleClick() {
     if (busy || done) return;
     setErrMsg("");
-    setBusy(true);
     if (working) {
-      const result = await onCheckOut();
-      setBusy(false);
-      if (!result.ok) {
-        setErrMsg(result.msg);
-        return;
-      }
-      const start = myAttendance?.checkInAt ? new Date(myAttendance.checkInAt).getTime() : Date.now();
-      const totalMin = Math.max(0, Math.round((Date.now() - start) / 60000));
-      setCheckOutPopup({ hours: Math.floor(totalMin / 60), minutes: totalMin % 60 });
-    } else {
-      const result = await onCheckIn();
-      setBusy(false);
-      if (!result.ok) {
-        setErrMsg(result.msg);
-        return;
-      }
-      setCheckInPopup(result);
+      // ไม่เช็คเอาท์ทันที — เปิดหน้าต่างยืนยันก่อน (กันกดซ้ำ/กดพลาดตอนเช้าแล้วออกงานเอง)
+      setConfirmOut(true);
+      return;
     }
+    setBusy(true);
+    const result = await onCheckIn();
+    setBusy(false);
+    if (!result.ok) {
+      setErrMsg(result.msg);
+      return;
+    }
+    setCheckInPopup(result);
+  }
+
+  // ออกงานจริง — เรียกเมื่อกดยืนยันในหน้าต่างยืนยันเท่านั้น
+  async function confirmCheckOut() {
+    if (busy) return;
+    setBusy(true);
+    const result = await onCheckOut();
+    setBusy(false);
+    setConfirmOut(false);
+    if (!result.ok) {
+      setErrMsg(result.msg);
+      return;
+    }
+    const start = myAttendance?.checkInAt ? new Date(myAttendance.checkInAt).getTime() : Date.now();
+    const totalMin = Math.max(0, Math.round((Date.now() - start) / 60000));
+    setCheckOutPopup({ hours: Math.floor(totalMin / 60), minutes: totalMin % 60 });
   }
 
   if (!branch) return null;
@@ -8885,9 +8898,56 @@ function CheckInControl({
     </div>
   );
 
+  const elapsedMin = Math.floor(elapsedMs / 60000);
+  const recentCheckIn = working && elapsedMin < RECENT_CHECKIN_MINUTES;
+
   return (
     <>
       {trigger}
+
+      {confirmOut ? (
+        <motion.div
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          className="fixed inset-0 z-[55] flex items-center justify-center bg-k2-ink/40 p-6 backdrop-blur-sm"
+          onClick={() => setConfirmOut(false)}
+        >
+          <motion.div
+            initial={{ scale: 0.8, y: 20 }}
+            animate={{ scale: 1, y: 0 }}
+            transition={{ type: "spring", stiffness: 320, damping: 22 }}
+            className="glass w-full max-w-xs rounded-[1.75rem] p-7 text-center shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="text-5xl">🕔</div>
+            <h3 className="mt-3 text-2xl font-extrabold text-k2-ink">ยืนยันออกงาน?</h3>
+            <p className="mt-2 text-sm font-semibold text-k2-muted">เวลาทำงานตอนนี้</p>
+            <p className="mt-1 text-4xl font-black tabular-nums tracking-tight text-k2-ink">{elapsedLabel}</p>
+            {recentCheckIn ? (
+              <p className="mt-4 rounded-2xl bg-amber-100 px-3 py-2 text-sm font-bold text-amber-700">
+                เพิ่งเช็คอินไปเมื่อ {elapsedMin} นาทีที่แล้ว — ถ้ากดพลาดให้กด “ยกเลิก”
+              </p>
+            ) : null}
+            <div className="mt-5 flex gap-2">
+              <button
+                type="button"
+                onClick={() => setConfirmOut(false)}
+                className="flex-1 rounded-2xl bg-white px-5 py-3 font-extrabold text-k2-ink shadow-sm ring-1 ring-slate-200"
+              >
+                ยกเลิก
+              </button>
+              <button
+                type="button"
+                onClick={confirmCheckOut}
+                disabled={busy}
+                className="flex-1 rounded-2xl bg-rose-500 px-5 py-3 font-extrabold text-white shadow-lg disabled:opacity-70"
+              >
+                {busy ? "กำลังบันทึก..." : "ยืนยันออกงาน"}
+              </button>
+            </div>
+          </motion.div>
+        </motion.div>
+      ) : null}
 
       {checkInPopup ? (
         <motion.div
