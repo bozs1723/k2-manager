@@ -34,60 +34,125 @@ import {
 } from "@/lib/shop";
 
 const DEFAULT_SETTINGS: ShopSettings = {
-  shopName: "K2Smart",
-  heroTitle: "งานพิมพ์ & ป้าย สั่งทำคุณภาพ ผลิตไว",
-  heroSubtitle: "เลือกสินค้าที่ต้องการ แจ้งจำนวน แล้วสั่งผ่าน LINE ได้ทันที",
-  lineUrl: null,
-  phone: null,
+  shopName: "K2 Sign · ร้านป้ายพะเยา",
+  heroTitle: "ร้านป้ายพะเยา ครบวงจร งานด่วนรอรับได้!",
+  heroSubtitle: "ไวนิล สติกเกอร์ สแตนดี้ พวงกุญแจ ป้ายทุกชนิด · ออกแบบฟรี เลือกสินค้าแล้วสั่งผ่าน LINE ได้ทันที",
+  lineUrl: "https://lin.ee/k2sign",
+  phone: "065-989-5887",
   facebookUrl: null
 };
 
-// ตัวอย่างสำหรับพรีวิวเมื่อยังไม่ได้ตั้งค่า Supabase
+// ตัวอย่างสำหรับพรีวิวเมื่อยังไม่ได้ตั้งค่า Supabase (สะท้อนสินค้าจริง K2 Sign)
 const FALLBACK_PRODUCTS: Product[] = [
   {
-    id: "demo-flag",
-    categoryId: "c1",
-    categoryName: "ป้ายธง / ธงญี่ปุ่น",
-    name: "ป้ายธงญี่ปุ่น (J-Flag)",
-    description: "ธงญี่ปุ่นพร้อมฐาน ผลิตไว ใช้หน้าร้าน/อีเวนต์ ขนาดมาตรฐาน 50x150 ซม.",
-    basePrice: 970,
-    unit: "ชุด",
-    leadTimeDays: 3,
-    badge: "ขายดี",
-    images: ["https://images.unsplash.com/photo-1561049501-e1f96bdd98fd?w=800"],
-    options: [
-      { name: "ฐาน", choices: [{ label: "ฐานกลม", priceDelta: 0 }, { label: "ฐานเหลี่ยม", priceDelta: 120 }, { label: "ฐานปูน", priceDelta: 320 }] },
-      { name: "ขนาด", choices: [{ label: "50x150 ซม.", priceDelta: 0 }, { label: "60x180 ซม.", priceDelta: 180 }] }
-    ],
-    priceTiers: [{ minQty: 1, price: 970 }, { minQty: 6, price: 920 }, { minQty: 12, price: 870 }],
-    minQty: 1,
-    active: true,
-    sort: 1,
-    pricingMode: "fixed"
+    id: "demo-standee", categoryId: "standee", categoryName: "สแตนดี้อะคริลิค",
+    name: "สแตนดี้อะคริลิค",
+    description: "งานพิมพ์ UV เลเซอร์ตัดอะคริลิค เลือกขนาดได้ · XL (11-15 ซม.) ราคา 129-189฿ ขึ้นกับแบบงาน",
+    basePrice: 39, unit: "ชิ้น", leadTimeDays: 5, badge: "ยอดนิยม",
+    images: ["/shop/standee-2.jpg", "/shop/standee-5.jpg", "/shop/standee-4.jpg", "/shop/standee-3.jpg", "/shop/standee-1.jpg"],
+    options: [{ name: "ขนาด", choices: [{ label: "Mini (3-4 ซม.)", priceDelta: 0 }, { label: "S (5-6 ซม.)", priceDelta: 20 }, { label: "M (7-8 ซม.)", priceDelta: 40 }, { label: "L (9-10 ซม.)", priceDelta: 60 }, { label: "XL (11-15 ซม.)", priceDelta: 150 }] }],
+    priceTiers: [], minQty: 1, active: true, sort: 1, pricingMode: "fixed"
   },
   {
-    id: "demo-tee",
-    categoryId: "c2",
-    categoryName: "เสื้อ DTG / สกรีน",
-    name: "เสื้อยืดพิมพ์ลาย DTG",
-    description: "เสื้อ Cotton 100% พิมพ์ DTG สีคมชัด สั่งขั้นต่ำ 1 ตัว",
-    basePrice: 250,
-    unit: "ตัว",
-    leadTimeDays: 5,
-    badge: null,
-    images: ["https://images.unsplash.com/photo-1521572163474-6864f9cf17ab?w=800"],
-    options: [{ name: "ไซซ์", choices: [{ label: "S" }, { label: "M" }, { label: "L" }, { label: "XL", priceDelta: 20 }, { label: "2XL", priceDelta: 40 }] }],
-    priceTiers: [{ minQty: 1, price: 250 }, { minQty: 10, price: 220 }, { minQty: 50, price: 190 }],
-    minQty: 1,
-    active: true,
-    sort: 1,
-    pricingMode: "fixed"
+    id: "demo-keychain", categoryId: "keychain", categoryName: "พวงกุญแจอะคริลิค",
+    name: "พวงกุญแจอะคริลิค",
+    description: "พวงกุญแจอะคริลิคพิมพ์ UV ฟรีโซ่ไข่ปลาสีเงิน · ผลิต 3-7 วันขึ้นกับจำนวน",
+    basePrice: 16, unit: "ชิ้น", leadTimeDays: 7, badge: "ขายดี",
+    images: ["/shop/keychain-1.jpg", "/shop/keychain-2.jpg"],
+    options: [], priceTiers: [], minQty: 1, active: true, sort: 1, pricingMode: "matrix",
+    matrix: {
+      sizeLabel: "ขนาด",
+      sizes: ["3 ซม.", "4 ซม.", "5 ซม.", "6 ซม.", "7 ซม.", "8 ซม.", "9 ซม.", "10 ซม."],
+      tiers: [
+        { label: "1-9 ชิ้น", minQty: 1, prices: [80, 85, 90, 95, 100, 130, 140, 150] },
+        { label: "10-19 ชิ้น", minQty: 10, prices: [39, 44, 49, 54, 59, 64, 69, 74] },
+        { label: "20-49 ชิ้น", minQty: 20, prices: [35, 40, 45, 50, 55, 60, 65, 70] },
+        { label: "50-99 ชิ้น", minQty: 50, prices: [29, 34, 39, 44, 49, 54, 59, 64] },
+        { label: "100-199 ชิ้น", minQty: 100, prices: [19, 24, 29, 34, 39, 44, 49, 54] },
+        { label: "200-299 ชิ้น", minQty: 200, prices: [17, 22, 27, 31, 36, 41, 46, 51] },
+        { label: "500+ ชิ้น", minQty: 500, prices: [16, 20, 25, 29, 34, 39, 43, 47] }
+      ],
+      addons: [{ name: "งาน 2 ด้าน (พิมพ์อีกด้าน)", perSize: [5, 5, 10, 10, 15, 15, 20, 20] }],
+      freebie: "ฟรีโซ่ไข่ปลาสีเงิน"
+    }
+  },
+  {
+    id: "demo-vinyl", categoryId: "vinyl", categoryName: "ไวนิล",
+    name: "ป้ายไวนิลพิมพ์",
+    description: "พิมพ์ไวนิล Konica 512i 3.2M / EPSON หมึกแท้ เกรด 2-3 ปี · ลดราคาเมื่อสั่ง 50 ตร.ม. ขึ้นไป",
+    basePrice: 60, unit: "ตร.ม.", leadTimeDays: 1, badge: "เริ่ม 60฿",
+    images: [], options: [], priceTiers: [], minQty: 1, active: true, sort: 1, pricingMode: "area",
+    area: {
+      unitLabel: "ตร.ม.", minSqm: 1,
+      materials: [
+        { name: "Konica หลังขาว 360G", tiers: [{ minSqm: 0, price: 80 }, { minSqm: 50, price: 60 }] },
+        { name: "Konica หลังขาว 400G", tiers: [{ minSqm: 0, price: 90 }, { minSqm: 50, price: 70 }] },
+        { name: "Konica หลังดำ 360G", tiers: [{ minSqm: 0, price: 90 }, { minSqm: 50, price: 70 }] },
+        { name: "Konica หลังดำ 400G", tiers: [{ minSqm: 0, price: 100 }, { minSqm: 50, price: 80 }] },
+        { name: "EPSON หมึกแท้ หลังขาว 400G", tiers: [{ minSqm: 0, price: 150 }] },
+        { name: "EPSON ทึบกันแสง", tiers: [{ minSqm: 0, price: 300 }] },
+        { name: "EPSON เทาโปร่งแสงตู้ไฟ 440G", tiers: [{ minSqm: 0, price: 350 }] }
+      ],
+      addons: [
+        { name: "ตอกตาไก่ + ซีลขอบ", pricePerSqm: 10 },
+        { name: "เคลือบเงา/ฝ้า", pricePerSqm: 100 },
+        { name: "รีดซีลทับ PP Board 3 มิล", pricePerSqm: 120 },
+        { name: "รีดซีลทับ PP Board 5 มิล", pricePerSqm: 180 }
+      ]
+    }
+  },
+  {
+    id: "demo-sticker", categoryId: "sticker", categoryName: "สติกเกอร์",
+    name: "สติกเกอร์พิมพ์",
+    description: "สติกเกอร์ PVC / 3M / แบ็คลิทตู้ไฟ / ฉลากสินค้า UV คิดราคาต่อ ตร.ม.",
+    basePrice: 350, unit: "ตร.ม.", leadTimeDays: 2, badge: null,
+    images: ["/shop/sticker-1.jpg", "/shop/sticker-2.jpg", "/shop/sticker-3.jpg"],
+    options: [], priceTiers: [], minQty: 1, active: true, sort: 1, pricingMode: "area",
+    area: {
+      unitLabel: "ตร.ม.", minSqm: 1,
+      materials: [
+        { name: "PVC ขาว", tiers: [{ minSqm: 0, price: 350 }] },
+        { name: "PVC ใส", tiers: [{ minSqm: 0, price: 390 }] },
+        { name: "สติกเกอร์ขาว 3M หลังเทา", tiers: [{ minSqm: 0, price: 400 }] },
+        { name: "แบ็คลิทตู้ไฟ", tiers: [{ minSqm: 0, price: 450 }] },
+        { name: "ฉลากสินค้า 3P UV", tiers: [{ minSqm: 0, price: 550 }] }
+      ],
+      addons: [{ name: "เคลือบเงา/ฝ้า", pricePerSqm: 100 }, { name: "ไดคัท/ตัดตามรูปทรง", pricePerSqm: 50 }]
+    }
+  },
+  {
+    id: "demo-sign", categoryId: "signage", categoryName: "ป้าย & งานสั่งทำ",
+    name: "ป้ายร้าน / ป้ายบริษัท",
+    description: "ป้ายหน้าร้าน ป้ายบริษัท · งานเด่น ป้ายอะคริลิคไฟออกหลัง Gold Mirror หรูหรา + ป้ายไวนิล/อิงค์เจ็ท ออกแบบ+ติดตั้งครบวงจร แจ้งขนาด/แบบเพื่อขอใบเสนอราคา",
+    basePrice: 0, unit: "งาน", leadTimeDays: null, badge: "งานพรีเมียม",
+    images: ["/shop/sign-1.jpg", "/shop/sign-2.jpg", "/shop/sign-3.jpg", "/shop/sign-4.jpg"],
+    options: [], priceTiers: [], minQty: 1, active: true, sort: 1, pricingMode: "quote"
+  },
+  {
+    id: "demo-led", categoryId: "signage", categoryName: "ป้าย & งานสั่งทำ",
+    name: "ป้ายไฟ LED",
+    description: "ป้ายไฟ LED ป้ายตู้ไฟ สว่างชัดเจน ทนทาน แจ้งขนาด/รูปแบบเพื่อประเมินราคา",
+    basePrice: 0, unit: "งาน", leadTimeDays: null, badge: null,
+    images: ["/shop/led-1.jpg", "/shop/led-2.jpg"],
+    options: [], priceTiers: [], minQty: 1, active: true, sort: 2, pricingMode: "quote"
+  },
+  {
+    id: "demo-menu", categoryId: "signage", categoryName: "ป้าย & งานสั่งทำ",
+    name: "เมนูอาหารพลาสวูด (พิมพ์ UV)",
+    description: "ป้ายเมนูอาหารพลาสวูด พิมพ์ UV กันน้ำ เลือกขนาด A4/A3/A2/A1",
+    basePrice: 0, unit: "งาน", leadTimeDays: null, badge: "Best Seller",
+    images: ["/shop/menu-1.jpg", "/shop/menu-2.jpg", "/shop/menu-3.jpg", "/shop/menu-4.jpg", "/shop/menu-5.jpg"],
+    options: [{ name: "ขนาด", choices: [{ label: "A4" }, { label: "A3" }, { label: "A2" }, { label: "A1" }] }],
+    priceTiers: [], minQty: 1, active: true, sort: 3, pricingMode: "quote"
   }
 ];
 
 const FALLBACK_CATEGORIES: ProductCategory[] = [
-  { id: "c1", slug: "flags", name: "ป้ายธง / ธงญี่ปุ่น", sort: 1, active: true },
-  { id: "c2", slug: "shirts", name: "เสื้อ DTG / สกรีน", sort: 2, active: true }
+  { id: "standee", slug: "standee", name: "สแตนดี้อะคริลิค", sort: 1, active: true },
+  { id: "keychain", slug: "keychain", name: "พวงกุญแจอะคริลิค", sort: 2, active: true },
+  { id: "vinyl", slug: "vinyl", name: "ไวนิล", sort: 3, active: true },
+  { id: "sticker", slug: "sticker", name: "สติกเกอร์", sort: 4, active: true },
+  { id: "signage", slug: "signage", name: "ป้าย & งานสั่งทำ", sort: 5, active: true }
 ];
 
 export default function ShopPage() {
