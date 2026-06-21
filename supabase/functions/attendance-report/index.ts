@@ -132,8 +132,8 @@ function buildCheckout(
   ].join("\n");
 }
 
-// รายงานวันหยุด (วันอาทิตย์): แจ้งว่าหยุด + ใครมาทำ OT (= คนที่มาลงเวลา) พร้อมชั่วโมง OT ถ้ามี
-function buildHoliday(branch: string, dateISO: string, members: Member[], att: Map<string, Att>, ot: Map<string, number>): string {
+// รายงานวันหยุด: แจ้งว่าหยุด + ใครมาทำ OT (= คนที่มาลงเวลา) พร้อมชั่วโมง OT ถ้ามี
+function buildHoliday(branch: string, dateISO: string, holidayLabel: string, members: Member[], att: Map<string, Att>, ot: Map<string, number>): string {
   const otPeople: string[] = [];
   for (const m of members) {
     const a = att.get(m.id);
@@ -146,7 +146,7 @@ function buildHoliday(branch: string, dateISO: string, members: Member[], att: M
   }
   return [
     `🏖 วันนี้เป็นวันหยุด — ${branch}`,
-    `🗓 ${thaiDate(dateISO)} (วันอาทิตย์)`,
+    `🗓 ${thaiDate(dateISO)} (${holidayLabel})`,
     ``,
     otPeople.length
       ? `🕐 มาทำ OT วันนี้ (${otPeople.length})\n${otPeople.join("\n")}`
@@ -185,8 +185,12 @@ Deno.serve(async (req) => {
 
     const attByProfile = new Map<string, Att>((att ?? []).map((a) => [a.profile_id, a as Att]));
 
-    // วันอาทิตย์ = วันหยุดของทุกคน → รายงานแบบวันหยุด (แจ้งคนที่มาทำ OT)
-    const isHoliday = bangkokWeekday() === "Sun";
+    // วันหยุด = วันอาทิตย์ หรือ วันหยุดบริษัทในตาราง holidays → รายงานแบบวันหยุด (แจ้งคนที่มาทำ OT)
+    const isSunday = bangkokWeekday() === "Sun";
+    const { data: holRows } = await admin.from("holidays").select("name").eq("holiday_date", today).limit(1);
+    const holidayName = (holRows ?? [])[0]?.name as string | undefined;
+    const isHoliday = isSunday || !!holidayName;
+    const holidayLabel = holidayName ?? (isSunday ? "วันอาทิตย์" : "วันหยุด");
     // วันหยุดส่งรายงานครั้งเดียวตอนเย็น (รอบเช็คเอาท์) — ข้ามรอบเช้าเพื่อไม่ให้ซ้ำ/แจ้งก่อนคนมา OT
     if (isHoliday && kind === "checkin") {
       return json({ ok: true, kind, date: today, note: "วันหยุด — ข้ามรอบเช้า ส่งสรุป OT ตอนเย็นแทน" });
@@ -213,7 +217,7 @@ Deno.serve(async (req) => {
       if (!members.length) continue;
 
       const text = isHoliday
-        ? buildHoliday(g.branch, today, members, attByProfile, otByProfile)
+        ? buildHoliday(g.branch, today, holidayLabel, members, attByProfile, otByProfile)
         : kind === "checkin"
           ? buildCheckin(g.branch, today, members, attByProfile)
           : buildCheckout(g.branch, today, members, attByProfile, otByProfile);
