@@ -4035,7 +4035,7 @@ export default function Page() {
             )}
             {activeView === "Create Job" && (
               <motion.div key="create" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }}>
-                <CreateJobView key={createJobNonce} prefill={createJobPrefill} customers={customerRecords} teamMembers={teamMembers} companyProfile={companyProfile} expressEnabled={canCreateExpress} onCreate={createJob} />
+                <CreateJobView key={createJobNonce} prefill={createJobPrefill} customers={customerRecords} teamMembers={teamMembers} companyProfile={companyProfile} expressEnabled={canCreateExpress} canAssign={can("assign_staff")} onCreate={createJob} />
               </motion.div>
             )}
             {activeView === "Leads" && (
@@ -6302,6 +6302,7 @@ function CreateJobView({
   teamMembers,
   companyProfile,
   expressEnabled,
+  canAssign,
   prefill,
   onCreate
 }: {
@@ -6309,13 +6310,15 @@ function CreateJobView({
   teamMembers: TeamMember[];
   companyProfile: CompanyProfile;
   expressEnabled: boolean;
+  canAssign: boolean;
   prefill?: Partial<Job> | null;
   onCreate: (job: Partial<Job>, attachments?: File[]) => void;
 }) {
   const designerOptions = useMemo(() => teamMembers.filter((member) => member.role === "Designer" || (member.roles ?? []).includes("Designer")), [teamMembers]);
   const productionOptions = useMemo(() => teamMembers.filter((member) => ["Production Staff", "Admin", "Owner"].includes(member.role)), [teamMembers]);
   const defaultDesigner = "Unassigned";
-  const defaultProduction = productionOptions[0]?.name ?? "Unassigned";
+  // ค่าเริ่มต้น "ยังไม่มอบหมาย" เสมอ — ให้ผู้จัดการสาขาเป็นคนมอบหมายภายหลัง (เซลแค่ลงข้อมูล)
+  const defaultProduction = "Unassigned";
   // ฟอร์มสร้างงานเริ่มจากค่าว่างเสมอ เพื่อไม่ให้ข้อมูลจากงานก่อนหน้าค้างมาทำให้สร้างออเดอร์ผิด/ซ้ำ
   const [form, setForm] = useState({
     customerId: prefill?.customerId ?? "new",
@@ -6701,32 +6704,40 @@ function CreateJobView({
               ))}
             </select>
           </label>
-          <label className="space-y-2">
-            <span className="text-sm font-semibold text-k2-muted">ผู้รับผิดชอบออกแบบ</span>
-            <select
-              value={form.assignedDesigner}
-              onChange={(event) => setField("assignedDesigner", event.target.value)}
-              className="w-full rounded-2xl border border-white/80 bg-white/80 px-4 py-3 outline-none"
-            >
-              {designerOptions.map((member) => (
-                <option key={member.id}>{member.name}</option>
-              ))}
-              <option value="Unassigned">ยังไม่มอบหมาย</option>
-            </select>
-          </label>
-          <label className="space-y-2">
-            <span className="text-sm font-semibold text-k2-muted">ผู้รับผิดชอบผลิต</span>
-            <select
-              value={form.assignedProduction}
-              onChange={(event) => setField("assignedProduction", event.target.value)}
-              className="w-full rounded-2xl border border-white/80 bg-white/80 px-4 py-3 outline-none"
-            >
-              {productionOptions.map((member) => (
-                <option key={member.id}>{member.name}</option>
-              ))}
-              <option value="Unassigned">ยังไม่มอบหมาย</option>
-            </select>
-          </label>
+          {canAssign ? (
+            <>
+              <label className="space-y-2">
+                <span className="text-sm font-semibold text-k2-muted">ผู้รับผิดชอบออกแบบ</span>
+                <select
+                  value={form.assignedDesigner}
+                  onChange={(event) => setField("assignedDesigner", event.target.value)}
+                  className="w-full rounded-2xl border border-white/80 bg-white/80 px-4 py-3 outline-none"
+                >
+                  {designerOptions.map((member) => (
+                    <option key={member.id}>{member.name}</option>
+                  ))}
+                  <option value="Unassigned">ยังไม่มอบหมาย</option>
+                </select>
+              </label>
+              <label className="space-y-2">
+                <span className="text-sm font-semibold text-k2-muted">ผู้รับผิดชอบผลิต</span>
+                <select
+                  value={form.assignedProduction}
+                  onChange={(event) => setField("assignedProduction", event.target.value)}
+                  className="w-full rounded-2xl border border-white/80 bg-white/80 px-4 py-3 outline-none"
+                >
+                  {productionOptions.map((member) => (
+                    <option key={member.id}>{member.name}</option>
+                  ))}
+                  <option value="Unassigned">ยังไม่มอบหมาย</option>
+                </select>
+              </label>
+            </>
+          ) : (
+            <div className="md:col-span-2 rounded-2xl border border-dashed border-k2-mint bg-k2-mint/20 px-4 py-3 text-sm font-semibold text-k2-ink">
+              ผู้รับผิดชอบงาน (ออกแบบ/ผลิต) — <span className="text-k2-muted">ผู้จัดการสาขาจะเป็นผู้มอบหมายหลังรับงาน</span>
+            </div>
+          )}
           <NumberField label="ราคา" value={form.price} onChange={(value) => setField("price", value)} />
           <label className="space-y-2">
             <span className="text-sm font-semibold text-k2-muted">ภาษีมูลค่าเพิ่ม (VAT 7%)</span>
