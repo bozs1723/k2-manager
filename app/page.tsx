@@ -2518,7 +2518,7 @@ export default function Page() {
     notifyAssignees("comment", existingJob, `${currentUser.name} คอมเมนต์ใน ${existingJob.id}: "${text.slice(0, 40)}${text.length > 40 ? "…" : ""}"`);
   }
 
-  async function createJob(input?: Partial<Job>) {
+  async function createJob(input?: Partial<Job>, attachments?: File[]) {
     if (!can("create_job")) {
       setDataError("บทบาทนี้ยังไม่มีสิทธิ์สร้างงาน");
       return;
@@ -2673,6 +2673,21 @@ export default function Page() {
             changed_by: currentUser.id
           });
         }
+        // อัปโหลดรูปแบบงานลูกค้าที่แนบตอนสร้าง → storage job-files + บันทึกลง job_files
+        if (attachments?.length) {
+          for (const file of attachments) {
+            try {
+              const safeName = file.name.replace(/[^\w.\-]+/g, "_");
+              const path = `${insertedJob.id}/${Date.now()}-${safeName}`;
+              const { error: upErr } = await supabase.storage.from("job-files").upload(path, file, { contentType: file.type || undefined });
+              if (upErr) continue;
+              const { data: pub } = supabase.storage.from("job-files").getPublicUrl(path);
+              await supabase.from("job_files").insert({ job_id: insertedJob.id, file_name: file.name, file_type: file.type || "image", file_size: file.size, url: pub.publicUrl });
+            } catch {
+              /* ข้ามไฟล์ที่อัปไม่สำเร็จ ไม่ให้ล้มทั้งการสร้างงาน */
+            }
+          }
+        }
         await appendAudit("created job", insertedJobNumber, "jobs", insertedJob.id);
         notifyAssignees(
           "assigned",
@@ -2713,7 +2728,9 @@ export default function Page() {
       type: input?.type ?? "UV Print",
       description: input?.description ?? "ออเดอร์ใหม่จากฝ่ายขาย พร้อมไฟล์อาร์ตตัวอย่างและผู้รับผิดชอบเริ่มต้น",
       quantity: input?.quantity ?? 12,
-      files: input?.files?.length ? input.files : [{ id: crypto.randomUUID(), name: "sponsor-plaque-artwork.pdf", type: "pdf", size: "4.2 MB" }],
+      files: attachments?.length
+        ? await Promise.all(attachments.map(async (file) => ({ id: crypto.randomUUID(), name: file.name, type: "image" as const, size: `${Math.max(file.size / 1000000, 0.01).toFixed(2)} MB`, url: await readImageAsDataUrl(file) })))
+        : input?.files?.length ? input.files : [{ id: crypto.randomUUID(), name: "sponsor-plaque-artwork.pdf", type: "pdf", size: "4.2 MB" }],
       orderDate: input?.orderDate ?? todayISO(),
       dueDate: input?.dueDate ?? todayISO(),
       priority: input?.priority ?? "Urgent",
@@ -6293,7 +6310,7 @@ function CreateJobView({
   companyProfile: CompanyProfile;
   expressEnabled: boolean;
   prefill?: Partial<Job> | null;
-  onCreate: (job: Partial<Job>) => void;
+  onCreate: (job: Partial<Job>, attachments?: File[]) => void;
 }) {
   const designerOptions = useMemo(() => teamMembers.filter((member) => member.role === "Designer" || (member.roles ?? []).includes("Designer")), [teamMembers]);
   const productionOptions = useMemo(() => teamMembers.filter((member) => ["Production Staff", "Admin", "Owner"].includes(member.role)), [teamMembers]);
@@ -6344,6 +6361,31 @@ function CreateJobView({
   const [formError, setFormError] = useState("");
   const [lookupMsg, setLookupMsg] = useState("");
   const [slipError, setSlipError] = useState("");
+  // รูปแบบงานลูกค้า — เก็บไฟล์ไว้ในฟอร์ม แล้วอัปขึ้น storage หลังสร้างงานสำเร็จ
+  const [designFiles, setDesignFiles] = useState<Array<{ id: string; file: File; preview: string }>>([]);
+  const [designError, setDesignError] = useState("");
+
+  async function addDesignFiles(list: FileList | null) {
+    if (!list?.length) return;
+    setDesignError("");
+    const incoming: Array<{ id: string; file: File; preview: string }> = [];
+    for (const file of Array.from(list)) {
+      if (!file.type.startsWith("image/")) {
+        setDesignError("แนบได้เฉพาะไฟล์รูปภาพ");
+        continue;
+      }
+      if (file.size > 10_000_000) {
+        setDesignError(`"${file.name}" ใหญ่เกิน 10 MB`);
+        continue;
+      }
+      incoming.push({ id: crypto.randomUUID(), file, preview: await readImageAsDataUrl(file) });
+    }
+    if (incoming.length) setDesignFiles((current) => [...current, ...incoming]);
+  }
+
+  function removeDesignFile(id: string) {
+    setDesignFiles((current) => current.filter((d) => d.id !== id));
+  }
 
   async function handleSlipUpload(file: File | null) {
     if (!file) return;
@@ -6477,11 +6519,8 @@ function CreateJobView({
           assignedDesigner: designerOptions.some((member) => member.name === form.assignedDesigner) || form.assignedDesigner === "Unassigned" ? form.assignedDesigner : defaultDesigner,
           assignedProduction: productionOptions.some((member) => member.name === form.assignedProduction) || form.assignedProduction === "Unassigned"
             ? form.assignedProduction
-            : defaultProduction,
-          files: form.fileName
-            ? [{ id: crypto.randomUUID(), name: form.fileName, type: "pdf", size: "ไฟล์ตัวอย่าง" }]
-            : []
-        });
+            : defaultProduction
+        }, designFiles.map((d) => d.file));
       }}
       className="grid gap-4 xl:grid-cols-[1fr_0.72fr]"
     >
@@ -6718,7 +6757,32 @@ function CreateJobView({
             value={form.depositReceivedDate}
             onChange={(value) => setField("depositReceivedDate", value)}
           />
-          <TextField label="ไฟล์ / รูปแนบ" value={form.fileName} onChange={(value) => setField("fileName", value)} />
+          <div className="space-y-2 md:col-span-2 rounded-2xl border border-white/80 bg-white/55 p-4">
+            <span className="flex items-center gap-2 text-sm font-extrabold text-k2-ink">
+              <FileImage className="h-4 w-4 text-k2-ink" />
+              แบบงานลูกค้า (รูปภาพ) <span className="text-xs font-bold text-k2-muted">แนบได้หลายรูป · ไม่เกิน 10 MB/รูป</span>
+            </span>
+            <div className="flex flex-wrap items-center gap-3">
+              <label className="inline-flex cursor-pointer items-center gap-2 rounded-2xl bg-white px-4 py-2.5 text-sm font-bold text-k2-ink shadow-sm">
+                <FileImage className="h-4 w-4" />
+                อัปโหลดรูปแบบงาน
+                <input type="file" accept="image/*" multiple className="hidden" onChange={(event) => { void addDesignFiles(event.target.files); event.target.value = ""; }} />
+              </label>
+              {designFiles.length ? <span className="text-xs font-semibold text-k2-muted">แนบแล้ว {designFiles.length} รูป</span> : <span className="text-xs font-semibold text-k2-muted">ยังไม่ได้แนบรูป</span>}
+            </div>
+            {designError ? <p className="text-xs font-bold text-rose-600">{designError}</p> : null}
+            {designFiles.length ? (
+              <div className="flex flex-wrap gap-3">
+                {designFiles.map((d) => (
+                  <div key={d.id} className="relative">
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img src={d.preview} alt={d.file.name} className="h-20 w-20 rounded-xl object-cover ring-1 ring-slate-200" />
+                    <button type="button" onClick={() => removeDesignFile(d.id)} className="absolute -right-2 -top-2 grid h-6 w-6 place-items-center rounded-full bg-rose-500 text-xs font-bold text-white shadow">×</button>
+                  </div>
+                ))}
+              </div>
+            ) : null}
+          </div>
           {/* สลิปมัดจำ — ไม่บังคับตอนสร้าง (เก็บภายหลังในขั้นการเงินได้) */}
           <div className={`space-y-3 md:col-span-2 rounded-2xl border p-4 ${form.depositWaived ? "border-amber-200 bg-amber-50/60" : "border-white/80 bg-white/55"}`}>
             <label className="flex items-center justify-between gap-3">
