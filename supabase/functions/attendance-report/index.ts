@@ -26,6 +26,11 @@ function bangkokDateISO(d = new Date()): string {
   }).format(d);
 }
 
+// วันในสัปดาห์ตามเวลาไทย ("Sun".."Sat")
+function bangkokWeekday(d = new Date()): string {
+  return new Intl.DateTimeFormat("en-US", { timeZone: "Asia/Bangkok", weekday: "short" }).format(d);
+}
+
 // "YYYY-MM-DD" -> "DD/MM/YYYY"
 function thaiDate(iso: string): string {
   const [y, m, d] = iso.split("-");
@@ -127,6 +132,28 @@ function buildCheckout(
   ].join("\n");
 }
 
+// รายงานวันหยุด: แจ้งว่าหยุด + ใครมาทำ OT (= คนที่มาลงเวลา) พร้อมชั่วโมง OT ถ้ามี
+function buildHoliday(branch: string, dateISO: string, holidayLabel: string, members: Member[], att: Map<string, Att>, ot: Map<string, number>): string {
+  const otPeople: string[] = [];
+  for (const m of members) {
+    const a = att.get(m.id);
+    if (!a?.check_in_at) continue;
+    const name = m.full_name || "พนักงาน";
+    const timeTxt = a.check_out_at ? `${bangkokTime(a.check_in_at)}-${bangkokTime(a.check_out_at)}` : `เข้า ${bangkokTime(a.check_in_at)}`;
+    const hours = ot.get(m.id) ?? 0;
+    const hoursTxt = hours > 0 ? ` — OT ${fmtHours(hours)} ชม.` : "";
+    otPeople.push(`• ${name} (${timeTxt})${hoursTxt}`);
+  }
+  return [
+    `🏖 วันนี้เป็นวันหยุด — ${branch}`,
+    `🗓 ${thaiDate(dateISO)} (${holidayLabel})`,
+    ``,
+    otPeople.length
+      ? `🕐 มาทำ OT วันนี้ (${otPeople.length})\n${otPeople.join("\n")}`
+      : `ไม่มีพนักงานมาทำ OT วันนี้`
+  ].join("\n");
+}
+
 Deno.serve(async (req) => {
   try {
     const cronSecret = Deno.env.get("REPORT_CRON_SECRET");
@@ -158,9 +185,20 @@ Deno.serve(async (req) => {
 
     const attByProfile = new Map<string, Att>((att ?? []).map((a) => [a.profile_id, a as Att]));
 
-    // OT ของวันนี้ (เฉพาะรอบเช็คเอาท์) — รวมชั่วโมงต่อคน (เผื่อมีหลายรายการ)
+    // วันหยุด = วันอาทิตย์ หรือ วันหยุดบริษัทในตาราง holidays → รายงานแบบวันหยุด (แจ้งคนที่มาทำ OT)
+    const isSunday = bangkokWeekday() === "Sun";
+    const { data: holRows } = await admin.from("holidays").select("name").eq("holiday_date", today).limit(1);
+    const holidayName = (holRows ?? [])[0]?.name as string | undefined;
+    const isHoliday = isSunday || !!holidayName;
+    const holidayLabel = holidayName ?? (isSunday ? "วันอาทิตย์" : "วันหยุด");
+    // วันหยุดส่งรายงานครั้งเดียวตอนเย็น (รอบเช็คเอาท์) — ข้ามรอบเช้าเพื่อไม่ให้ซ้ำ/แจ้งก่อนคนมา OT
+    if (isHoliday && kind === "checkin") {
+      return json({ ok: true, kind, date: today, note: "วันหยุด — ข้ามรอบเช้า ส่งสรุป OT ตอนเย็นแทน" });
+    }
+
+    // OT ของวันนี้ — รวมชั่วโมงต่อคน (รอบเช็คเอาท์ หรือวันหยุดที่ต้องโชว์ OT)
     const otByProfile = new Map<string, number>();
-    if (kind === "checkout") {
+    if (kind === "checkout" || isHoliday) {
       const { data: ot } = await admin
         .from("overtime")
         .select("profile_id, hours, note")
@@ -178,9 +216,11 @@ Deno.serve(async (req) => {
         .sort((a, b) => (a.full_name || "").localeCompare(b.full_name || "", "th"));
       if (!members.length) continue;
 
-      const text = kind === "checkin"
-        ? buildCheckin(g.branch, today, members, attByProfile)
-        : buildCheckout(g.branch, today, members, attByProfile, otByProfile);
+      const text = isHoliday
+        ? buildHoliday(g.branch, today, holidayLabel, members, attByProfile, otByProfile)
+        : kind === "checkin"
+          ? buildCheckin(g.branch, today, members, attByProfile)
+          : buildCheckout(g.branch, today, members, attByProfile, otByProfile);
 
       const res = await fetch(LINE_PUSH, {
         method: "POST",
