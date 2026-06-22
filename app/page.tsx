@@ -5408,7 +5408,7 @@ function JobDetail({
     setAssignProduction(job.assignedProduction);
   }, [job.id, job.assignedDesigner, job.assignedProduction]);
   const designerChoices = teamMembers.filter((member) => member.role === "Designer" || (member.roles ?? []).includes("Designer"));
-  const productionChoices = teamMembers.filter((member) => ["Production Staff", "Admin", "Owner"].includes(member.role) || (member.roles ?? []).includes("Production Staff"));
+  const productionChoices = teamMembers.filter((member) => member.role === "Production Staff" || (member.roles ?? []).includes("Production Staff"));
   const [balanceSlipDraft, setBalanceSlipDraft] = useState("");
   const [balanceDateDraft, setBalanceDateDraft] = useState(todayISO());
   const [balanceError, setBalanceError] = useState("");
@@ -6320,7 +6320,7 @@ function CreateJobView({
   onCreate: (job: Partial<Job>, attachments?: File[]) => void;
 }) {
   const designerOptions = useMemo(() => teamMembers.filter((member) => member.role === "Designer" || (member.roles ?? []).includes("Designer")), [teamMembers]);
-  const productionOptions = useMemo(() => teamMembers.filter((member) => ["Production Staff", "Admin", "Owner"].includes(member.role)), [teamMembers]);
+  const productionOptions = useMemo(() => teamMembers.filter((member) => member.role === "Production Staff" || (member.roles ?? []).includes("Production Staff")), [teamMembers]);
   const defaultDesigner = "Unassigned";
   // ค่าเริ่มต้น "ยังไม่มอบหมาย" เสมอ — ให้ผู้จัดการสาขาเป็นคนมอบหมายภายหลัง (เซลแค่ลงข้อมูล)
   const defaultProduction = "Unassigned";
