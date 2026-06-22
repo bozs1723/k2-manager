@@ -2032,6 +2032,11 @@ export default function Page() {
     }
     const existing = jobs.find((job) => job.id === jobId);
     if (!existing) return;
+    // มอบหมายได้เฉพาะผู้จัดการ/แอดมินของสาขาที่ผลิต (เจ้าของทำได้ทุกสาขา) — ตรงกับกติกาอนุมัติรับงาน
+    if (!canAcceptJob(existing)) {
+      setDataError("เฉพาะผู้จัดการของสาขาที่ผลิต (หรือเจ้าของ) เท่านั้นที่มอบหมายงานได้");
+      return;
+    }
     if (supabase && existing.dbId && uuidPattern.test(existing.dbId)) {
       const { error } = await supabase
         .from("jobs")
@@ -4113,7 +4118,7 @@ export default function Page() {
                   <>
                   <LineInvitePanel job={selectedJob} customer={customerRecords.find((item) => item.id === selectedJob.customerId)} onMarkFriend={markCustomerLineFriend} />
                   <HandoffPanel job={selectedJob} currentUser={currentUser} onSubmit={submitHandoff} onAccept={acceptHandoff} onReject={rejectHandoff} />
-                  <JobDetail job={selectedJob} companyProfile={companyProfile} canSeeMoney={canSeeMoney} canEditPayment={can("edit_payment")} canDeleteJob={can("delete_job")} canConfirmDeposit={["Owner", "Manager", "Admin"].includes(currentUser.role)} canApproveWaiver={currentUser.role === "Owner"} onPayment={updatePayment} onConfirmDeposit={confirmDeposit} onReceiveBalance={receiveBalance} onComment={addComment} onMove={requestMove} onDelete={removeJob} teamMembers={teamMembers} canAssign={can("assign_staff")} onAssign={assignStaff} canEditJob={can("edit_job") && (currentUser.role === "Owner" || !["Ready for Production", "In Production", "QC", "Packing", "Delivered / Picked Up", "Completed", "Cancelled"].includes(selectedJob.status))} onUpdateJob={updateJob} canAttach={can("edit_job")} onUploadFile={uploadJobFile} onDeleteFile={removeJobFile} />
+                  <JobDetail job={selectedJob} companyProfile={companyProfile} canSeeMoney={canSeeMoney} canEditPayment={can("edit_payment")} canDeleteJob={can("delete_job")} canConfirmDeposit={["Owner", "Manager", "Admin"].includes(currentUser.role)} canApproveWaiver={currentUser.role === "Owner"} onPayment={updatePayment} onConfirmDeposit={confirmDeposit} onReceiveBalance={receiveBalance} onComment={addComment} onMove={requestMove} onDelete={removeJob} teamMembers={teamMembers} canAssign={can("assign_staff") && canAcceptJob(selectedJob)} onAssign={assignStaff} canEditJob={can("edit_job") && (currentUser.role === "Owner" || !["Ready for Production", "In Production", "QC", "Packing", "Delivered / Picked Up", "Completed", "Cancelled"].includes(selectedJob.status))} onUpdateJob={updateJob} canAttach={can("edit_job")} onUploadFile={uploadJobFile} onDeleteFile={removeJobFile} />
                   </>
                 ) : (
                   <EmptyState title="ยังไม่มีงานในระบบ" text="เริ่มจากสร้างลูกค้าและสร้างงานแรกได้เลย" action={() => setActiveView("Create Job")} />
