@@ -49,7 +49,6 @@ import type { LucideIcon } from "lucide-react";
 import { customers as initialCustomers, initialAuditLog, initialJobs, statuses, team as initialTeam } from "@/lib/mock-data";
 import { createSupabaseAuthWorker, isSupabaseConfigured, supabase } from "@/lib/supabase";
 import { CUSTOMER_CODE_ADMINS, CUSTOMER_CODE_PAGES, customerCodeYear, formatCustomerCode, nextCustomerSeq } from "@/lib/customer-code";
-import { branchForJobType } from "@/lib/job-routing";
 import { checkGeofence, lateMinutes } from "@/lib/attendance";
 import { computeVat, normalizeVatMode, vatModeLabel, VAT_MODES, type VatMode } from "@/lib/vat";
 import type { AppNotification, Attendance, AuditEvent, BranchSetting, Customer, ExpressRequest, FileAsset, Holiday, Job, JobStatus, JobType, Lead, LeaveRequest, Overtime, PaymentStatus, Priority, Quotation, QuoteStatus, Role, TeamMember } from "@/lib/types";
@@ -399,6 +398,16 @@ const roleSummaryPermissions: Record<Role, string[]> = {
 
 const roles: Role[] = ["Owner", "Manager", "Admin", "HR", "Accounting", "Designer", "Production Staff", "Packing Staff", "Sales Staff"];
 const BRANCH_LIST = ["พระรามเก้า", "พะเยา"];
+
+// เพจที่รับงาน → สาขา (ใช้แยกรายได้/สาขาที่รับผิดชอบ ตอนสร้างงาน)
+//   พะเยา: K2sign, k2 phayao · พระรามเก้า: Sweetdesign, Fluffi
+const SALES_PAGES: Array<{ page: string; branch: string }> = [
+  { page: "K2sign", branch: "พะเยา" },
+  { page: "k2 phayao", branch: "พะเยา" },
+  { page: "Sweetdesign", branch: "พระรามเก้า" },
+  { page: "Fluffi", branch: "พระรามเก้า" }
+];
+const PAGE_TO_BRANCH: Record<string, string> = Object.fromEntries(SALES_PAGES.map((p) => [p.page, p.branch]));
 
 type CheckInResult = { ok: boolean; msg: string; checkInAt?: string; status?: "on_time" | "late"; lateMinutes?: number; geofenced?: boolean };
 
@@ -6317,6 +6326,7 @@ function CreateJobView({
     internalNotes: "",
     fileName: "",
     sourceChannel: "LINE",
+    salesPage: "",
     facebookPage: companyProfile.facebookPages[0] ?? "",
     fileStatus: "รอเช็กไฟล์",
     materials: [""] as string[],
@@ -6425,10 +6435,14 @@ function CreateJobView({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [teamMembers]);
 
-  // กำหนดสาขาที่ผลิตอัตโนมัติตามประเภทงาน (เสื้อ/DTG → พระรามเก้า, นอกนั้น → พะเยา) ปรับเองทีหลังได้
-  useEffect(() => {
-    setForm((current) => ({ ...current, productionBranch: branchForJobType(current.type) }));
-  }, [form.type]);
+  // เลือกเพจ → กำหนดสาขา (รายได้+ผลิต) อัตโนมัติ · เลือก "ไม่ผ่านเพจ" → เลือกสาขาเอง
+  function pickSalesPage(page: string) {
+    setForm((current) => ({
+      ...current,
+      salesPage: page,
+      productionBranch: page && PAGE_TO_BRANCH[page] ? PAGE_TO_BRANCH[page] : current.productionBranch
+    }));
+  }
 
   return (
     <form
@@ -6444,7 +6458,7 @@ function CreateJobView({
         setFormError("");
         const workOrderSpec = [
           `ช่องทางรับงาน: ${form.sourceChannel || "-"}`,
-          ...(form.sourceChannel === "Facebook" ? [`เพจ Facebook: ${form.facebookPage || "-"}`] : []),
+          ...(form.salesPage ? [`เพจที่รับงาน: ${form.salesPage} (สาขา ${PAGE_TO_BRANCH[form.salesPage] || "-"})`] : []),
           `สถานะไฟล์: ${form.fileStatus || "-"}`,
           `วัสดุ: ${form.materials.filter(Boolean).join(", ") || "-"}`,
           `สี / สเปกสี: ${form.colorSpec || "-"}`,
@@ -6513,27 +6527,31 @@ function CreateJobView({
               ))}
             </select>
           </label>
-          {form.sourceChannel === "Facebook" ? (
-            <label className="space-y-2">
-              <span className="text-sm font-semibold text-k2-muted">ชื่อเพจ Facebook</span>
-              <select
-                value={form.facebookPage}
-                onChange={(event) => setField("facebookPage", event.target.value)}
-                className="w-full rounded-2xl border border-white/80 bg-white/80 px-4 py-3 outline-none"
-              >
-                {companyProfile.facebookPages.length ? (
-                  companyProfile.facebookPages.map((pageName) => (
-                    <option key={pageName} value={pageName}>{pageName}</option>
-                  ))
-                ) : (
-                  <option value="">ยังไม่มีเพจในระบบ</option>
-                )}
-              </select>
-              {!companyProfile.facebookPages.length ? (
-                <p className="text-xs font-bold text-amber-700">ไปที่ตั้งค่า แล้วเพิ่มเพจ Facebook ก่อนใช้งานช่องนี้</p>
-              ) : null}
-            </label>
-          ) : null}
+          <label className="space-y-2">
+            <span className="text-sm font-semibold text-k2-muted">เพจที่รับงาน (แยกรายได้/สาขา)</span>
+            <select
+              value={form.salesPage}
+              onChange={(event) => pickSalesPage(event.target.value)}
+              className="w-full rounded-2xl border border-white/80 bg-white/80 px-4 py-3 outline-none"
+            >
+              <option value="">— ไม่ผ่านเพจ (เลือกสาขาเอง) —</option>
+              <optgroup label="พะเยา">
+                {SALES_PAGES.filter((p) => p.branch === "พะเยา").map((p) => (
+                  <option key={p.page} value={p.page}>{p.page}</option>
+                ))}
+              </optgroup>
+              <optgroup label="พระรามเก้า">
+                {SALES_PAGES.filter((p) => p.branch === "พระรามเก้า").map((p) => (
+                  <option key={p.page} value={p.page}>{p.page}</option>
+                ))}
+              </optgroup>
+            </select>
+            {form.salesPage ? (
+              <p className="text-xs font-bold text-k2-ink">รายได้เข้าสาขา <span className="text-emerald-700">{PAGE_TO_BRANCH[form.salesPage]}</span></p>
+            ) : (
+              <p className="text-xs font-semibold text-k2-muted">ไม่ได้มาจากเพจ — เลือกสาขาด้านล่างเอง</p>
+            )}
+          </label>
           <label className="space-y-2">
             <span className="text-sm font-semibold text-k2-muted">เบอร์โทร</span>
             <div className="flex gap-2">
@@ -6786,16 +6804,18 @@ function CreateJobView({
             </div>
             <TextField label="สี / สเปกสี" value={form.colorSpec} onChange={(value) => setField("colorSpec", value)} />
             <label className="space-y-2">
-              <span className="text-sm font-semibold text-k2-muted">สาขาที่ผลิต</span>
+              <span className="text-sm font-semibold text-k2-muted">สาขาที่ผลิต{form.salesPage ? " (ตามเพจ)" : ""}</span>
               <select
                 value={form.productionBranch}
                 onChange={(event) => setField("productionBranch", event.target.value)}
-                className="w-full rounded-2xl border border-white/80 bg-white/80 px-4 py-3 outline-none"
+                disabled={!!form.salesPage}
+                className="w-full rounded-2xl border border-white/80 bg-white/80 px-4 py-3 outline-none disabled:opacity-70"
               >
                 {branchOptions.map((branch) => (
                   <option key={branch}>{branch}</option>
                 ))}
               </select>
+              {form.salesPage ? <p className="text-xs font-semibold text-k2-muted">ล็อกตามเพจ {form.salesPage} — ถ้าจะเปลี่ยน เลือก “ไม่ผ่านเพจ”</p> : null}
             </label>
             <label className="space-y-2 md:col-span-2">
               <span className="text-sm font-semibold text-k2-muted">วิธีรับ/จัดส่งสินค้า</span>
