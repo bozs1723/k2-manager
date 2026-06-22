@@ -3700,7 +3700,7 @@ export default function Page() {
   return (
     <main className="min-h-screen px-3 py-3 text-k2-ink sm:px-5 sm:py-5">
       <div className="mx-auto flex max-w-[1800px] gap-4">
-        <aside className="glass sticky top-5 hidden h-[calc(100vh-2.5rem)] w-72 shrink-0 rounded-[1.7rem] p-4 lg:block">
+        <aside className="glass soft-scrollbar sticky top-5 hidden h-[calc(100vh-2.5rem)] w-72 shrink-0 overflow-y-auto rounded-[1.7rem] p-4 lg:block">
           <BrandBlock currentUser={currentUserPrefs} onEditProfile={() => setShowPersonalization(true)} />
           <Nav activeView={activeView} items={menuItems} onChange={setActiveView} />
           <div className="mt-6 rounded-3xl bg-white/55 p-4">
@@ -3940,7 +3940,7 @@ export default function Page() {
                     transition={{ duration: 0.22 }}
                     className="overflow-hidden"
                   >
-                    <div className="mt-2 grid grid-cols-4 gap-2 sm:grid-cols-5">
+                    <div className="soft-scrollbar mt-2 grid max-h-[60vh] grid-cols-4 gap-2 overflow-y-auto sm:grid-cols-5">
                       {menuItems.map(({ label: item, icon: Icon }) => (
                         <button
                           key={item}
@@ -4630,19 +4630,19 @@ function Nav({
   onChange: (view: string) => void;
 }) {
   return (
-    <nav className="grid gap-2">
+    <nav className="grid grid-cols-2 gap-2">
       {items.map(({ label, icon: Icon }) => (
         <button
           key={label}
           onClick={() => onChange(label)}
-          className={`flex items-center gap-3 rounded-2xl px-4 py-3 text-left text-sm font-semibold transition active:scale-[0.98] ${
+          className={`flex flex-col items-center justify-center gap-1.5 rounded-2xl px-2 py-3 text-center text-xs font-semibold leading-tight transition active:scale-95 ${
             activeView === label
               ? "bg-k2-ink text-white shadow-lg shadow-slate-900/15"
               : "text-k2-muted hover:bg-k2-mint hover:text-k2-ink hover:shadow-md hover:ring-2 hover:ring-k2-ink/30"
           }`}
         >
-          <Icon className="h-5 w-5" />
-          {viewLabel[label] ?? label}
+          <Icon className="h-5 w-5 shrink-0" />
+          <span>{viewLabel[label] ?? label}</span>
         </button>
       ))}
     </nav>
