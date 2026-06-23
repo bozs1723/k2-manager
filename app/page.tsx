@@ -173,6 +173,7 @@ type SupabaseJobRow = {
   status: JobStatus;
   is_express?: boolean | null;
   production_branch?: string | null;
+  revenue_branch?: string | null;
   acceptance?: "pending" | "accepted" | "rejected" | null;
   reject_reason?: string | null;
   handoff_status?: string | null;
@@ -1145,6 +1146,7 @@ function jobFromRow(
     priority: row.priority,
     isExpress: row.is_express ?? false,
     productionBranch: row.production_branch ?? "",
+    revenueBranch: row.revenue_branch ?? "",
     acceptance: row.acceptance ?? "accepted",
     rejectReason: row.reject_reason ?? "",
     handoffStatus: row.handoff_status === "pending" || row.handoff_status === "accepted" ? row.handoff_status : undefined,
@@ -3023,6 +3025,8 @@ export default function Page() {
               deposit_received_date: input?.depositReceivedDate || null,
               deposit_waived: input?.depositWaived ?? false,
               production_branch: input?.productionBranch ?? null,
+              // สาขารายได้ = สาขาที่เงินเข้า (ตามเพจที่รับงาน) แยกจากสาขาที่ผลิต
+              revenue_branch: input?.revenueBranch ?? input?.productionBranch ?? null,
               acceptance: jobAcceptance,
               reject_reason: null,
               status: "Quotation",
@@ -3118,6 +3122,7 @@ export default function Page() {
       depositConfirmed: false,
       depositWaived: input?.depositWaived ?? false,
       productionBranch: input?.productionBranch ?? "",
+      revenueBranch: input?.revenueBranch ?? input?.productionBranch ?? "",
       acceptance: jobAcceptance,
       rejectReason: "",
       status: "Quotation",
@@ -4413,7 +4418,7 @@ export default function Page() {
             )}
             {activeView === "Create Job" && (
               <motion.div key="create" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }}>
-                <CreateJobView key={createJobNonce} prefill={createJobPrefill} customers={customerRecords} teamMembers={teamMembers} companyProfile={companyProfile} expressEnabled={canCreateExpress} canAssign={can("assign_staff")} onCreate={createJob} />
+                <CreateJobView key={createJobNonce} prefill={createJobPrefill} customers={customerRecords} teamMembers={teamMembers} companyProfile={companyProfile} expressEnabled={canCreateExpress} canAssign={can("assign_staff")} defaultBranch={currentUser.branch} onCreate={createJob} />
               </motion.div>
             )}
             {activeView === "K-Connect" && (
@@ -7168,6 +7173,7 @@ function CreateJobView({
   expressEnabled,
   canAssign,
   prefill,
+  defaultBranch,
   onCreate
 }: {
   customers: Customer[];
@@ -7176,8 +7182,11 @@ function CreateJobView({
   expressEnabled: boolean;
   canAssign: boolean;
   prefill?: Partial<Job> | null;
+  defaultBranch?: string;
   onCreate: (job: Partial<Job>, attachments?: File[]) => void;
 }) {
+  // สาขาเริ่มต้น = สาขาของคนสร้างงาน (เลิกฮาร์ดโค้ด "พะเยา" ที่ทำให้รายได้ลงผิดสาขา)
+  const initialBranch = defaultBranch && BRANCH_LIST.includes(defaultBranch) ? defaultBranch : BRANCH_LIST[0];
   const designerOptions = useMemo(() => teamMembers.filter((member) => member.role === "Designer" || (member.roles ?? []).includes("Designer")), [teamMembers]);
   const productionOptions = useMemo(() => teamMembers.filter((member) => member.role === "Production Staff" || (member.roles ?? []).includes("Production Staff")), [teamMembers]);
   const defaultDesigner = "Unassigned";
@@ -7219,7 +7228,8 @@ function CreateJobView({
     fileStatus: "รอเช็กไฟล์",
     materials: [""] as string[],
     colorSpec: "",
-    productionBranch: "พะเยา",
+    revenueBranch: initialBranch,
+    productionBranch: initialBranch,
     deliveryMethod: "รับหน้าร้าน",
     deliveryOther: "",
     deliveryAddress: ""
@@ -7348,12 +7358,15 @@ function CreateJobView({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [teamMembers]);
 
-  // เลือกเพจ → กำหนดสาขา (รายได้+ผลิต) อัตโนมัติ · เลือก "ไม่ผ่านเพจ" → เลือกสาขาเอง
+  // เลือกเพจ → ล็อก "สาขารายได้" ตามเพจ + ตั้ง "สาขาที่ผลิต" ให้ตรงกันเป็นค่าเริ่มต้น (ยังแก้ผลิตได้)
+  // เลือก "ไม่ผ่านเพจ" → เลือกสาขารายได้/ผลิตเองทั้งคู่
   function pickSalesPage(page: string) {
+    const pageBranch = page && PAGE_TO_BRANCH[page] ? PAGE_TO_BRANCH[page] : null;
     setForm((current) => ({
       ...current,
       salesPage: page,
-      productionBranch: page && PAGE_TO_BRANCH[page] ? PAGE_TO_BRANCH[page] : current.productionBranch
+      revenueBranch: pageBranch ?? current.revenueBranch,
+      productionBranch: pageBranch ?? current.productionBranch
     }));
   }
 
@@ -7372,6 +7385,7 @@ function CreateJobView({
         const workOrderSpec = [
           `ช่องทางรับงาน: ${form.sourceChannel || "-"}`,
           ...(form.salesPage ? [`เพจที่รับงาน: ${form.salesPage} (สาขา ${PAGE_TO_BRANCH[form.salesPage] || "-"})`] : []),
+          `สาขารายได้: ${form.revenueBranch || "-"}`,
           `สถานะไฟล์: ${form.fileStatus || "-"}`,
           `วัสดุ: ${form.materials.filter(Boolean).join(", ") || "-"}`,
           `สี / สเปกสี: ${form.colorSpec || "-"}`,
@@ -7459,8 +7473,22 @@ function CreateJobView({
             {form.salesPage ? (
               <p className="text-xs font-bold text-k2-ink">รายได้เข้าสาขา <span className="text-emerald-700">{PAGE_TO_BRANCH[form.salesPage]}</span></p>
             ) : (
-              <p className="text-xs font-semibold text-k2-muted">ไม่ได้มาจากเพจ — เลือกสาขาด้านล่างเอง</p>
+              <p className="text-xs font-semibold text-k2-muted">ไม่ได้มาจากเพจ — เลือกสาขารายได้เอง</p>
             )}
+          </label>
+          <label className="space-y-2">
+            <span className="text-sm font-semibold text-k2-muted">สาขารายได้ (เงินเข้าสาขานี้){form.salesPage ? " · ล็อกตามเพจ" : ""}</span>
+            <select
+              value={form.revenueBranch}
+              onChange={(event) => setField("revenueBranch", event.target.value)}
+              disabled={!!form.salesPage}
+              className="w-full rounded-2xl border border-white/80 bg-white/80 px-4 py-3 outline-none disabled:opacity-70"
+            >
+              {branchOptions.map((branch) => (
+                <option key={branch}>{branch}</option>
+              ))}
+            </select>
+            <p className="text-xs font-semibold text-k2-muted">ยอดขาย/มัดจำจะถูกนับเข้าสรุปสิ้นวันของสาขานี้</p>
           </label>
           <label className="space-y-2">
             <span className="text-sm font-semibold text-k2-muted">เบอร์โทร</span>
@@ -7747,18 +7775,19 @@ function CreateJobView({
             </div>
             <TextField label="สี / สเปกสี" value={form.colorSpec} onChange={(value) => setField("colorSpec", value)} />
             <label className="space-y-2">
-              <span className="text-sm font-semibold text-k2-muted">สาขาที่ผลิต{form.salesPage ? " (ตามเพจ)" : ""}</span>
+              <span className="text-sm font-semibold text-k2-muted">สาขาที่ผลิต</span>
               <select
                 value={form.productionBranch}
                 onChange={(event) => setField("productionBranch", event.target.value)}
-                disabled={!!form.salesPage}
-                className="w-full rounded-2xl border border-white/80 bg-white/80 px-4 py-3 outline-none disabled:opacity-70"
+                className="w-full rounded-2xl border border-white/80 bg-white/80 px-4 py-3 outline-none"
               >
                 {branchOptions.map((branch) => (
                   <option key={branch}>{branch}</option>
                 ))}
               </select>
-              {form.salesPage ? <p className="text-xs font-semibold text-k2-muted">ล็อกตามเพจ {form.salesPage} — ถ้าจะเปลี่ยน เลือก “ไม่ผ่านเพจ”</p> : null}
+              {form.revenueBranch && form.productionBranch !== form.revenueBranch
+                ? <p className="text-xs font-bold text-amber-600">ผลิตคนละสาขากับรายได้ — รายได้ยังเข้า “{form.revenueBranch}”</p>
+                : <p className="text-xs font-semibold text-k2-muted">สาขาที่ลงมือผลิตจริง (แยกจากสาขารายได้ได้)</p>}
             </label>
             <label className="space-y-2 md:col-span-2">
               <span className="text-sm font-semibold text-k2-muted">วิธีรับ/จัดส่งสินค้า</span>

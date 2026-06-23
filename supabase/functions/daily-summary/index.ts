@@ -25,6 +25,7 @@ function baht(n: number): string {
 
 type Job = {
   id: string;
+  revenue_branch: string | null;
   production_branch: string | null;
   branch: string | null;
   price: number | string;
@@ -37,8 +38,10 @@ type Job = {
   status: string | null;
 };
 
+// สาขาที่ "เงินเข้า" — ใช้ revenue_branch (สาขารายได้) ก่อน แล้วค่อย fallback ไปสาขาที่ผลิต/บิล
+// (กันเคสขายสาขาหนึ่งแต่ผลิตอีกสาขา → รายได้ต้องเข้าสาขาที่ขาย ไม่ใช่สาขาที่ผลิต)
 function jobBranch(j: Job): string {
-  return (j.production_branch || j.branch || "").trim();
+  return (j.revenue_branch || j.production_branch || j.branch || "").trim();
 }
 
 Deno.serve(async (req) => {
@@ -61,7 +64,7 @@ Deno.serve(async (req) => {
     // งานที่มีการรับเงินวันนี้ (มัดจำ หรือ ปิดยอด)
     const { data: payJobs } = await admin
       .from("jobs")
-      .select("id, production_branch, branch, price, deposit, remaining_balance, deposit_received_date, balance_received_date, title, customer_name, status")
+      .select("id, revenue_branch, production_branch, branch, price, deposit, remaining_balance, deposit_received_date, balance_received_date, title, customer_name, status")
       .or(`deposit_received_date.eq.${today},balance_received_date.eq.${today}`);
 
     // งานที่เปลี่ยนสถานะเป็น Completed วันนี้ (ดูจากประวัติ 2 วันล่าสุด แล้วกรองตามวันไทย)
@@ -79,7 +82,7 @@ Deno.serve(async (req) => {
     if (completedTodayIds.size) {
       const { data } = await admin
         .from("jobs")
-        .select("id, production_branch, branch, price, deposit, remaining_balance, deposit_received_date, balance_received_date, title, customer_name, status")
+        .select("id, revenue_branch, production_branch, branch, price, deposit, remaining_balance, deposit_received_date, balance_received_date, title, customer_name, status")
         .in("id", Array.from(completedTodayIds));
       completedJobs = (data ?? []) as Job[];
     }
