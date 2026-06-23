@@ -57,6 +57,70 @@ export type TeamMember = {
   statusText?: string;
 };
 
+// ===== K-Connect (Unified Inbox) =====
+export type InboxPlatform = "facebook" | "instagram";
+export type ConversationStatus = "new" | "assigned" | "waiting_customer" | "closed";
+
+// แท็กมาตรฐานของ K-Connect
+export const INBOX_TAGS = [
+  "New Lead",
+  "Follow Up",
+  "Waiting Quote",
+  "Waiting Payment",
+  "In Production",
+  "Completed",
+  "VIP"
+] as const;
+export type InboxTag = (typeof INBOX_TAGS)[number];
+
+export type ConnectedPage = {
+  id: string;
+  pageName: string;
+  platform: InboxPlatform;
+  branch?: string;
+  allowedManagerIds?: string[];
+  isActive: boolean;
+};
+
+export type InboxMessage = {
+  id: string;
+  conversationId: string;
+  direction: "in" | "out";
+  senderName?: string;
+  body: string;
+  attachmentUrl?: string;
+  attachmentType?: string;
+  isRead: boolean;
+  createdAt: string;
+};
+
+export type InboxNote = {
+  id: string;
+  conversationId: string;
+  body: string;
+  authorName?: string;
+  createdAt: string;
+};
+
+export type InboxConversation = {
+  id: string;
+  pageId?: string;
+  pageName: string;
+  platform: InboxPlatform;
+  branch?: string;
+  customerName: string;
+  customerAvatar?: string;
+  customerId?: string;
+  status: ConversationStatus;
+  assignedTo?: string;
+  assignedToName?: string;
+  tags: InboxTag[];
+  unreadCount: number;
+  lastMessagePreview: string;
+  lastMessageAt: string;
+  createdAt: string;
+};
+
 export type Lead = {
   id: string;
   name: string;

@@ -29,6 +29,13 @@ import {
   LogOut,
   Menu,
   MessageSquare,
+  MessagesSquare,
+  Instagram,
+  Facebook,
+  Send,
+  StickyNote,
+  Tag,
+  UserCheck,
   Pencil,
   Plus,
   Phone,
@@ -46,12 +53,13 @@ import {
   Zap
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
-import { customers as initialCustomers, initialAuditLog, initialJobs, statuses, team as initialTeam } from "@/lib/mock-data";
+import { connectedPages as initialConnectedPages, customers as initialCustomers, initialAuditLog, initialConversations, initialInboxNotes, initialJobs, initialMessages, statuses, team as initialTeam } from "@/lib/mock-data";
 import { createSupabaseAuthWorker, isSupabaseConfigured, supabase } from "@/lib/supabase";
 import { CUSTOMER_CODE_ADMINS, CUSTOMER_CODE_PAGES, customerCodeYear, formatCustomerCode, nextCustomerSeq } from "@/lib/customer-code";
 import { checkGeofence, lateMinutes } from "@/lib/attendance";
 import { computeVat, normalizeVatMode, vatModeLabel, VAT_MODES, type VatMode } from "@/lib/vat";
-import type { AppNotification, Attendance, AuditEvent, BranchSetting, Customer, ExpressRequest, FileAsset, Holiday, Job, JobStatus, JobType, Lead, LeaveRequest, Overtime, PaymentStatus, Priority, Quotation, QuoteStatus, Role, TeamMember } from "@/lib/types";
+import type { AppNotification, Attendance, AuditEvent, BranchSetting, ConnectedPage, ConversationStatus, Customer, ExpressRequest, FileAsset, Holiday, InboxConversation, InboxMessage, InboxNote, InboxPlatform, InboxTag, Job, JobStatus, JobType, Lead, LeaveRequest, Overtime, PaymentStatus, Priority, Quotation, QuoteStatus, Role, TeamMember } from "@/lib/types";
+import { INBOX_TAGS } from "@/lib/types";
 
 type ImportedCustomer = Pick<Customer, "name" | "phone" | "lineId" | "email"> & {
   notes: string;
@@ -98,7 +106,9 @@ type PermissionKey =
   | "manage_company_settings"
   | "view_audit_log"
   | "manage_hr"
-  | "manage_finance";
+  | "manage_finance"
+  | "view_inbox"
+  | "manage_inbox";
 
 type SupabaseProfileRow = {
   id: string;
@@ -305,6 +315,157 @@ function expressRowToRequest(row: SupabaseExpressRequestRow): ExpressRequest {
   };
 }
 
+// ===== K-Connect (Unified Inbox) — Supabase rows + mappers =====
+type SupabaseConnectedPageRow = {
+  id: string;
+  page_name: string;
+  platform: string | null;
+  branch: string | null;
+  allowed_manager_ids: string[] | null;
+  is_active: boolean | null;
+};
+
+type SupabaseConversationRow = {
+  id: string;
+  page_id: string | null;
+  platform: string | null;
+  external_thread_id: string | null;
+  customer_name: string | null;
+  customer_avatar: string | null;
+  customer_id: string | null;
+  status: string | null;
+  assigned_to: string | null;
+  assigned_to_name: string | null;
+  unread_count: number | null;
+  last_message_preview: string | null;
+  last_message_at: string;
+  created_at: string;
+};
+
+type SupabaseInboxMessageRow = {
+  id: string;
+  conversation_id: string;
+  direction: string | null;
+  sender_name: string | null;
+  body: string | null;
+  attachment_url: string | null;
+  attachment_type: string | null;
+  is_read: boolean | null;
+  created_at: string;
+};
+
+type SupabaseInboxNoteRow = {
+  id: string;
+  conversation_id: string;
+  body: string;
+  author_name: string | null;
+  created_at: string;
+};
+
+type SupabaseInboxTagRow = { conversation_id: string; tag: string };
+
+function pageRowToPage(row: SupabaseConnectedPageRow): ConnectedPage {
+  return {
+    id: row.id,
+    pageName: row.page_name,
+    platform: (row.platform as InboxPlatform) ?? "facebook",
+    branch: row.branch ?? undefined,
+    allowedManagerIds: row.allowed_manager_ids ?? [],
+    isActive: row.is_active ?? true
+  };
+}
+
+function conversationRowToConversation(
+  row: SupabaseConversationRow,
+  pages: Map<string, ConnectedPage>,
+  tagsByConv: Map<string, InboxTag[]>
+): InboxConversation {
+  const page = row.page_id ? pages.get(row.page_id) : undefined;
+  return {
+    id: row.id,
+    pageId: row.page_id ?? undefined,
+    pageName: page?.pageName ?? "ไม่ระบุเพจ",
+    platform: (row.platform as InboxPlatform) ?? page?.platform ?? "facebook",
+    branch: page?.branch,
+    customerName: row.customer_name ?? "ลูกค้า",
+    customerAvatar: row.customer_avatar ?? undefined,
+    customerId: row.customer_id ?? undefined,
+    status: (row.status as ConversationStatus) ?? "new",
+    assignedTo: row.assigned_to ?? undefined,
+    assignedToName: row.assigned_to_name ?? undefined,
+    tags: tagsByConv.get(row.id) ?? [],
+    unreadCount: row.unread_count ?? 0,
+    lastMessagePreview: row.last_message_preview ?? "",
+    lastMessageAt: row.last_message_at,
+    createdAt: row.created_at
+  };
+}
+
+function inboxMessageRowToMessage(row: SupabaseInboxMessageRow): InboxMessage {
+  return {
+    id: row.id,
+    conversationId: row.conversation_id,
+    direction: (row.direction as InboxMessage["direction"]) ?? "in",
+    senderName: row.sender_name ?? undefined,
+    body: row.body ?? "",
+    attachmentUrl: row.attachment_url ?? undefined,
+    attachmentType: row.attachment_type ?? undefined,
+    isRead: row.is_read ?? false,
+    createdAt: row.created_at
+  };
+}
+
+function inboxNoteRowToNote(row: SupabaseInboxNoteRow): InboxNote {
+  return {
+    id: row.id,
+    conversationId: row.conversation_id,
+    body: row.body,
+    authorName: row.author_name ?? undefined,
+    createdAt: row.created_at
+  };
+}
+
+const conversationStatusInfo: Record<ConversationStatus, { label: string; cls: string }> = {
+  new: { label: "ใหม่", cls: "bg-sky-100 text-sky-700" },
+  assigned: { label: "มอบหมายแล้ว", cls: "bg-violet-100 text-violet-700" },
+  waiting_customer: { label: "รอลูกค้า", cls: "bg-amber-100 text-amber-700" },
+  closed: { label: "ปิดแล้ว", cls: "bg-green-100 text-green-700" }
+};
+
+const inboxTagInfo: Record<InboxTag, string> = {
+  "New Lead": "bg-sky-100 text-sky-700",
+  "Follow Up": "bg-amber-100 text-amber-700",
+  "Waiting Quote": "bg-violet-100 text-violet-700",
+  "Waiting Payment": "bg-orange-100 text-orange-700",
+  "In Production": "bg-cyan-100 text-cyan-700",
+  Completed: "bg-green-100 text-green-700",
+  VIP: "bg-rose-100 text-rose-700"
+};
+
+function inboxTime(iso: string): string {
+  try {
+    return new Intl.DateTimeFormat("th-TH", { hour: "2-digit", minute: "2-digit", hour12: false }).format(new Date(iso));
+  } catch {
+    return "";
+  }
+}
+
+function inboxRelative(iso: string): string {
+  const diffMs = Date.now() - new Date(iso).getTime();
+  const min = Math.floor(diffMs / 60000);
+  if (min < 1) return "เมื่อสักครู่";
+  if (min < 60) return `${min} นาทีที่แล้ว`;
+  const hr = Math.floor(min / 60);
+  if (hr < 24) return `${hr} ชม.ที่แล้ว`;
+  const day = Math.floor(hr / 24);
+  if (day < 7) return `${day} วันที่แล้ว`;
+  try {
+    return new Intl.DateTimeFormat("th-TH", { day: "2-digit", month: "short" }).format(new Date(iso));
+  } catch {
+    return "";
+  }
+}
+
 type NewTeamMemberInput = Omit<TeamMember, "id" | "avatar"> & {
   password?: string;
 };
@@ -366,6 +527,7 @@ const statusDot: Record<JobStatus, string> = {
 const permissionGroups: Array<{ title: string; permissions: PermissionKey[] }> = [
   { title: "งานและคิวผลิต", permissions: ["view_dashboard", "create_job", "edit_job", "delete_job", "move_status", "assign_staff"] },
   { title: "ลูกค้าและบัญชี", permissions: ["create_customer", "edit_customer", "delete_customer", "view_finance", "edit_payment", "export_quote", "manage_finance"] },
+  { title: "K-Connect (กล่องแชทรวม)", permissions: ["view_inbox", "manage_inbox"] },
   { title: "ผู้ใช้และระบบ", permissions: ["manage_users", "manage_permissions", "manage_company_settings", "view_audit_log"] },
   { title: "บุคคล (HR)", permissions: ["manage_hr"] }
 ];
@@ -373,15 +535,15 @@ const permissionGroups: Array<{ title: string; permissions: PermissionKey[] }> =
 const allPermissionKeys = permissionGroups.flatMap((group) => group.permissions);
 
 const defaultRolePermissions: Record<Role, PermissionKey[]> = {
-  Owner: ["view_dashboard", "create_job", "edit_job", "delete_job", "move_status", "assign_staff", "view_finance", "edit_payment", "create_customer", "edit_customer", "delete_customer", "export_quote", "manage_users", "manage_permissions", "manage_company_settings", "view_audit_log", "manage_hr", "manage_finance"],
-  Manager: ["view_dashboard", "create_job", "edit_job", "move_status", "assign_staff", "view_finance", "edit_payment", "create_customer", "edit_customer", "export_quote", "view_audit_log"],
-  Admin: ["view_dashboard", "create_job", "edit_job", "move_status", "assign_staff", "view_finance", "edit_payment", "create_customer", "edit_customer", "export_quote", "manage_users", "view_audit_log"],
+  Owner: ["view_dashboard", "create_job", "edit_job", "delete_job", "move_status", "assign_staff", "view_finance", "edit_payment", "create_customer", "edit_customer", "delete_customer", "export_quote", "manage_users", "manage_permissions", "manage_company_settings", "view_audit_log", "manage_hr", "manage_finance", "view_inbox", "manage_inbox"],
+  Manager: ["view_dashboard", "create_job", "edit_job", "move_status", "assign_staff", "view_finance", "edit_payment", "create_customer", "edit_customer", "export_quote", "view_audit_log", "view_inbox", "manage_inbox"],
+  Admin: ["view_dashboard", "create_job", "edit_job", "move_status", "assign_staff", "view_finance", "edit_payment", "create_customer", "edit_customer", "export_quote", "manage_users", "view_audit_log", "view_inbox", "manage_inbox"],
   HR: ["view_dashboard", "manage_hr", "manage_users"],
   Accounting: ["view_dashboard", "move_status", "view_finance", "edit_payment", "manage_finance", "export_quote"],
-  Designer: ["view_dashboard", "edit_job", "move_status"],
-  "Production Staff": ["view_dashboard", "edit_job", "move_status"],
-  "Packing Staff": ["view_dashboard", "edit_job", "move_status"],
-  "Sales Staff": ["view_dashboard", "create_job", "edit_job", "create_customer", "edit_customer", "view_finance", "edit_payment", "export_quote"]
+  Designer: ["view_dashboard", "edit_job", "move_status", "view_inbox"],
+  "Production Staff": ["view_dashboard", "edit_job", "move_status", "view_inbox"],
+  "Packing Staff": ["view_dashboard", "edit_job", "move_status", "view_inbox"],
+  "Sales Staff": ["view_dashboard", "create_job", "edit_job", "create_customer", "edit_customer", "view_finance", "edit_payment", "export_quote", "view_inbox"]
 };
 
 const roleSummaryPermissions: Record<Role, string[]> = {
@@ -477,6 +639,7 @@ const viewLabel: Record<string, string> = {
   "My Jobs": "งานของฉัน",
   Board: "บอร์ดคิวงาน",
   Completed: "งานที่เสร็จแล้ว",
+  "K-Connect": "K-Connect แชทรวม",
   Leads: "กล่องลูกค้า",
   Quotations: "ใบเสนอราคา",
   "Create Job": "สร้างงาน",
@@ -573,6 +736,8 @@ const permissionLabel: Record<string, string> = {
   view_audit_log: "ดูประวัติการแก้ไข",
   manage_hr: "จัดการ HR / เงินเดือน",
   manage_finance: "ยืนยันมัดจำ / การเงิน",
+  view_inbox: "ดูกล่องแชท K-Connect",
+  manage_inbox: "มอบหมายแชท / จัดการเพจ",
   "HR & payroll": "HR / เงินเดือน",
   Salaries: "เงินเดือน",
   Attendance: "ลงเวลา",
@@ -1165,6 +1330,15 @@ export default function Page() {
   const [expressOrdersEnabled, setExpressOrdersEnabled] = useState(false);
   const [quotations, setQuotations] = useState<Quotation[]>([]);
   const [leads, setLeads] = useState<Lead[]>([]);
+  // ===== K-Connect (Unified Inbox) =====
+  const [connectedPages, setConnectedPages] = useState<ConnectedPage[]>(isSupabaseConfigured ? [] : initialConnectedPages);
+  const [conversations, setConversations] = useState<InboxConversation[]>(isSupabaseConfigured ? [] : initialConversations);
+  const [inboxMessages, setInboxMessages] = useState<InboxMessage[]>(isSupabaseConfigured ? [] : initialMessages);
+  const [inboxNotes, setInboxNotes] = useState<InboxNote[]>(isSupabaseConfigured ? [] : initialInboxNotes);
+  const [selectedConversationId, setSelectedConversationId] = useState<string | null>(null);
+  const [inboxPageFilter, setInboxPageFilter] = useState<string>("all");
+  const [inboxStatusFilter, setInboxStatusFilter] = useState<ConversationStatus | "all">("all");
+  const [inboxSearch, setInboxSearch] = useState("");
   const [createJobPrefill, setCreateJobPrefill] = useState<Partial<Job> | null>(null);
   const [createJobNonce, setCreateJobNonce] = useState(0);
   const [expressRequests, setExpressRequests] = useState<ExpressRequest[]>([]);
@@ -1195,6 +1369,7 @@ export default function Page() {
         { label: "My Jobs", icon: ListTodo, visible: true },
         { label: "Board", icon: ClipboardList, visible: currentRolePermissions.includes("view_dashboard") },
         { label: "Completed", icon: CheckCircle2, visible: currentRolePermissions.includes("assign_staff") },
+        { label: "K-Connect", icon: MessagesSquare, visible: currentRolePermissions.includes("view_inbox") },
         { label: "Leads", icon: Inbox, visible: currentRolePermissions.includes("create_job") },
         { label: "Quotations", icon: ReceiptText, visible: currentRolePermissions.includes("create_job") },
         { label: "Create Job", icon: ClipboardPlus, visible: currentRolePermissions.includes("create_job") },
@@ -1536,6 +1711,153 @@ export default function Page() {
     setActiveView("Quotations");
   }
 
+  // ===== K-Connect (Unified Inbox) =====
+  async function reloadKConnect() {
+    if (!supabase || !isSupabaseConfigured) return;
+    const [pagesResult, convResult, tagsResult] = await Promise.all([
+      supabase.from("connected_pages").select("id, page_name, platform, branch, allowed_manager_ids, is_active").order("page_name", { ascending: true }),
+      supabase.from("inbox_conversations").select("id, page_id, platform, external_thread_id, customer_name, customer_avatar, customer_id, status, assigned_to, assigned_to_name, unread_count, last_message_preview, last_message_at, created_at").order("last_message_at", { ascending: false }).limit(500),
+      supabase.from("inbox_tags").select("conversation_id, tag")
+    ]);
+    if (pagesResult.error) return;
+    const pages = ((pagesResult.data ?? []) as SupabaseConnectedPageRow[]).map(pageRowToPage);
+    setConnectedPages((current) => reuseIfSame(current, pages));
+    const pageMap = new Map(pages.map((page) => [page.id, page]));
+    const tagsByConv = new Map<string, InboxTag[]>();
+    for (const row of (tagsResult.data ?? []) as SupabaseInboxTagRow[]) {
+      if (!INBOX_TAGS.includes(row.tag as InboxTag)) continue;
+      const list = tagsByConv.get(row.conversation_id) ?? [];
+      list.push(row.tag as InboxTag);
+      tagsByConv.set(row.conversation_id, list);
+    }
+    const next = ((convResult.data ?? []) as SupabaseConversationRow[]).map((row) => conversationRowToConversation(row, pageMap, tagsByConv));
+    setConversations((current) => reuseIfSame(current, next));
+  }
+
+  async function loadConversationThread(conversationId: string) {
+    if (!supabase || !isSupabaseConfigured) return;
+    const [msgResult, noteResult] = await Promise.all([
+      supabase.from("inbox_messages").select("id, conversation_id, direction, sender_name, body, attachment_url, attachment_type, is_read, created_at").eq("conversation_id", conversationId).order("created_at", { ascending: true }),
+      supabase.from("inbox_notes").select("id, conversation_id, body, author_name, created_at").eq("conversation_id", conversationId).order("created_at", { ascending: true })
+    ]);
+    if (!msgResult.error) {
+      const msgs = ((msgResult.data ?? []) as SupabaseInboxMessageRow[]).map(inboxMessageRowToMessage);
+      setInboxMessages((current) => [...current.filter((m) => m.conversationId !== conversationId), ...msgs]);
+    }
+    if (!noteResult.error) {
+      const notes = ((noteResult.data ?? []) as SupabaseInboxNoteRow[]).map(inboxNoteRowToNote);
+      setInboxNotes((current) => [...current.filter((n) => n.conversationId !== conversationId), ...notes]);
+    }
+  }
+
+  // เลือกบทสนทนา → โหลด thread + ล้าง unread (mark read)
+  async function openConversation(conversationId: string) {
+    setSelectedConversationId(conversationId);
+    void loadConversationThread(conversationId);
+    setConversations((current) => current.map((c) => (c.id === conversationId ? { ...c, unreadCount: 0 } : c)));
+    setInboxMessages((current) => current.map((m) => (m.conversationId === conversationId ? { ...m, isRead: true } : m)));
+    if (supabase && isSupabaseConfigured) {
+      await supabase.from("inbox_conversations").update({ unread_count: 0 }).eq("id", conversationId);
+      await supabase.from("inbox_messages").update({ is_read: true }).eq("conversation_id", conversationId).eq("direction", "in");
+    }
+  }
+
+  async function sendInboxMessage(conversationId: string, text: string) {
+    const trimmed = text.trim();
+    if (!trimmed) return;
+    const optimistic: InboxMessage = {
+      id: crypto.randomUUID(), conversationId, direction: "out", senderName: currentUser.name,
+      body: trimmed, isRead: true, createdAt: new Date().toISOString()
+    };
+    setInboxMessages((current) => [...current, optimistic]);
+    setConversations((current) => current.map((c) => (c.id === conversationId
+      ? { ...c, lastMessagePreview: trimmed.slice(0, 160), lastMessageAt: optimistic.createdAt, status: c.status === "new" ? "assigned" : c.status }
+      : c)));
+    if (supabase && isSupabaseConfigured) {
+      const { error } = await supabase.from("inbox_messages").insert({
+        conversation_id: conversationId, direction: "out", sender_name: currentUser.name, body: trimmed,
+        is_read: true, sent_by: uuidPattern.test(currentUser.id) ? currentUser.id : null
+      });
+      if (error) { setDataError(error.message); return; }
+      // ส่งจริงไป Messenger/Instagram ผ่าน edge function (best-effort — ไม่มี token ก็ยังบันทึกในระบบ)
+      try { await supabase.functions.invoke("meta-send", { body: { conversationId, text: trimmed } }); } catch {}
+    }
+  }
+
+  async function assignConversation(conversationId: string, memberId: string) {
+    const member = teamMembers.find((m) => m.id === memberId);
+    setConversations((current) => current.map((c) => (c.id === conversationId
+      ? { ...c, assignedTo: memberId || undefined, assignedToName: member?.name, status: memberId && c.status === "new" ? "assigned" : c.status }
+      : c)));
+    if (supabase && isSupabaseConfigured) {
+      const patch: Record<string, unknown> = { assigned_to: memberId && uuidPattern.test(memberId) ? memberId : null, assigned_to_name: member?.name ?? null };
+      const conv = conversations.find((c) => c.id === conversationId);
+      if (memberId && conv?.status === "new") patch.status = "assigned";
+      const { error } = await supabase.from("inbox_conversations").update(patch).eq("id", conversationId);
+      if (error) { setDataError(error.message); void reloadKConnect(); return; }
+      if (memberId && uuidPattern.test(memberId) && uuidPattern.test(currentUser.id)) {
+        await supabase.from("inbox_assignments").insert({
+          conversation_id: conversationId, assigned_to: memberId, assigned_to_name: member?.name ?? null,
+          assigned_by: currentUser.id, assigned_by_name: currentUser.name
+        });
+      }
+    }
+    void appendAudit("assigned conversation", member?.name ?? "—", "inbox_conversations", conversationId);
+  }
+
+  async function setConversationStatus(conversationId: string, status: ConversationStatus) {
+    setConversations((current) => current.map((c) => (c.id === conversationId ? { ...c, status } : c)));
+    if (supabase && isSupabaseConfigured) {
+      const { error } = await supabase.from("inbox_conversations").update({ status }).eq("id", conversationId);
+      if (error) { setDataError(error.message); void reloadKConnect(); return; }
+    }
+    void appendAudit(`conversation ${status}`, conversationId, "inbox_conversations", conversationId);
+  }
+
+  async function toggleConversationTag(conversationId: string, tag: InboxTag) {
+    const conv = conversations.find((c) => c.id === conversationId);
+    if (!conv) return;
+    const has = conv.tags.includes(tag);
+    const nextTags = has ? conv.tags.filter((t) => t !== tag) : [...conv.tags, tag];
+    setConversations((current) => current.map((c) => (c.id === conversationId ? { ...c, tags: nextTags } : c)));
+    if (supabase && isSupabaseConfigured) {
+      if (has) {
+        await supabase.from("inbox_tags").delete().eq("conversation_id", conversationId).eq("tag", tag);
+      } else {
+        await supabase.from("inbox_tags").insert({ conversation_id: conversationId, tag, created_by: uuidPattern.test(currentUser.id) ? currentUser.id : null });
+      }
+    }
+  }
+
+  async function addInboxNote(conversationId: string, body: string) {
+    const trimmed = body.trim();
+    if (!trimmed) return;
+    const optimistic: InboxNote = { id: crypto.randomUUID(), conversationId, body: trimmed, authorName: currentUser.name, createdAt: new Date().toISOString() };
+    setInboxNotes((current) => [...current, optimistic]);
+    if (supabase && isSupabaseConfigured) {
+      const { error } = await supabase.from("inbox_notes").insert({
+        conversation_id: conversationId, body: trimmed,
+        author_id: uuidPattern.test(currentUser.id) ? currentUser.id : null, author_name: currentUser.name
+      });
+      if (error) { setDataError(error.message); void loadConversationThread(conversationId); return; }
+    }
+  }
+
+  // เปิดใบเสนอราคาจากแชท → เด้งไปหน้าใบเสนอราคาพร้อมเติมข้อมูลลูกค้า + tag Waiting Quote
+  function createQuotationFromConversation(conv: InboxConversation) {
+    const customer = conv.customerId ? customerRecords.find((c) => c.id === conv.customerId) : undefined;
+    void createQuotation({
+      customerId: conv.customerId,
+      customerName: customer?.name ?? conv.customerName,
+      customerPhone: customer?.phone ?? "",
+      title: `งานจาก ${conv.pageName} – ${conv.customerName}`,
+      description: conv.lastMessagePreview,
+      amount: 0
+    });
+    if (!conv.tags.includes("Waiting Quote")) void toggleConversationTag(conv.id, "Waiting Quote");
+    setActiveView("Quotations");
+  }
+
   const canManageExpress = currentUser.role === "Owner" || currentUser.role === "Manager";
   const pendingExpressRequests = useMemo(
     () => expressRequests.filter((req) => req.status === "pending"),
@@ -1588,6 +1910,16 @@ export default function Page() {
       .on("postgres_changes", { event: "*", schema: "public", table: "jobs" }, scheduleSync)
       .on("postgres_changes", { event: "*", schema: "public", table: "job_comments" }, scheduleSync)
       .on("postgres_changes", { event: "*", schema: "public", table: "job_status_history" }, scheduleSync)
+      .on("postgres_changes", { event: "*", schema: "public", table: "inbox_conversations" }, () => { void reloadKConnect(); })
+      .on(
+        "postgres_changes",
+        { event: "INSERT", schema: "public", table: "inbox_messages" },
+        (payload) => {
+          const row = payload.new as SupabaseInboxMessageRow;
+          setInboxMessages((current) => (current.some((m) => m.id === row.id) ? current : [...current, inboxMessageRowToMessage(row)]));
+          void reloadKConnect();
+        }
+      )
       .subscribe();
     return () => {
       if (syncTimer) clearTimeout(syncTimer);
@@ -1822,6 +2154,7 @@ export default function Page() {
       void reloadExpressRequests();
       void reloadQuotations();
       void reloadLeads();
+      void reloadKConnect();
       // คงงานที่กำลังเปิดดูไว้ ไม่ดีดออกเวลามีข้อมูลซิงก์เข้ามา
       setSelectedJobId((current) => (current && nextJobs.some((job) => job.id === current) ? current : nextJobs[0]?.id ?? ""));
     } catch (error) {
@@ -1854,6 +2187,46 @@ export default function Page() {
         .includes(normalized)
     );
   }, [branchScopedJobs, query]);
+
+  // ===== K-Connect: ขอบเขตการมองเห็นแชทตามบทบาท =====
+  //   Owner → ทุกแชท · Manager/Admin (manage_inbox) → เฉพาะเพจสาขาตน/ที่ได้รับสิทธิ์ · Staff → เฉพาะแชทที่ถูก assign
+  const canManageInbox = can("manage_inbox");
+  const scopedConversations = useMemo(() => {
+    if (currentUser.role === "Owner") return conversations;
+    if (canManageInbox) {
+      if (!currentUser.branch) return conversations;
+      const allowedPageIds = new Set(connectedPages.filter((p) => (p.allowedManagerIds ?? []).includes(currentUser.id)).map((p) => p.id));
+      return conversations.filter((c) => !c.branch || c.branch === currentUser.branch || (c.pageId ? allowedPageIds.has(c.pageId) : false));
+    }
+    return conversations.filter((c) => c.assignedTo === currentUser.id);
+  }, [conversations, connectedPages, currentUser.id, currentUser.role, currentUser.branch, canManageInbox]);
+
+  const visiblePages = useMemo(() => {
+    if (currentUser.role === "Owner" || !currentUser.branch || !canManageInbox) {
+      return canManageInbox || currentUser.role === "Owner" ? connectedPages : [];
+    }
+    return connectedPages.filter((p) => !p.branch || p.branch === currentUser.branch || (p.allowedManagerIds ?? []).includes(currentUser.id));
+  }, [connectedPages, currentUser.id, currentUser.role, currentUser.branch, canManageInbox]);
+
+  const filteredConversations = useMemo(() => {
+    const normalized = inboxSearch.trim().toLowerCase();
+    return scopedConversations.filter((c) => {
+      if (inboxPageFilter !== "all" && c.pageId !== inboxPageFilter) return false;
+      if (inboxStatusFilter !== "all" && c.status !== inboxStatusFilter) return false;
+      if (normalized && ![c.customerName, c.pageName, c.lastMessagePreview, ...c.tags].join(" ").toLowerCase().includes(normalized)) return false;
+      return true;
+    });
+  }, [scopedConversations, inboxPageFilter, inboxStatusFilter, inboxSearch]);
+
+  // เลือกแชทแรกอัตโนมัติ และคงไว้ถ้ายังอยู่ในรายการที่มองเห็น
+  useEffect(() => {
+    if (activeView !== "K-Connect") return;
+    if (selectedConversationId && filteredConversations.some((c) => c.id === selectedConversationId)) return;
+    const first = filteredConversations[0]?.id ?? null;
+    if (first) void openConversation(first);
+    else setSelectedConversationId(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeView, filteredConversations]);
 
   const metrics = useMemo(() => {
     const monthKey = todayISO().slice(0, 7);
@@ -4043,6 +4416,39 @@ export default function Page() {
                 <CreateJobView key={createJobNonce} prefill={createJobPrefill} customers={customerRecords} teamMembers={teamMembers} companyProfile={companyProfile} expressEnabled={canCreateExpress} canAssign={can("assign_staff")} onCreate={createJob} />
               </motion.div>
             )}
+            {activeView === "K-Connect" && (
+              <motion.div key="k-connect" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }}>
+                <KConnectView
+                  conversations={filteredConversations}
+                  allScopedConversations={scopedConversations}
+                  pages={visiblePages}
+                  messages={inboxMessages}
+                  notes={inboxNotes}
+                  customers={customerRecords}
+                  jobs={jobs}
+                  quotations={quotations}
+                  teamMembers={teamMembers}
+                  currentUser={currentUser}
+                  canManageInbox={canManageInbox}
+                  canSeeMoney={canSeeMoney}
+                  canCreateQuote={can("create_job")}
+                  selectedConversationId={selectedConversationId}
+                  pageFilter={inboxPageFilter}
+                  statusFilter={inboxStatusFilter}
+                  search={inboxSearch}
+                  onPageFilter={setInboxPageFilter}
+                  onStatusFilter={setInboxStatusFilter}
+                  onSearch={setInboxSearch}
+                  onSelectConversation={openConversation}
+                  onSend={sendInboxMessage}
+                  onAssign={assignConversation}
+                  onSetStatus={setConversationStatus}
+                  onToggleTag={toggleConversationTag}
+                  onAddNote={addInboxNote}
+                  onCreateQuotation={createQuotationFromConversation}
+                />
+              </motion.div>
+            )}
             {activeView === "Leads" && (
               <motion.div key="leads-inbox" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }}>
                 <LeadsView
@@ -6095,6 +6501,459 @@ function CustomerPicker({
           </div>
         </div>
       ) : null}
+    </div>
+  );
+}
+
+// ===== K-Connect (Unified Inbox) — UI =====
+function PlatformBadge({ platform, className = "h-3.5 w-3.5" }: { platform: InboxPlatform; className?: string }) {
+  return platform === "instagram"
+    ? <Instagram className={`${className} text-rose-500`} />
+    : <Facebook className={`${className} text-sky-600`} />;
+}
+
+const conversationStatusOptions: ConversationStatus[] = ["new", "assigned", "waiting_customer", "closed"];
+
+function KConnectDashboard({ conversations, messages }: { conversations: InboxConversation[]; messages: InboxMessage[] }) {
+  const today = todayISO();
+  const newToday = conversations.filter((c) => c.lastMessageAt.slice(0, 10) === today).length;
+  const unanswered = conversations.filter((c) => c.unreadCount > 0).length;
+  const closed = conversations.filter((c) => c.status === "closed").length;
+  const byPage = useMemo(() => {
+    const map = new Map<string, number>();
+    conversations.forEach((c) => map.set(c.pageName, (map.get(c.pageName) ?? 0) + 1));
+    return Array.from(map.entries()).sort((a, b) => b[1] - a[1]).slice(0, 4);
+  }, [conversations]);
+  // เวลาตอบเฉลี่ย: เวลาเฉลี่ยจากข้อความลูกค้า → ข้อความตอบกลับถัดไป (เฉพาะที่โหลด thread แล้ว)
+  const avgResponse = useMemo(() => {
+    const byConv = new Map<string, InboxMessage[]>();
+    messages.forEach((m) => { const list = byConv.get(m.conversationId) ?? []; list.push(m); byConv.set(m.conversationId, list); });
+    const gaps: number[] = [];
+    byConv.forEach((list) => {
+      const sorted = list.slice().sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+      for (let i = 0; i < sorted.length - 1; i++) {
+        if (sorted[i].direction === "in" && sorted[i + 1].direction === "out") {
+          gaps.push(new Date(sorted[i + 1].createdAt).getTime() - new Date(sorted[i].createdAt).getTime());
+        }
+      }
+    });
+    if (!gaps.length) return "—";
+    const avgMin = Math.round(gaps.reduce((a, b) => a + b, 0) / gaps.length / 60000);
+    return avgMin < 60 ? `${avgMin} นาที` : `${(avgMin / 60).toFixed(1)} ชม.`;
+  }, [messages]);
+
+  const stats: Array<{ label: string; value: string | number; tone: string; icon: LucideIcon }> = [
+    { label: "ข้อความใหม่วันนี้", value: newToday, tone: "bg-k2-sky", icon: MessagesSquare },
+    { label: "ยังไม่ได้ตอบ", value: unanswered, tone: "bg-amber-100", icon: Bell },
+    { label: "เวลาตอบเฉลี่ย", value: avgResponse, tone: "bg-k2-mint", icon: Clock3 },
+    { label: "ปิดบทสนทนาแล้ว", value: closed, tone: "bg-green-100", icon: CheckCircle2 }
+  ];
+
+  return (
+    <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+      {stats.map(({ label, value, tone, icon: Icon }) => (
+        <div key={label} className="glass rounded-2xl p-4">
+          <div className={`mb-3 grid h-9 w-9 place-items-center rounded-xl ${tone}`}><Icon className="h-4 w-4 text-k2-ink" /></div>
+          <p className="text-xs font-semibold text-k2-muted">{label}</p>
+          <p className="mt-0.5 text-2xl font-extrabold text-k2-ink">{value}</p>
+        </div>
+      ))}
+      <div className="glass rounded-2xl p-4">
+        <p className="mb-2 text-xs font-semibold text-k2-muted">แชทแยกตามเพจ</p>
+        {byPage.length === 0 ? <p className="text-sm text-k2-muted">—</p> : (
+          <div className="space-y-1.5">
+            {byPage.map(([name, count]) => (
+              <div key={name} className="flex items-center justify-between text-xs font-semibold">
+                <span className="truncate text-k2-ink">{name}</span>
+                <span className="ml-2 shrink-0 rounded-full bg-white px-2 py-0.5 text-k2-muted">{count}</span>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function KConnectView({
+  conversations,
+  allScopedConversations,
+  pages,
+  messages,
+  notes,
+  customers,
+  jobs,
+  quotations,
+  teamMembers,
+  currentUser,
+  canManageInbox,
+  canSeeMoney,
+  canCreateQuote,
+  selectedConversationId,
+  pageFilter,
+  statusFilter,
+  search,
+  onPageFilter,
+  onStatusFilter,
+  onSearch,
+  onSelectConversation,
+  onSend,
+  onAssign,
+  onSetStatus,
+  onToggleTag,
+  onAddNote,
+  onCreateQuotation
+}: {
+  conversations: InboxConversation[];
+  allScopedConversations: InboxConversation[];
+  pages: ConnectedPage[];
+  messages: InboxMessage[];
+  notes: InboxNote[];
+  customers: Customer[];
+  jobs: Job[];
+  quotations: Quotation[];
+  teamMembers: TeamMember[];
+  currentUser: TeamMember;
+  canManageInbox: boolean;
+  canSeeMoney: boolean;
+  canCreateQuote: boolean;
+  selectedConversationId: string | null;
+  pageFilter: string;
+  statusFilter: ConversationStatus | "all";
+  search: string;
+  onPageFilter: (id: string) => void;
+  onStatusFilter: (status: ConversationStatus | "all") => void;
+  onSearch: (q: string) => void;
+  onSelectConversation: (id: string) => void;
+  onSend: (conversationId: string, text: string) => void;
+  onAssign: (conversationId: string, memberId: string) => void;
+  onSetStatus: (conversationId: string, status: ConversationStatus) => void;
+  onToggleTag: (conversationId: string, tag: InboxTag) => void;
+  onAddNote: (conversationId: string, body: string) => void;
+  onCreateQuotation: (conv: InboxConversation) => void;
+}) {
+  const selected = conversations.find((c) => c.id === selectedConversationId) ?? null;
+  const thread = useMemo(
+    () => (selected ? messages.filter((m) => m.conversationId === selected.id).slice().sort((a, b) => a.createdAt.localeCompare(b.createdAt)) : []),
+    [messages, selected]
+  );
+  const selectedNotes = useMemo(
+    () => (selected ? notes.filter((n) => n.conversationId === selected.id).slice().sort((a, b) => a.createdAt.localeCompare(b.createdAt)) : []),
+    [notes, selected]
+  );
+  const linkedCustomer = selected?.customerId ? customers.find((c) => c.id === selected.customerId) ?? null : null;
+  const customerQuoteCount = linkedCustomer ? quotations.filter((q) => q.customerId === linkedCustomer.id).length : 0;
+
+  return (
+    <div className="space-y-4">
+      <KConnectDashboard conversations={allScopedConversations} messages={messages} />
+
+      <div className="grid gap-3 lg:grid-cols-[0.95fr_1.6fr_1fr] xl:grid-cols-[0.85fr_1.7fr_0.95fr]">
+        {/* ───── Left: Conversation List ───── */}
+        <section className="glass flex max-h-[72vh] flex-col rounded-[1.5rem] p-4">
+          <div className="mb-3">
+            <div className="flex items-center gap-2">
+              <MessagesSquare className="h-5 w-5 text-k2-ink" />
+              <h3 className="text-lg font-extrabold text-k2-ink">กล่องแชทรวม</h3>
+              <span className="ml-auto rounded-full bg-white px-2.5 py-0.5 text-xs font-bold text-k2-muted">{conversations.length}</span>
+            </div>
+          </div>
+          <div className="mb-3 space-y-2">
+            <div className="flex items-center gap-2 rounded-2xl border border-white/80 bg-white/80 px-3 py-2">
+              <Search className="h-4 w-4 text-k2-muted" />
+              <input value={search} onChange={(e) => onSearch(e.target.value)} placeholder="ค้นหาลูกค้า / เพจ / แท็ก" className="w-full bg-transparent text-sm outline-none" />
+            </div>
+            <div className="flex gap-2">
+              <select value={pageFilter} onChange={(e) => onPageFilter(e.target.value)} className="w-1/2 rounded-2xl border border-white/80 bg-white/80 px-3 py-2 text-sm font-semibold outline-none">
+                <option value="all">ทุกเพจ</option>
+                {pages.map((p) => <option key={p.id} value={p.id}>{p.pageName}</option>)}
+              </select>
+              <select value={statusFilter} onChange={(e) => onStatusFilter(e.target.value as ConversationStatus | "all")} className="w-1/2 rounded-2xl border border-white/80 bg-white/80 px-3 py-2 text-sm font-semibold outline-none">
+                <option value="all">ทุกสถานะ</option>
+                {conversationStatusOptions.map((s) => <option key={s} value={s}>{conversationStatusInfo[s].label}</option>)}
+              </select>
+            </div>
+          </div>
+          <div className="-mx-1 flex-1 space-y-2 overflow-y-auto px-1 soft-scrollbar">
+            {conversations.length === 0 ? (
+              <p className="rounded-2xl bg-white/60 px-4 py-10 text-center text-sm font-semibold text-k2-muted">ไม่มีบทสนทนา</p>
+            ) : conversations.map((c) => {
+              const active = c.id === selectedConversationId;
+              return (
+                <button
+                  key={c.id}
+                  onClick={() => onSelectConversation(c.id)}
+                  className={`w-full rounded-2xl border p-3 text-left transition ${active ? "border-k2-ink/30 bg-white shadow-md" : "border-white/70 bg-white/55 hover:bg-white/80"}`}
+                >
+                  <div className="flex items-center gap-2">
+                    <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-k2-mint text-sm font-extrabold text-k2-ink">{initialsFromName(c.customerName)}</span>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-1.5">
+                        <PlatformBadge platform={c.platform} />
+                        <p className="truncate font-bold leading-4 text-k2-ink">{c.customerName}</p>
+                        {c.unreadCount > 0 ? <span className="ml-auto shrink-0 rounded-full bg-rose-500 px-1.5 py-0.5 text-[10px] font-extrabold text-white">{c.unreadCount}</span> : null}
+                      </div>
+                      <p className="truncate text-[11px] font-semibold text-k2-muted">{c.pageName} · {inboxRelative(c.lastMessageAt)}</p>
+                    </div>
+                  </div>
+                  <p className="mt-1.5 truncate text-xs text-k2-muted">{c.lastMessagePreview || "—"}</p>
+                  <div className="mt-2 flex flex-wrap items-center gap-1">
+                    <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${conversationStatusInfo[c.status].cls}`}>{conversationStatusInfo[c.status].label}</span>
+                    {c.tags.slice(0, 2).map((t) => <span key={t} className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${inboxTagInfo[t]}`}>{t}</span>)}
+                    {c.assignedToName ? <span className="ml-auto truncate text-[10px] font-bold text-k2-muted">👤 {c.assignedToName}</span> : null}
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        </section>
+
+        {/* ───── Center: Chat Window ───── */}
+        <section className="glass flex max-h-[72vh] flex-col rounded-[1.5rem] p-4">
+          {selected ? (
+            <ChatWindow
+              key={selected.id}
+              conversation={selected}
+              thread={thread}
+              onSend={(text) => onSend(selected.id, text)}
+              onSetStatus={(s) => onSetStatus(selected.id, s)}
+            />
+          ) : (
+            <div className="flex flex-1 flex-col items-center justify-center text-center text-k2-muted">
+              <MessagesSquare className="mb-3 h-10 w-10 opacity-40" />
+              <p className="font-semibold">เลือกบทสนทนาทางซ้ายเพื่อเริ่มตอบ</p>
+            </div>
+          )}
+        </section>
+
+        {/* ───── Right: Customer Card ───── */}
+        <section className="glass flex max-h-[72vh] flex-col overflow-y-auto rounded-[1.5rem] p-4 soft-scrollbar">
+          {selected ? (
+            <CustomerCard
+              conversation={selected}
+              customer={linkedCustomer}
+              quoteCount={customerQuoteCount}
+              notes={selectedNotes}
+              teamMembers={teamMembers}
+              canManageInbox={canManageInbox}
+              canSeeMoney={canSeeMoney}
+              canCreateQuote={canCreateQuote}
+              onAssign={(memberId) => onAssign(selected.id, memberId)}
+              onToggleTag={(tag) => onToggleTag(selected.id, tag)}
+              onAddNote={(body) => onAddNote(selected.id, body)}
+              onCreateQuotation={() => onCreateQuotation(selected)}
+            />
+          ) : (
+            <p className="m-auto text-sm font-semibold text-k2-muted">ข้อมูลลูกค้าจะแสดงที่นี่</p>
+          )}
+        </section>
+      </div>
+    </div>
+  );
+}
+
+function ChatWindow({
+  conversation,
+  thread,
+  onSend,
+  onSetStatus
+}: {
+  conversation: InboxConversation;
+  thread: InboxMessage[];
+  onSend: (text: string) => void;
+  onSetStatus: (status: ConversationStatus) => void;
+}) {
+  const [draft, setDraft] = useState("");
+  const scrollRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+  }, [thread.length, conversation.id]);
+
+  function submit() {
+    if (!draft.trim()) return;
+    onSend(draft);
+    setDraft("");
+  }
+
+  return (
+    <>
+      <div className="mb-3 flex items-center gap-2 border-b border-white/70 pb-3">
+        <span className="flex h-10 w-10 items-center justify-center rounded-full bg-k2-mint text-sm font-extrabold text-k2-ink">{initialsFromName(conversation.customerName)}</span>
+        <div className="min-w-0">
+          <div className="flex items-center gap-1.5">
+            <PlatformBadge platform={conversation.platform} className="h-4 w-4" />
+            <p className="truncate font-extrabold text-k2-ink">{conversation.customerName}</p>
+          </div>
+          <p className="truncate text-xs font-semibold text-k2-muted">{conversation.pageName}</p>
+        </div>
+        <select
+          value={conversation.status}
+          onChange={(e) => onSetStatus(e.target.value as ConversationStatus)}
+          className="ml-auto rounded-xl border border-white/80 bg-white/80 px-2.5 py-1.5 text-xs font-bold text-k2-ink outline-none"
+        >
+          {conversationStatusOptions.map((s) => <option key={s} value={s}>{conversationStatusInfo[s].label}</option>)}
+        </select>
+      </div>
+
+      <div ref={scrollRef} className="-mx-1 flex-1 space-y-2.5 overflow-y-auto px-1 soft-scrollbar">
+        {thread.length === 0 ? (
+          <p className="py-10 text-center text-sm font-semibold text-k2-muted">ยังไม่มีข้อความ</p>
+        ) : thread.map((m) => {
+          const out = m.direction === "out";
+          return (
+            <div key={m.id} className={`flex ${out ? "justify-end" : "justify-start"}`}>
+              <div className={`max-w-[78%] rounded-2xl px-3.5 py-2 ${out ? "bg-k2-ink text-white" : "bg-white text-k2-ink shadow-sm"}`}>
+                {m.attachmentUrl ? (
+                  <a href={m.attachmentUrl} target="_blank" rel="noreferrer" className={`mb-1 block text-xs underline ${out ? "text-white/90" : "text-sky-600"}`}>📎 ไฟล์แนบ</a>
+                ) : null}
+                {m.body ? <p className="whitespace-pre-wrap break-words text-sm leading-relaxed">{m.body}</p> : null}
+                <p className={`mt-1 text-right text-[10px] ${out ? "text-white/70" : "text-k2-muted"}`}>
+                  {inboxTime(m.createdAt)}{out ? (m.isRead ? " · อ่านแล้ว" : " · ส่งแล้ว") : ""}
+                </p>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      <div className="mt-3 flex items-end gap-2 border-t border-white/70 pt-3">
+        <textarea
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); submit(); } }}
+          placeholder="พิมพ์ข้อความตอบกลับ… (Enter เพื่อส่ง)"
+          className="max-h-28 min-h-[44px] flex-1 resize-none rounded-2xl border border-white/80 bg-white/85 px-3.5 py-2.5 text-sm outline-none"
+        />
+        <button type="button" onClick={submit} className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-k2-ink text-white">
+          <Send className="h-4 w-4" />
+        </button>
+      </div>
+    </>
+  );
+}
+
+function CustomerCard({
+  conversation,
+  customer,
+  quoteCount,
+  notes,
+  teamMembers,
+  canManageInbox,
+  canSeeMoney,
+  canCreateQuote,
+  onAssign,
+  onToggleTag,
+  onAddNote,
+  onCreateQuotation
+}: {
+  conversation: InboxConversation;
+  customer: Customer | null;
+  quoteCount: number;
+  notes: InboxNote[];
+  teamMembers: TeamMember[];
+  canManageInbox: boolean;
+  canSeeMoney: boolean;
+  canCreateQuote: boolean;
+  onAssign: (memberId: string) => void;
+  onToggleTag: (tag: InboxTag) => void;
+  onAddNote: (body: string) => void;
+  onCreateQuotation: () => void;
+}) {
+  const [note, setNote] = useState("");
+  function submitNote() {
+    if (!note.trim()) return;
+    onAddNote(note);
+    setNote("");
+  }
+
+  return (
+    <div className="space-y-4">
+      {/* หัวการ์ดลูกค้า */}
+      <div className="text-center">
+        <span className="mx-auto mb-2 flex h-14 w-14 items-center justify-center rounded-2xl bg-k2-mint text-lg font-extrabold text-k2-ink">{initialsFromName(conversation.customerName)}</span>
+        <p className="text-lg font-extrabold text-k2-ink">{conversation.customerName}</p>
+        <p className="flex items-center justify-center gap-1.5 text-xs font-semibold text-k2-muted">
+          <PlatformBadge platform={conversation.platform} /> {conversation.platform === "instagram" ? "Instagram DM" : "Facebook Messenger"}
+        </p>
+      </div>
+
+      {/* ข้อมูลสรุป */}
+      <div className="grid grid-cols-2 gap-2">
+        <CardStat label="เพจต้นทาง" value={conversation.pageName} />
+        <CardStat label="ติดต่อล่าสุด" value={inboxRelative(conversation.lastMessageAt)} />
+        <CardStat label="ยอดซื้อสะสม" value={customer ? (canSeeMoney ? money.format(customer.lifetimeValue) : "ซ่อน") : "—"} />
+        <CardStat label="ใบเสนอราคา" value={customer ? `${quoteCount} ใบ` : "—"} />
+      </div>
+      {customer ? (
+        <div className="rounded-2xl bg-white/55 p-3 text-sm">
+          <p className="font-semibold text-k2-ink">{customer.name}</p>
+          {customer.phone ? <p className="text-k2-muted">📞 {customer.phone}</p> : null}
+          {customer.customerCode ? <p className="text-k2-muted">รหัส {customer.customerCode}</p> : null}
+        </div>
+      ) : (
+        <p className="rounded-2xl bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-700">ยังไม่ผูกกับลูกค้าในระบบ — สร้างใบเสนอราคาเพื่อบันทึกลูกค้าใหม่</p>
+      )}
+
+      {/* Create Quotation */}
+      {canCreateQuote ? (
+        <button type="button" onClick={onCreateQuotation} className="flex w-full items-center justify-center gap-2 rounded-2xl bg-k2-ink px-4 py-3 font-bold text-white">
+          <ReceiptText className="h-4 w-4" /> สร้างใบเสนอราคา
+        </button>
+      ) : null}
+
+      {/* มอบหมาย */}
+      <div>
+        <p className="mb-1.5 flex items-center gap-1.5 text-xs font-bold text-k2-muted"><UserCheck className="h-3.5 w-3.5" /> ผู้รับผิดชอบ</p>
+        {canManageInbox ? (
+          <select value={conversation.assignedTo ?? ""} onChange={(e) => onAssign(e.target.value)} className="w-full rounded-2xl border border-white/80 bg-white/80 px-3 py-2.5 text-sm font-semibold outline-none">
+            <option value="">— ยังไม่มอบหมาย —</option>
+            {teamMembers.map((m) => <option key={m.id} value={m.id}>{m.name} ({roleLabel[m.role]})</option>)}
+          </select>
+        ) : (
+          <p className="rounded-2xl bg-white/55 px-3 py-2.5 text-sm font-semibold text-k2-ink">{conversation.assignedToName ?? "ยังไม่มอบหมาย"}</p>
+        )}
+      </div>
+
+      {/* แท็ก */}
+      <div>
+        <p className="mb-1.5 flex items-center gap-1.5 text-xs font-bold text-k2-muted"><Tag className="h-3.5 w-3.5" /> แท็ก</p>
+        <div className="flex flex-wrap gap-1.5">
+          {INBOX_TAGS.map((tag) => {
+            const on = conversation.tags.includes(tag);
+            return (
+              <button key={tag} type="button" onClick={() => onToggleTag(tag)} className={`rounded-full px-2.5 py-1 text-[11px] font-bold transition ${on ? inboxTagInfo[tag] : "bg-white/55 text-k2-muted"}`}>
+                {on ? "" : "+ "}{tag}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* โน้ตภายใน */}
+      <div>
+        <p className="mb-1.5 flex items-center gap-1.5 text-xs font-bold text-k2-muted"><StickyNote className="h-3.5 w-3.5" /> โน้ตภายใน (ลูกค้าไม่เห็น)</p>
+        <div className="space-y-2">
+          {notes.map((n) => (
+            <div key={n.id} className="rounded-2xl bg-amber-50/80 px-3 py-2 text-sm">
+              <p className="whitespace-pre-wrap break-words text-amber-900">{n.body}</p>
+              <p className="mt-1 text-[10px] font-semibold text-amber-700/80">{n.authorName ?? "—"} · {inboxRelative(n.createdAt)}</p>
+            </div>
+          ))}
+          <div className="flex items-end gap-2">
+            <textarea value={note} onChange={(e) => setNote(e.target.value)} placeholder="เพิ่มโน้ตภายใน…" className="max-h-24 min-h-[40px] flex-1 resize-none rounded-2xl border border-white/80 bg-white/85 px-3 py-2 text-sm outline-none" />
+            <button type="button" onClick={submitNote} className="rounded-2xl bg-k2-mint px-3 py-2 text-sm font-bold text-k2-ink">เพิ่ม</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function CardStat({ label, value }: { label: string; value: string | number }) {
+  return (
+    <div className="rounded-2xl bg-white/55 px-3 py-2">
+      <p className="text-[10px] font-semibold text-k2-muted">{label}</p>
+      <p className="mt-0.5 truncate text-sm font-extrabold text-k2-ink">{value}</p>
     </div>
   );
 }

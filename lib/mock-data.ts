@@ -1,4 +1,4 @@
-import type { AuditEvent, Customer, Job, JobStatus, TeamMember } from "./types";
+import type { AuditEvent, ConnectedPage, Customer, InboxConversation, InboxMessage, InboxNote, Job, JobStatus, TeamMember } from "./types";
 
 export const statuses: JobStatus[] = [
   "Quotation",
@@ -252,4 +252,64 @@ export const initialAuditLog: AuditEvent[] = [
   { id: "a2", actor: "Beam S.", action: "moved status to approval", target: "K2-1029", at: "2026-05-29 16:45" },
   { id: "a3", actor: "Art T.", action: "updated production start", target: "K2-1030", at: "2026-05-30 12:05" },
   { id: "a4", actor: "June L.", action: "added QC note", target: "K2-1031", at: "2026-05-30 09:25" }
+];
+
+// ===== K-Connect (Unified Inbox) — ข้อมูลตัวอย่างสำหรับโหมด mock =====
+export const connectedPages: ConnectedPage[] = [
+  { id: "pg1", pageName: "K2 Sign", platform: "facebook", branch: "พะเยา", isActive: true },
+  { id: "pg2", pageName: "K2 Phayao", platform: "facebook", branch: "พะเยา", isActive: true },
+  { id: "pg3", pageName: "Fluffi.pet", platform: "instagram", branch: "พระรามเก้า", isActive: true },
+  { id: "pg4", pageName: "K2Studio.DTG", platform: "instagram", branch: "พระรามเก้า", isActive: true },
+  { id: "pg5", pageName: "K2 Premium", platform: "facebook", branch: "พระรามเก้า", isActive: true }
+];
+
+export const initialConversations: InboxConversation[] = [
+  {
+    id: "cv1", pageId: "pg1", pageName: "K2 Sign", platform: "facebook", branch: "พะเยา",
+    customerName: "Baan Bloom Cafe", customerId: "c1", status: "assigned",
+    assignedTo: "u6", assignedToName: "May C.", tags: ["Follow Up", "VIP"],
+    unreadCount: 0, lastMessagePreview: "ขอบคุณค่ะ เดี๋ยวโอนมัดจำให้นะคะ",
+    lastMessageAt: "2026-06-23T09:42:00.000Z", createdAt: "2026-06-22T03:10:00.000Z"
+  },
+  {
+    id: "cv2", pageId: "pg3", pageName: "Fluffi.pet", platform: "instagram", branch: "พระรามเก้า",
+    customerName: "พิมพ์ชนก", status: "new", tags: ["New Lead"],
+    unreadCount: 2, lastMessagePreview: "สนใจทำป้ายอะคริลิคติดหน้าร้านค่ะ ราคาเท่าไหร่",
+    lastMessageAt: "2026-06-23T10:05:00.000Z", createdAt: "2026-06-23T10:01:00.000Z"
+  },
+  {
+    id: "cv3", pageId: "pg2", pageName: "K2 Phayao", platform: "facebook", branch: "พะเยา",
+    customerName: "Peak Studio", customerId: "c2", status: "waiting_customer",
+    assignedTo: "u2", assignedToName: "Mina P.", tags: ["Waiting Quote"],
+    unreadCount: 0, lastMessagePreview: "ส่งใบเสนอราคาให้แล้วนะครับ รอลูกค้ายืนยัน",
+    lastMessageAt: "2026-06-22T14:20:00.000Z", createdAt: "2026-06-20T08:00:00.000Z"
+  },
+  {
+    id: "cv4", pageId: "pg5", pageName: "K2 Premium", platform: "facebook", branch: "พระรามเก้า",
+    customerName: "Nara Wedding", customerId: "c4", status: "closed",
+    assignedTo: "u6", assignedToName: "May C.", tags: ["Completed"],
+    unreadCount: 0, lastMessagePreview: "รับของเรียบร้อยแล้วค่ะ สวยมากเลย ขอบคุณนะคะ",
+    lastMessageAt: "2026-06-19T16:30:00.000Z", createdAt: "2026-06-10T05:00:00.000Z"
+  }
+];
+
+export const initialMessages: InboxMessage[] = [
+  { id: "m1", conversationId: "cv1", direction: "in", senderName: "Baan Bloom Cafe", body: "สวัสดีค่ะ อยากสั่งทำเสื้อพนักงาน 30 ตัวค่ะ", isRead: true, createdAt: "2026-06-22T03:10:00.000Z" },
+  { id: "m2", conversationId: "cv1", direction: "out", senderName: "May C.", body: "สวัสดีค่ะ ได้เลยค่ะ รบกวนขอไซซ์และแบบโลโก้ด้วยนะคะ", isRead: true, createdAt: "2026-06-22T03:25:00.000Z" },
+  { id: "m3", conversationId: "cv1", direction: "in", senderName: "Baan Bloom Cafe", body: "ส่งไฟล์โลโก้ให้แล้วนะคะ", isRead: true, createdAt: "2026-06-22T03:40:00.000Z" },
+  { id: "m4", conversationId: "cv1", direction: "out", senderName: "May C.", body: "รับเรื่องแล้วค่ะ ราคา 9,000 บาท มัดจำ 50% นะคะ", isRead: true, createdAt: "2026-06-23T09:30:00.000Z" },
+  { id: "m5", conversationId: "cv1", direction: "in", senderName: "Baan Bloom Cafe", body: "ขอบคุณค่ะ เดี๋ยวโอนมัดจำให้นะคะ", isRead: true, createdAt: "2026-06-23T09:42:00.000Z" },
+
+  { id: "m6", conversationId: "cv2", direction: "in", senderName: "พิมพ์ชนก", body: "สวัสดีค่ะ", isRead: false, createdAt: "2026-06-23T10:01:00.000Z" },
+  { id: "m7", conversationId: "cv2", direction: "in", senderName: "พิมพ์ชนก", body: "สนใจทำป้ายอะคริลิคติดหน้าร้านค่ะ ราคาเท่าไหร่", isRead: false, createdAt: "2026-06-23T10:05:00.000Z" },
+
+  { id: "m8", conversationId: "cv3", direction: "in", senderName: "Peak Studio", body: "ขอใบเสนอราคางานสติกเกอร์ติดผนัง 12 ตร.ม. ครับ", isRead: true, createdAt: "2026-06-20T08:00:00.000Z" },
+  { id: "m9", conversationId: "cv3", direction: "out", senderName: "Mina P.", body: "ส่งใบเสนอราคาให้แล้วนะครับ รอลูกค้ายืนยัน", isRead: true, createdAt: "2026-06-22T14:20:00.000Z" },
+
+  { id: "m10", conversationId: "cv4", direction: "in", senderName: "Nara Wedding", body: "รับของเรียบร้อยแล้วค่ะ สวยมากเลย ขอบคุณนะคะ", isRead: true, createdAt: "2026-06-19T16:30:00.000Z" }
+];
+
+export const initialInboxNotes: InboxNote[] = [
+  { id: "n1", conversationId: "cv1", body: "ลูกค้าเก่า สั่งประจำทุกไตรมาส — ดูแลพิเศษ", authorName: "May C.", createdAt: "2026-06-22T03:30:00.000Z" },
+  { id: "n2", conversationId: "cv3", body: "เคยต่อราคาแรง ระวังเรื่องส่วนลด", authorName: "Mina P.", createdAt: "2026-06-20T08:30:00.000Z" }
 ];
