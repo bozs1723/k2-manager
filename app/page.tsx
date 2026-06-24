@@ -1219,6 +1219,7 @@ export default function Page() {
   const homeView = navigationItems[0]?.label ?? "Dashboard";
   // เมนูมือถือแบบหุบ/กางได้ (ประหยัดพื้นที่ ไม่บังเนื้อหา)
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [showPendingPanel, setShowPendingPanel] = useState(false);
 
   useEffect(() => {
     if (!supabase) return;
@@ -2694,6 +2695,14 @@ export default function Page() {
           }
         }
         await appendAudit("created job", insertedJobNumber, "jobs", insertedJob.id);
+        // งานที่รอผู้จัดการอนุมัติ → ยิงแจ้งเตือนเข้ากลุ่ม LINE กลาง (ไม่บล็อกการสร้างงานถ้าล้มเหลว)
+        if (jobAcceptance === "pending") {
+          try {
+            await supabase.functions.invoke("notify-new-order", { body: { job_id: insertedJob.id } });
+          } catch {
+            /* แจ้งเตือน LINE ล้มเหลว ไม่ให้กระทบการสร้างงาน */
+          }
+        }
         notifyAssignees(
           "assigned",
           {
@@ -3702,8 +3711,71 @@ export default function Page() {
     );
   }
 
+  // งานที่ "ผู้ใช้คนนี้" มีสิทธิ์อนุมัติและยังค้างอยู่ → ใช้ทำหน้าจอกระพริบเตือน ผจก.
+  const pendingApprovalJobs = jobs.filter((job) => job.acceptance === "pending" && canAcceptJob(job));
+
   return (
     <main className="min-h-screen px-3 py-3 text-k2-ink sm:px-5 sm:py-5">
+      {pendingApprovalJobs.length > 0 ? (
+        <>
+          {/* ขอบจอกระพริบสีแดงเมื่อมีงานรออนุมัติ */}
+          <motion.div
+            aria-hidden
+            className="pointer-events-none fixed inset-0 z-[80]"
+            style={{ boxShadow: "inset 0 0 0 6px rgba(244,63,94,0.95)" }}
+            animate={{ opacity: [0.12, 1, 0.12] }}
+            transition={{ repeat: Infinity, duration: 1.1, ease: "easeInOut" }}
+          />
+          {/* แถบแจ้งเตือนกดเพื่อดูงานค้างทั้งแผนก */}
+          <motion.button
+            type="button"
+            onClick={() => setShowPendingPanel(true)}
+            animate={{ scale: [1, 1.04, 1] }}
+            transition={{ repeat: Infinity, duration: 1.1, ease: "easeInOut" }}
+            className="fixed left-1/2 top-3 z-[81] flex -translate-x-1/2 items-center gap-2 rounded-2xl bg-rose-600 px-5 py-2.5 text-sm font-extrabold text-white shadow-2xl ring-2 ring-white/70"
+          >
+            <Bell className="h-4 w-4" />
+            มีงานรออนุมัติ {pendingApprovalJobs.length} งาน — กดดูงานค้าง
+          </motion.button>
+        </>
+      ) : null}
+
+      {/* กล่องงานค้างรออนุมัติทั้งแผนก */}
+      {showPendingPanel ? (
+        <div className="fixed inset-0 z-[90] flex items-start justify-center overflow-y-auto bg-slate-900/50 p-4 backdrop-blur-sm" onClick={() => setShowPendingPanel(false)}>
+          <div className="glass-solid my-6 w-full max-w-lg rounded-[1.6rem] p-5 shadow-2xl" onClick={(event) => event.stopPropagation()}>
+            <div className="mb-3 flex items-center justify-between gap-3">
+              <div>
+                <p className="text-sm font-bold text-rose-600">งานค้างรออนุมัติ</p>
+                <h3 className="text-xl font-extrabold">{pendingApprovalJobs.length} งานในแผนกของคุณ</h3>
+              </div>
+              <button type="button" onClick={() => setShowPendingPanel(false)} className="rounded-2xl bg-white/80 px-3 py-2 text-sm font-bold text-k2-ink shadow-sm">ปิด</button>
+            </div>
+            {pendingApprovalJobs.length === 0 ? (
+              <p className="rounded-2xl bg-white/60 p-4 text-center text-sm font-semibold text-k2-muted">ไม่มีงานค้าง 🎉</p>
+            ) : (
+              <div className="soft-scrollbar max-h-[70vh] space-y-2 overflow-y-auto">
+                {pendingApprovalJobs.map((job) => (
+                  <button
+                    key={job.id}
+                    type="button"
+                    onClick={() => { setSelectedJobId(job.id); setActiveView("Detail"); setShowPendingPanel(false); }}
+                    className="flex w-full items-center justify-between gap-3 rounded-2xl bg-white/75 px-4 py-3 text-left shadow-sm ring-1 ring-white/70 transition hover:bg-k2-mint hover:ring-k2-ink/30"
+                  >
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-extrabold text-k2-ink">{job.id} · {job.title}</p>
+                      <p className="truncate text-xs font-semibold text-k2-muted">
+                        {job.customerName || "-"}{job.productionBranch ? ` · ${job.productionBranch}` : ""}{job.isExpress ? " · ⚡️ด่วน" : ""}
+                      </p>
+                    </div>
+                    <span className="shrink-0 rounded-full bg-rose-100 px-3 py-1 text-xs font-bold text-rose-700">กดอนุมัติ</span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      ) : null}
       <div className="mx-auto flex max-w-[1800px] gap-4">
         <aside className="glass soft-scrollbar sticky top-5 hidden h-[calc(100vh-2.5rem)] w-72 shrink-0 overflow-y-auto rounded-[1.7rem] p-4 lg:block">
           <BrandBlock currentUser={currentUserPrefs} onEditProfile={() => setShowPersonalization(true)} />
