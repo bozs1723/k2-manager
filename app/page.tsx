@@ -413,7 +413,7 @@ type CheckInResult = { ok: boolean; msg: string; checkInAt?: string; status?: "o
 
 // ระยะห่างระหว่างพิกัด (เมตร) — สูตร haversine
 const defaultBranchSetting = (branch: string): BranchSetting => ({ branch, workStart: "09:00", workEnd: "18:00", lateGraceMinutes: 5, gpsLat: null, gpsLng: null, radiusM: 150 });
-const jobTypes: JobType[] = ["DTG Shirt", "UV Print", "Laser Cut", "Signage", "Acrylic", "3D Print", "Other"];
+const jobTypes: JobType[] = ["DTG Shirt", "UV Print", "Laser Cut", "Signage", "Acrylic", "3D Print", "Keychain", "Other"];
 const priorities: Priority[] = ["Normal", "Urgent", "Very Urgent", "Today"];
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const appTagline = "คุมงานผลิตครบในที่เดียว";
@@ -538,6 +538,7 @@ const jobTypeLabel: Record<JobType, string> = {
   Signage: "ป้าย",
   Acrylic: "งานอะคริลิค",
   "3D Print": "พิมพ์ 3D",
+  Keychain: "พวงกุญแจ",
   Other: "อื่น ๆ"
 };
 

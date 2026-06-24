@@ -19,7 +19,7 @@ export type Role =
   | "Packing Staff"
   | "Sales Staff";
 
-export type JobType = "DTG Shirt" | "UV Print" | "Laser Cut" | "Signage" | "Acrylic" | "3D Print" | "Other";
+export type JobType = "DTG Shirt" | "UV Print" | "Laser Cut" | "Signage" | "Acrylic" | "3D Print" | "Keychain" | "Other";
 export type Priority = "Normal" | "Urgent" | "Very Urgent" | "Today";
 export type PaymentStatus = "unpaid" | "partial" | "paid";
 export type QuoteStatus = "draft" | "sent" | "approved" | "expired";
