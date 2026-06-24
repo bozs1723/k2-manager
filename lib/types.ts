@@ -231,6 +231,7 @@ export type Job = {
   priority: Priority;
   isExpress?: boolean;
   productionBranch?: string;
+  incomeBranch?: string;
   acceptance?: "pending" | "accepted" | "rejected";
   rejectReason?: string;
   handoffStatus?: "pending" | "accepted";

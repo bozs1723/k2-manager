@@ -50,6 +50,7 @@ import { customers as initialCustomers, initialAuditLog, initialJobs, statuses, 
 import { createSupabaseAuthWorker, isSupabaseConfigured, supabase } from "@/lib/supabase";
 import { CUSTOMER_CODE_ADMINS, CUSTOMER_CODE_PAGES, customerCodeYear, formatCustomerCode, nextCustomerSeq } from "@/lib/customer-code";
 import { checkGeofence, lateMinutes } from "@/lib/attendance";
+import { branchForJobType } from "@/lib/job-routing";
 import { computeVat, normalizeVatMode, vatModeLabel, VAT_MODES, type VatMode } from "@/lib/vat";
 import type { AppNotification, Attendance, AuditEvent, BranchSetting, Customer, ExpressRequest, FileAsset, Holiday, Job, JobStatus, JobType, Lead, LeaveRequest, Overtime, PaymentStatus, Priority, Quotation, QuoteStatus, Role, TeamMember } from "@/lib/types";
 
@@ -163,6 +164,7 @@ type SupabaseJobRow = {
   status: JobStatus;
   is_express?: boolean | null;
   production_branch?: string | null;
+  income_branch?: string | null;
   acceptance?: "pending" | "accepted" | "rejected" | null;
   reject_reason?: string | null;
   handoff_status?: string | null;
@@ -981,6 +983,7 @@ function jobFromRow(
     priority: row.priority,
     isExpress: row.is_express ?? false,
     productionBranch: row.production_branch ?? "",
+    incomeBranch: row.income_branch ?? undefined,
     acceptance: row.acceptance ?? "accepted",
     rejectReason: row.reject_reason ?? "",
     handoffStatus: row.handoff_status === "pending" || row.handoff_status === "accepted" ? row.handoff_status : undefined,
@@ -2652,6 +2655,7 @@ export default function Page() {
               deposit_received_date: input?.depositReceivedDate || null,
               deposit_waived: input?.depositWaived ?? false,
               production_branch: input?.productionBranch ?? null,
+              income_branch: input?.incomeBranch || null,
               acceptance: jobAcceptance,
               reject_reason: null,
               status: "Quotation",
@@ -2755,6 +2759,7 @@ export default function Page() {
       depositConfirmed: false,
       depositWaived: input?.depositWaived ?? false,
       productionBranch: input?.productionBranch ?? "",
+      incomeBranch: input?.incomeBranch || undefined,
       acceptance: jobAcceptance,
       rejectReason: "",
       status: "Quotation",
@@ -6429,6 +6434,7 @@ function CreateJobView({
     fileName: "",
     sourceChannel: "LINE",
     salesPage: "",
+    incomeBranch: "",
     facebookPage: companyProfile.facebookPages[0] ?? "",
     fileStatus: "รอเช็กไฟล์",
     materials: [""] as string[],
@@ -6562,14 +6568,20 @@ function CreateJobView({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [teamMembers]);
 
-  // เลือกเพจ → กำหนดสาขา (รายได้+ผลิต) อัตโนมัติ · เลือก "ไม่ผ่านเพจ" → เลือกสาขาเอง
+  // เลือกเพจ → กำหนดสาขา "รายได้" อัตโนมัติ (ไม่ยุ่งกับสาขาที่ผลิต ซึ่งอิงประเภทงาน)
   function pickSalesPage(page: string) {
     setForm((current) => ({
       ...current,
       salesPage: page,
-      productionBranch: page && PAGE_TO_BRANCH[page] ? PAGE_TO_BRANCH[page] : current.productionBranch
+      incomeBranch: page && PAGE_TO_BRANCH[page] ? PAGE_TO_BRANCH[page] : ""
     }));
   }
+
+  // สาขาที่ผลิตอิงประเภทงาน (DTG/3D→พระรามเก้า, ที่เหลือ→พะเยา) — ปรับเองทีหลังได้
+  useEffect(() => {
+    setForm((current) => ({ ...current, productionBranch: branchForJobType(current.type) }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [form.type]);
 
   return (
     <form
@@ -6585,7 +6597,7 @@ function CreateJobView({
         setFormError("");
         const workOrderSpec = [
           `ช่องทางรับงาน: ${form.sourceChannel || "-"}`,
-          ...(form.salesPage ? [`เพจที่รับงาน: ${form.salesPage} (สาขา ${PAGE_TO_BRANCH[form.salesPage] || "-"})`] : []),
+          ...(form.salesPage ? [`เพจที่รับงาน: ${form.salesPage} (รายได้→${PAGE_TO_BRANCH[form.salesPage] || "-"})`] : []),
           `สถานะไฟล์: ${form.fileStatus || "-"}`,
           `วัสดุ: ${form.materials.filter(Boolean).join(", ") || "-"}`,
           `สี / สเปกสี: ${form.colorSpec || "-"}`,
@@ -6652,13 +6664,13 @@ function CreateJobView({
             </select>
           </label>
           <label className="space-y-2">
-            <span className="text-sm font-semibold text-k2-muted">เพจที่รับงาน (แยกรายได้/สาขา)</span>
+            <span className="text-sm font-semibold text-k2-muted">เพจที่รับงาน (กำหนดสาขารายได้)</span>
             <select
               value={form.salesPage}
               onChange={(event) => pickSalesPage(event.target.value)}
               className="w-full rounded-2xl border border-white/80 bg-white/80 px-4 py-3 outline-none"
             >
-              <option value="">— ไม่ผ่านเพจ (เลือกสาขาเอง) —</option>
+              <option value="">— ไม่ผ่านเพจ —</option>
               <optgroup label="พะเยา">
                 {SALES_PAGES.filter((p) => p.branch === "พะเยา").map((p) => (
                   <option key={p.page} value={p.page}>{p.page}</option>
@@ -6671,9 +6683,9 @@ function CreateJobView({
               </optgroup>
             </select>
             {form.salesPage ? (
-              <p className="text-xs font-bold text-k2-ink">รายได้เข้าสาขา <span className="text-emerald-700">{PAGE_TO_BRANCH[form.salesPage]}</span></p>
+              <p className="text-xs font-bold text-k2-ink">💰 รายได้เข้าสาขา <span className="text-emerald-700">{PAGE_TO_BRANCH[form.salesPage]}</span></p>
             ) : (
-              <p className="text-xs font-semibold text-k2-muted">ไม่ได้มาจากเพจ — เลือกสาขาด้านล่างเอง</p>
+              <p className="text-xs font-semibold text-k2-muted">ไม่ได้มาจากเพจ — รายได้จะเข้าสาขาที่ผลิต</p>
             )}
           </label>
           <label className="space-y-2">
@@ -6961,18 +6973,17 @@ function CreateJobView({
             </div>
             <TextField label="สี / สเปกสี" value={form.colorSpec} onChange={(value) => setField("colorSpec", value)} />
             <label className="space-y-2">
-              <span className="text-sm font-semibold text-k2-muted">สาขาที่ผลิต{form.salesPage ? " (ตามเพจ)" : ""}</span>
+              <span className="text-sm font-semibold text-k2-muted">สาขาที่ผลิต (ตามประเภทงาน)</span>
               <select
                 value={form.productionBranch}
                 onChange={(event) => setField("productionBranch", event.target.value)}
-                disabled={!!form.salesPage}
-                className="w-full rounded-2xl border border-white/80 bg-white/80 px-4 py-3 outline-none disabled:opacity-70"
+                className="w-full rounded-2xl border border-white/80 bg-white/80 px-4 py-3 outline-none"
               >
                 {branchOptions.map((branch) => (
                   <option key={branch}>{branch}</option>
                 ))}
               </select>
-              {form.salesPage ? <p className="text-xs font-semibold text-k2-muted">ล็อกตามเพจ {form.salesPage} — ถ้าจะเปลี่ยน เลือก “ไม่ผ่านเพจ”</p> : null}
+              <p className="text-xs font-semibold text-k2-muted">🏭 ตั้งอัตโนมัติจากประเภทงาน ({jobTypeLabel[form.type]} → {branchForJobType(form.type)}) · แก้เองได้</p>
             </label>
             <label className="space-y-2 md:col-span-2">
               <span className="text-sm font-semibold text-k2-muted">วิธีรับ/จัดส่งสินค้า</span>
