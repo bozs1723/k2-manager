@@ -26,6 +26,7 @@ function baht(n: number): string {
 type Job = {
   id: string;
   production_branch: string | null;
+  income_branch: string | null;
   branch: string | null;
   price: number | string;
   deposit: number | string;
@@ -37,8 +38,13 @@ type Job = {
   status: string | null;
 };
 
+// สาขาที่ผลิต (ใช้กับ "งานที่เสร็จวันนี้")
 function jobBranch(j: Job): string {
   return (j.production_branch || j.branch || "").trim();
+}
+// สาขาที่รับรายได้ (ตามเพจ) — งานเก่าที่ยังไม่มี income_branch ใช้สาขาผลิตแทน
+function revenueBranch(j: Job): string {
+  return (j.income_branch || j.production_branch || j.branch || "").trim();
 }
 
 Deno.serve(async (req) => {
@@ -61,7 +67,7 @@ Deno.serve(async (req) => {
     // งานที่มีการรับเงินวันนี้ (มัดจำ หรือ ปิดยอด)
     const { data: payJobs } = await admin
       .from("jobs")
-      .select("id, production_branch, branch, price, deposit, remaining_balance, deposit_received_date, balance_received_date, title, customer_name, status")
+      .select("id, production_branch, income_branch, branch, price, deposit, remaining_balance, deposit_received_date, balance_received_date, title, customer_name, status")
       .or(`deposit_received_date.eq.${today},balance_received_date.eq.${today}`);
 
     // งานที่เปลี่ยนสถานะเป็น Completed วันนี้ (ดูจากประวัติ 2 วันล่าสุด แล้วกรองตามวันไทย)
@@ -79,7 +85,7 @@ Deno.serve(async (req) => {
     if (completedTodayIds.size) {
       const { data } = await admin
         .from("jobs")
-        .select("id, production_branch, branch, price, deposit, remaining_balance, deposit_received_date, balance_received_date, title, customer_name, status")
+        .select("id, production_branch, income_branch, branch, price, deposit, remaining_balance, deposit_received_date, balance_received_date, title, customer_name, status")
         .in("id", Array.from(completedTodayIds));
       completedJobs = (data ?? []) as Job[];
     }
@@ -92,7 +98,7 @@ Deno.serve(async (req) => {
       let depositSum = 0;
       let balanceSum = 0;
       for (const j of (payJobs ?? []) as Job[]) {
-        if (jobBranch(j) !== branch) continue;
+        if (revenueBranch(j) !== branch) continue;
         const price = Number(j.price) || 0;
         const remaining = Number(j.remaining_balance) || 0;
         const deposit = Number(j.deposit) || 0;
