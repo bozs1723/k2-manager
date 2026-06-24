@@ -35,6 +35,31 @@ Deno.serve(async (req) => {
     if (!groupId) return json({ ok: true, note: "ยังไม่ได้ตั้ง ORDER_NOTIFY_GROUP_ID — ข้ามการแจ้งเตือน" });
 
     const body = await req.json().catch(() => ({}));
+
+    // โหมดทดสอบ: ส่งข้อความตัวอย่างเข้ากลุ่มทันที (ไม่ต้องมีงานจริง)
+    //   เรียกด้วย body { "test": true }
+    if ((body as { test?: boolean })?.test === true) {
+      const sample = [
+        "🆕 ออเดอร์ใหม่รออนุมัติ (ตัวอย่างทดสอบ)",
+        "🔖 เลขงาน: WO-DEMO-001",
+        "👤 ลูกค้า: คุณทดสอบ ระบบ",
+        "📦 งาน: ป้ายไวนิล 2x3 เมตร ⚡️ด่วน",
+        "🏭 สาขา: พระรามเก้า",
+        "💵 ราคา: ฿3,500",
+        "✍️ สร้างโดย: เซล (ทดสอบ)",
+        "",
+        "👉 ผู้จัดการสาขา กรุณาเข้าระบบกดอนุมัติเข้าผลิต",
+        "",
+        "— ข้อความนี้เป็นการทดสอบระบบ —"
+      ].join("\n");
+      const res = await fetch(LINE_PUSH, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${lineToken}` },
+        body: JSON.stringify({ to: groupId, messages: [{ type: "text", text: sample }] })
+      });
+      return json({ ok: res.ok, status: res.status, test: true, detail: res.ok ? null : await res.text() });
+    }
+
     const jobId = (body as { job_id?: string })?.job_id;
     if (!jobId) return json({ error: "ต้องส่ง job_id" }, 400);
 
