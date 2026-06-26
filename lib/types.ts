@@ -232,6 +232,7 @@ export type Job = {
   isExpress?: boolean;
   productionBranch?: string;
   incomeBranch?: string;
+  salesPage?: string;
   acceptance?: "pending" | "accepted" | "rejected";
   rejectReason?: string;
   handoffStatus?: "pending" | "accepted";
