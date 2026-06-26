@@ -61,17 +61,19 @@ Deno.serve(async (req) => {
     }
 
     const jobId = (body as { job_id?: string })?.job_id;
+    const event = (body as { event?: string })?.event === "approved" ? "approved" : "new";
+    const approver = (body as { by?: string })?.by ?? "";
     if (!jobId) return json({ error: "ต้องส่ง job_id" }, 400);
 
     const admin = createClient(url, serviceKey, { auth: { autoRefreshToken: false, persistSession: false } });
     const { data: job } = await admin
       .from("jobs")
-      .select("job_number, customer_name, title, production_branch, acceptance, created_by, price, is_express")
+      .select("job_number, customer_name, title, production_branch, income_branch, sales_page, acceptance, created_by, price, is_express")
       .eq("id", jobId)
       .single();
     if (!job) return json({ error: "ไม่พบงาน" }, 404);
-    // แจ้งเฉพาะงานที่ยังรอผู้จัดการอนุมัติ
-    if (job.acceptance !== "pending") return json({ ok: true, note: "งานนี้ไม่ได้รออนุมัติ — ไม่ต้องแจ้ง" });
+    // งานใหม่: แจ้งเฉพาะที่ยังรออนุมัติ · งานอนุมัติแล้ว: ใช้ event=approved
+    if (event === "new" && job.acceptance !== "pending") return json({ ok: true, note: "งานนี้ไม่ได้รออนุมัติ — ไม่ต้องแจ้ง" });
 
     let creator = "";
     if (job.created_by) {
@@ -79,17 +81,33 @@ Deno.serve(async (req) => {
       creator = p?.full_name ?? "";
     }
 
-    const text = [
-      "🆕 ออเดอร์ใหม่รออนุมัติ",
-      `🔖 เลขงาน: ${job.job_number}`,
-      `👤 ลูกค้า: ${job.customer_name || "-"}`,
-      `📦 งาน: ${job.title || "-"}${job.is_express ? " ⚡️ด่วน" : ""}`,
-      `🏭 สาขา: ${job.production_branch || "-"}`,
-      Number(job.price) > 0 ? `💵 ราคา: ${baht(job.price)}` : null,
-      creator ? `✍️ สร้างโดย: ${creator}` : null,
-      "",
-      "👉 ผู้จัดการสาขา กรุณาเข้าระบบกดอนุมัติเข้าผลิต"
-    ].filter(Boolean).join("\n");
+    const pageLine = job.sales_page
+      ? `📣 เพจ: ${job.sales_page}${job.income_branch ? ` (รายได้→${job.income_branch})` : ""}`
+      : null;
+
+    const text = event === "approved"
+      ? [
+          "✅ ผู้จัดการอนุมัติงานแล้ว",
+          `🔖 เลขงาน: ${job.job_number}`,
+          `📦 งาน: ${job.title || "-"}${job.is_express ? " ⚡️ด่วน" : ""}`,
+          pageLine,
+          `🏭 สาขาที่ผลิต: ${job.production_branch || "-"}`,
+          approver ? `👤 อนุมัติโดย: ${approver}` : null,
+          "",
+          "➡️ เข้าสู่ขั้นตอนผลิตได้"
+        ].filter(Boolean).join("\n")
+      : [
+          "🆕 ออเดอร์ใหม่รออนุมัติ",
+          `🔖 เลขงาน: ${job.job_number}`,
+          `👤 ลูกค้า: ${job.customer_name || "-"}`,
+          `📦 งาน: ${job.title || "-"}${job.is_express ? " ⚡️ด่วน" : ""}`,
+          pageLine,
+          `🏭 สาขาที่ผลิต: ${job.production_branch || "-"}`,
+          Number(job.price) > 0 ? `💵 ราคา: ${baht(job.price)}` : null,
+          creator ? `✍️ สร้างโดย: ${creator}` : null,
+          "",
+          "👉 ผู้จัดการสาขา กรุณาเข้าระบบกดอนุมัติเข้าผลิต"
+        ].filter(Boolean).join("\n");
 
     const res = await fetch(LINE_PUSH, {
       method: "POST",

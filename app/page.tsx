@@ -165,6 +165,7 @@ type SupabaseJobRow = {
   is_express?: boolean | null;
   production_branch?: string | null;
   income_branch?: string | null;
+  sales_page?: string | null;
   acceptance?: "pending" | "accepted" | "rejected" | null;
   reject_reason?: string | null;
   handoff_status?: string | null;
@@ -984,6 +985,7 @@ function jobFromRow(
     isExpress: row.is_express ?? false,
     productionBranch: row.production_branch ?? "",
     incomeBranch: row.income_branch ?? undefined,
+    salesPage: row.sales_page ?? undefined,
     acceptance: row.acceptance ?? "accepted",
     rejectReason: row.reject_reason ?? "",
     handoffStatus: row.handoff_status === "pending" || row.handoff_status === "accepted" ? row.handoff_status : undefined,
@@ -2154,6 +2156,14 @@ export default function Page() {
       }
     }
     void appendAudit("accepted job", job.id, "jobs", job.dbId ?? null);
+    // เด้ง LINE กลุ่มกลางแบบเรียลไทม์ ว่าผู้จัดการอนุมัติงานนี้แล้ว
+    if (supabase && job.dbId) {
+      try {
+        await supabase.functions.invoke("notify-new-order", { body: { job_id: job.dbId, event: "approved", by: currentUser.name } });
+      } catch {
+        /* แจ้ง LINE ล้มเหลว ไม่ให้กระทบการอนุมัติ */
+      }
+    }
   }
 
   async function rejectJob(jobId: string, reason: string) {
@@ -2656,6 +2666,7 @@ export default function Page() {
               deposit_waived: input?.depositWaived ?? false,
               production_branch: input?.productionBranch ?? null,
               income_branch: input?.incomeBranch || null,
+              sales_page: input?.salesPage || null,
               acceptance: jobAcceptance,
               reject_reason: null,
               status: "Quotation",
@@ -2760,6 +2771,7 @@ export default function Page() {
       depositWaived: input?.depositWaived ?? false,
       productionBranch: input?.productionBranch ?? "",
       incomeBranch: input?.incomeBranch || undefined,
+      salesPage: input?.salesPage || undefined,
       acceptance: jobAcceptance,
       rejectReason: "",
       status: "Quotation",
@@ -3771,8 +3783,11 @@ export default function Page() {
                     <div className="min-w-0">
                       <p className="truncate text-sm font-extrabold text-k2-ink">{job.id} · {job.title}</p>
                       <p className="truncate text-xs font-semibold text-k2-muted">
-                        {job.customerName || "-"}{job.productionBranch ? ` · ${job.productionBranch}` : ""}{job.isExpress ? " · ⚡️ด่วน" : ""}
+                        {job.customerName || "-"}{job.productionBranch ? ` · 🏭 ${job.productionBranch}` : ""}{job.isExpress ? " · ⚡️ด่วน" : ""}
                       </p>
+                      {job.salesPage ? (
+                        <p className="truncate text-xs font-bold text-teal-700">📣 เพจ {job.salesPage}{job.incomeBranch ? ` · รายได้→${job.incomeBranch}` : ""}</p>
+                      ) : null}
                     </div>
                     <span className="shrink-0 rounded-full bg-rose-100 px-3 py-1 text-xs font-bold text-rose-700">กดอนุมัติ</span>
                   </button>
@@ -5172,8 +5187,11 @@ function Board({
                     {job.acceptance === "pending" ? (
                       <div className="space-y-2">
                         <p className="rounded-lg bg-amber-100/80 px-2 py-1 text-[11px] font-bold text-amber-800">
-                          รอผู้จัดการสาขายอมรับ{job.productionBranch ? ` · ${job.productionBranch}` : ""}
+                          รอผู้จัดการสาขายอมรับ{job.productionBranch ? ` · 🏭 ${job.productionBranch}` : ""}
                         </p>
+                        {job.salesPage ? (
+                          <p className="rounded-lg bg-teal-50 px-2 py-1 text-[11px] font-bold text-teal-700">📣 เพจ {job.salesPage}{job.incomeBranch ? ` · รายได้→${job.incomeBranch}` : ""}</p>
+                        ) : null}
                         {canAccept(job) ? (
                           rejectingId === job.id ? (
                             <div className="space-y-2">
