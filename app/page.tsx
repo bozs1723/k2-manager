@@ -1845,11 +1845,22 @@ export default function Page() {
       : jobs.filter((job) => !job.productionBranch || job.productionBranch === currentUser.branch);
     // ฝ่ายผลิต (ดีไซเนอร์/ผลิต/แพ็ก) เห็นเฉพาะงานที่ยืนยันมัดจำแล้ว
     // งานเก่าที่ไม่มีสลิป (ก่อนมีระบบนี้) ไม่ถูกกั้น เพื่อไม่ให้งานเดิมหายจากคิว
-    if (["Designer", "Production Staff", "Packing Staff"].includes(currentUser.role)) {
-      return byBranch.filter((job) => job.depositConfirmed || (!job.depositSlip && !job.depositWaived));
+    const depositOk = (job: Job) => job.depositConfirmed || (!job.depositSlip && !job.depositWaived);
+    const unassigned = (name?: string) => !name || name === "Unassigned";
+    // ดีไซเนอร์: เห็นเฉพาะงานที่ "มอบหมายให้ตัวเอง" เท่านั้น (ผู้จัดการมอบหมายให้แล้ว อีกคนจะไม่เห็น)
+    if (currentUser.role === "Designer") {
+      return byBranch.filter((job) => depositOk(job) && job.assignedDesigner === currentUser.name);
+    }
+    // ฝ่ายผลิต: เห็นเฉพาะงานที่มอบหมายให้ตัวเอง หรือยังไม่ได้มอบหมาย (กันงานหลุดถ้ายังไม่ระบุคน)
+    if (currentUser.role === "Production Staff") {
+      return byBranch.filter((job) => depositOk(job) && (job.assignedProduction === currentUser.name || unassigned(job.assignedProduction)));
+    }
+    // ฝ่ายแพ็ก: เห็นงานทั้งสาขา (ไม่มีการมอบหมายรายคน)
+    if (currentUser.role === "Packing Staff") {
+      return byBranch.filter(depositOk);
     }
     return byBranch;
-  }, [jobs, currentUser.role, currentUser.branch]);
+  }, [jobs, currentUser.role, currentUser.branch, currentUser.name]);
 
   const filteredJobs = useMemo(() => {
     const normalized = query.trim().toLowerCase();
