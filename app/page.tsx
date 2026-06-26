@@ -3611,7 +3611,7 @@ export default function Page() {
   if (!isAuthed) {
     return (
       <main className="min-h-screen px-5 py-8 text-k2-ink sm:px-8">
-        <section className="mx-auto grid min-h-[calc(100vh-4rem)] max-w-6xl items-center gap-8 lg:grid-cols-[1.05fr_0.95fr]">
+        <section className="mx-auto grid min-h-[calc(100dvh-4rem)] max-w-6xl items-center gap-8 lg:grid-cols-[1.05fr_0.95fr]">
           <div className="space-y-7">
             <div className="inline-flex items-center gap-2 rounded-full border border-white/70 bg-white/65 px-4 py-2 text-sm font-semibold shadow-sm backdrop-blur">
               <Sparkles className="h-4 w-4 text-violet-500" />
@@ -3799,7 +3799,7 @@ export default function Page() {
         </div>
       ) : null}
       <div className="mx-auto flex max-w-[1800px] gap-4">
-        <aside className="glass soft-scrollbar sticky top-5 hidden h-[calc(100vh-2.5rem)] w-72 shrink-0 overflow-y-auto rounded-[1.7rem] p-4 lg:block">
+        <aside className="glass soft-scrollbar sticky top-5 hidden h-[calc(100dvh-2.5rem)] w-72 shrink-0 overflow-y-auto rounded-[1.7rem] p-4 lg:block">
           <BrandBlock currentUser={currentUserPrefs} onEditProfile={() => setShowPersonalization(true)} />
           <Nav activeView={activeView} items={menuItems} onChange={setActiveView} />
           <div className="mt-6 rounded-3xl bg-white/55 p-4">
@@ -4039,7 +4039,7 @@ export default function Page() {
                     transition={{ duration: 0.22 }}
                     className="overflow-hidden"
                   >
-                    <div className="soft-scrollbar mt-2 grid max-h-[60vh] grid-cols-4 gap-2 overflow-y-auto sm:grid-cols-5">
+                    <div className="soft-scrollbar mt-2 grid max-h-[70dvh] grid-cols-4 gap-2 overflow-y-auto sm:grid-cols-5">
                       {menuItems.map(({ label: item, icon: Icon }) => (
                         <button
                           key={item}
