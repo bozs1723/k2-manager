@@ -2381,8 +2381,8 @@ export default function Page() {
         setDataError("เฉพาะเจ้าของเท่านั้นที่อนุมัติยกเว้นมัดจำได้");
         return;
       }
-    } else if (!["Owner", "Manager", "Admin"].includes(currentUser.role)) {
-      setDataError("เฉพาะเจ้าของ/ผู้จัดการ/แอดมินเท่านั้นที่ยืนยันยอดมัดจำได้");
+    } else if (!can("manage_finance") && !["Owner", "Manager", "Admin"].includes(currentUser.role)) {
+      setDataError("เฉพาะฝ่ายการเงิน/เจ้าของ/ผู้จัดการ/แอดมินเท่านั้นที่ยืนยันยอดมัดจำได้");
       return;
     }
     setJobs((current) => current.map((job) => (job.id === jobId ? { ...job, depositConfirmed: true, depositConfirmedBy: currentUser.name } : job)));
@@ -4212,7 +4212,7 @@ export default function Page() {
                   <>
                   <LineInvitePanel job={selectedJob} customer={customerRecords.find((item) => item.id === selectedJob.customerId)} onMarkFriend={markCustomerLineFriend} />
                   <HandoffPanel job={selectedJob} currentUser={currentUser} onSubmit={submitHandoff} onAccept={acceptHandoff} onReject={rejectHandoff} />
-                  <JobDetail job={selectedJob} companyProfile={companyProfile} canSeeMoney={canSeeMoney} canEditPayment={can("edit_payment")} canDeleteJob={can("delete_job")} canConfirmDeposit={["Owner", "Manager", "Admin"].includes(currentUser.role)} canApproveWaiver={currentUser.role === "Owner"} onPayment={updatePayment} onConfirmDeposit={confirmDeposit} onReceiveBalance={receiveBalance} onComment={addComment} onMove={requestMove} onDelete={removeJob} teamMembers={teamMembers} canAssign={can("assign_staff") && canAcceptJob(selectedJob)} onAssign={assignStaff} canEditJob={can("edit_job") && (currentUser.role === "Owner" || !["Ready for Production", "In Production", "QC", "Packing", "Delivered / Picked Up", "Completed", "Cancelled"].includes(selectedJob.status))} onUpdateJob={updateJob} canAttach={can("edit_job")} onUploadFile={uploadJobFile} onDeleteFile={removeJobFile} />
+                  <JobDetail job={selectedJob} companyProfile={companyProfile} canSeeMoney={canSeeMoney} canEditPayment={can("edit_payment")} canDeleteJob={can("delete_job")} canConfirmDeposit={can("manage_finance") || ["Owner", "Manager", "Admin"].includes(currentUser.role)} canApproveWaiver={currentUser.role === "Owner"} onPayment={updatePayment} onConfirmDeposit={confirmDeposit} onReceiveBalance={receiveBalance} onComment={addComment} onMove={requestMove} onDelete={removeJob} teamMembers={teamMembers} canAssign={can("assign_staff") && canAcceptJob(selectedJob)} onAssign={assignStaff} canEditJob={can("edit_job") && (currentUser.role === "Owner" || !["Ready for Production", "In Production", "QC", "Packing", "Delivered / Picked Up", "Completed", "Cancelled"].includes(selectedJob.status))} onUpdateJob={updateJob} canAttach={can("edit_job")} onUploadFile={uploadJobFile} onDeleteFile={removeJobFile} />
                   </>
                 ) : (
                   <EmptyState title="ยังไม่มีงานในระบบ" text="เริ่มจากสร้างลูกค้าและสร้างงานแรกได้เลย" action={() => setActiveView("Create Job")} />
@@ -5112,8 +5112,33 @@ function Board({
 }) {
   const [rejectingId, setRejectingId] = useState<string | null>(null);
   const [rejectText, setRejectText] = useState("");
+  // แถบเลื่อนแนวนอนด้านบน (sticky) ซิงก์กับบอร์ด — กันบอร์ดสูงแล้วเลื่อนข้างไม่ถึง scrollbar ล่าง
+  const topScrollRef = useRef<HTMLDivElement>(null);
+  const boardScrollRef = useRef<HTMLDivElement>(null);
+  const [boardWidth, setBoardWidth] = useState(0);
+  useEffect(() => {
+    const el = boardScrollRef.current;
+    if (!el) return;
+    const update = () => setBoardWidth(el.scrollWidth);
+    update();
+    const ro = new ResizeObserver(update);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [jobs]);
   return (
-    <div className="soft-scrollbar flex gap-4 overflow-x-auto pb-4">
+    <>
+      <div
+        ref={topScrollRef}
+        onScroll={() => { if (boardScrollRef.current && topScrollRef.current) boardScrollRef.current.scrollLeft = topScrollRef.current.scrollLeft; }}
+        className="soft-scrollbar sticky top-2 z-20 mb-2 overflow-x-auto rounded-full bg-white/40"
+      >
+        <div style={{ width: boardWidth, height: 8 }} />
+      </div>
+      <div
+        ref={boardScrollRef}
+        onScroll={() => { if (boardScrollRef.current && topScrollRef.current) topScrollRef.current.scrollLeft = boardScrollRef.current.scrollLeft; }}
+        className="soft-scrollbar flex gap-4 overflow-x-auto pb-4"
+      >
       {statuses.map((status) => {
         const columnJobs = jobs.filter((job) => job.status === status);
         return (
@@ -5248,7 +5273,8 @@ function Board({
           </section>
         );
       })}
-    </div>
+      </div>
+    </>
   );
 }
 
