@@ -2130,11 +2130,12 @@ export default function Page() {
     setPendingMove({ jobId, from: job.status, to: nextStatus });
   }
 
-  // ยอมรับงานได้: เจ้าของ (ทุกสาขา) หรือ ผจก./แอดมิน เฉพาะสาขาประจำตัวเอง
+  // ยอมรับงานได้: เจ้าของ (ทุกสาขา) หรือ ผจก./แอดมิน เฉพาะงานที่ผลิตที่สาขาตัวเองเท่านั้น (ต้องตรงเป๊ะ)
+  // ไม่มี fallback "งานไม่มีสาขา = เห็นทุกคน" อีก เพื่อกันงานสาขาอื่น (เช่น DTG พระรามเก้า) เด้งให้ผจก.พะเยา
   function canAcceptJob(job: Job) {
     if (currentUser.role === "Owner") return true;
     if (currentUser.role === "Manager" || currentUser.role === "Admin") {
-      return !currentUser.branch || !job.productionBranch || job.productionBranch === currentUser.branch;
+      return !!currentUser.branch && job.productionBranch === currentUser.branch;
     }
     return false;
   }
