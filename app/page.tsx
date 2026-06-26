@@ -2116,9 +2116,9 @@ export default function Page() {
       setDataError(`ต้องส่งตรวจผ่านปุ่ม "${sendGate.label}" ก่อน (กันงานข้ามขั้น)`);
       return;
     }
-    // ด่านการเงิน 1: ยืนยันมัดจำ ทำได้เฉพาะฝ่ายการเงิน/เจ้าของ
-    if (nextStatus === "Deposit Confirmed" && !can("manage_finance")) {
-      setDataError("เฉพาะฝ่ายการเงิน (หรือเจ้าของ) เท่านั้นที่ยืนยันมัดจำได้");
+    // ด่านการเงิน 1: ยืนยันมัดจำ ทำได้โดยฝ่ายการเงิน หรือ เจ้าของ/ผู้จัดการ/แอดมิน
+    if (nextStatus === "Deposit Confirmed" && !can("manage_finance") && !["Owner", "Manager", "Admin"].includes(currentUser.role)) {
+      setDataError("เฉพาะฝ่ายการเงิน/เจ้าของ/ผู้จัดการ/แอดมินเท่านั้นที่ยืนยันมัดจำได้");
       return;
     }
     // ด่านการเงิน 2: ห้ามข้ามเข้าขั้นผลิต จนกว่าฝ่ายการเงินจะยืนยันมัดจำ (สถานะต้องถึง "มัดจำแล้ว" ก่อน)
