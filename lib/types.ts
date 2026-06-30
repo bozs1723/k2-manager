@@ -183,6 +183,16 @@ export type FileAsset = {
   url?: string;
 };
 
+// อาร์ตเวิร์กที่ดีไซเนอร์ "วาง" ลงในใบสั่งงาน (รูปงานที่ออกแบบเสร็จ + ป้ายกำกับ + จำนวน)
+// ใช้แสดงในใบสั่งงานสำหรับฝ่ายผลิตเอาไปปริ้น
+export type ArtworkItem = {
+  id: string;
+  url: string;
+  label?: string;   // เช่น "สแตนดี้", "พวงกุญแจลายเขียว"
+  qty?: number;      // จำนวนชิ้นของรายการนี้
+  note?: string;     // โน้ตการผลิต (ขนาด/วัสดุ/สี)
+};
+
 export type StatusEvent = {
   id: string;
   from: JobStatus | "Created";
@@ -226,6 +236,7 @@ export type Job = {
   description: string;
   quantity: number;
   files: FileAsset[];
+  artwork?: ArtworkItem[];
   orderDate: string;
   dueDate: string;
   priority: Priority;
