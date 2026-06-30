@@ -46,7 +46,7 @@ import {
   Zap
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
-import { customers as initialCustomers, initialAuditLog, initialJobs, statuses, team as initialTeam } from "@/lib/mock-data";
+import { customers as initialCustomers, initialAuditLog, initialJobs, statuses, team as initialTeam } from "@/lib/mock-data"; import ExecutiveDashboard from "@/components/ExecutiveDashboard";
 import { createSupabaseAuthWorker, isSupabaseConfigured, supabase } from "@/lib/supabase";
 import { CUSTOMER_CODE_ADMINS, CUSTOMER_CODE_PAGES, customerCodeYear, formatCustomerCode, nextCustomerSeq } from "@/lib/customer-code";
 import { checkGeofence, lateMinutes } from "@/lib/attendance";
@@ -476,7 +476,7 @@ const initialCompanyProfile: CompanyProfile = {
 };
 
 const viewLabel: Record<string, string> = {
-  Dashboard: "แดชบอร์ด",
+  Dashboard: "แดชบอร์ด", Executive: "ภาพรวมผู้บริหาร",
   "My Jobs": "งานของฉัน",
   Board: "บอร์ดคิวงาน",
   Completed: "งานที่เสร็จแล้ว",
@@ -1197,7 +1197,7 @@ export default function Page() {
   const navigationItems = useMemo(
     () =>
       [
-        { label: "Dashboard", icon: LayoutDashboard, visible: currentRolePermissions.includes("view_dashboard") },
+        { label: "Dashboard", icon: LayoutDashboard, visible: currentRolePermissions.includes("view_dashboard") }, { label: "Executive", icon: BarChart3, visible: currentRolePermissions.includes("view_finance") },
         { label: "My Jobs", icon: ListTodo, visible: true },
         { label: "Board", icon: ClipboardList, visible: currentRolePermissions.includes("view_dashboard") },
         { label: "Completed", icon: CheckCircle2, visible: currentRolePermissions.includes("assign_staff") },
@@ -4098,7 +4098,7 @@ export default function Page() {
 
           {dataLoading && jobs.length === 0 ? <LoadingSkeleton /> : (
           <AnimatePresence>
-            {activeView === "Dashboard" && (
+            {activeView === "Executive" && <ExecutiveDashboard jobs={jobs} />} {activeView === "Dashboard" && (
               <motion.div key="dashboard" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }}>
                 <Dashboard metrics={metrics} jobs={filteredJobs} canSeeMoney={canSeeMoney} onSelect={openJobDetail} />
               </motion.div>
