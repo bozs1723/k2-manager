@@ -38,6 +38,8 @@ import {
   Sparkles,
   Settings,
   Trash2,
+  Truck,
+  PackageCheck,
   Upload,
   UserPlus,
   UserRound,
@@ -52,7 +54,8 @@ import { CUSTOMER_CODE_ADMINS, CUSTOMER_CODE_PAGES, customerCodeYear, formatCust
 import { checkGeofence, lateMinutes } from "@/lib/attendance";
 import { branchForJobType } from "@/lib/job-routing";
 import { computeVat, normalizeVatMode, vatModeLabel, VAT_MODES, type VatMode } from "@/lib/vat";
-import type { AppNotification, Attendance, AuditEvent, BranchSetting, Customer, ExpressRequest, FileAsset, Holiday, Job, JobStatus, JobType, Lead, LeaveRequest, Overtime, PaymentStatus, Priority, Quotation, QuoteStatus, Role, TeamMember } from "@/lib/types";
+import { buildFlashPickupInput, flashTrackingUrl, isFlashConfigured, PARCEL_CATEGORY_OPTIONS, requestFlashPickup } from "@/lib/flash";
+import type { AppNotification, Attendance, AuditEvent, BranchSetting, Customer, ExpressRequest, FileAsset, Holiday, Job, JobStatus, JobType, Lead, LeaveRequest, Overtime, PaymentStatus, Priority, Quotation, QuoteStatus, Role, Shipment, TeamMember } from "@/lib/types";
 
 type ImportedCustomer = Pick<Customer, "name" | "phone" | "lineId" | "email"> & {
   notes: string;
@@ -188,6 +191,8 @@ type SupabaseJobRow = {
   deposit_waived?: boolean | null;
   balance_slip?: string | null;
   balance_received_date?: string | null;
+  shipping?: Shipment | null;
+  tracking_number?: string | null;
   created_by?: string | null;
   created_at: string;
 };
@@ -1010,6 +1015,7 @@ function jobFromRow(
     remainingBalance: Number(row.remaining_balance),
     paymentStatus: row.payment_status,
     internalNotes: row.internal_notes ?? "",
+    shipping: row.shipping ?? undefined,
     comments: comments.filter((comment) => comment.job_id === row.id).map((comment) => ({
       id: comment.id,
       by: comment.author_id ? profileNames.get(comment.author_id) ?? "K2 User" : "K2 User",
@@ -1156,6 +1162,7 @@ export default function Page() {
     setPersonalizationVersion((value) => value + 1);
   }
   const [pendingMove, setPendingMove] = useState<{ jobId: string; from: JobStatus; to: JobStatus } | null>(null);
+  const [shippingJobId, setShippingJobId] = useState<string | null>(null);
   const [hrRecords, setHrRecords] = useState<Record<string, { salary: number; position: string; startDate: string }>>({});
   const [branchSettings, setBranchSettings] = useState<Record<string, BranchSetting>>({});
   const [myAttendance, setMyAttendance] = useState<Attendance | null>(null);
@@ -2349,6 +2356,91 @@ export default function Page() {
     }
     void appendAudit(`moved status to ${nextStatus}`, jobId, "jobs", existingJob.dbId);
     notifyAssignees("status_moved", existingJob, `งาน ${existingJob.id} ย้ายไป "${statusLabel[nextStatus]}" แล้ว`);
+  }
+
+  // กด "ส่งสินค้า": บันทึกข้อมูลพัสดุ + เรียกขนส่ง (Flash) เข้ารับ + ย้ายสถานะเป็นจัดส่งแล้ว
+  async function shipJob(jobId: string, draft: Shipment): Promise<{ ok: boolean; message: string }> {
+    if (!can("move_status")) {
+      setDataError("บทบาทนี้ยังไม่มีสิทธิ์ส่งสินค้า/ย้ายสถานะงาน");
+      return { ok: false, message: "ไม่มีสิทธิ์ส่งสินค้า" };
+    }
+    const existingJob = jobs.find((job) => job.id === jobId);
+    if (!existingJob) return { ok: false, message: "ไม่พบงาน" };
+
+    let shipment: Shipment = {
+      ...draft,
+      shippedAt: new Date().toISOString(),
+      shippedBy: currentUser.name,
+      status: "draft"
+    };
+
+    // เรียก Flash เข้ารับ (ถ้าเลือก Flash และตั้งค่า API แล้ว) — ถ้ายังไม่ตั้งค่าจะเป็น draft
+    let resultMessage = "บันทึกข้อมูลจัดส่งแล้ว";
+    if (/flash/i.test(draft.courier)) {
+      const flash = await requestFlashPickup(buildFlashPickupInput(existingJob.id, draft));
+      resultMessage = flash.message;
+      if (flash.ok) {
+        shipment = { ...shipment, status: "booked", trackingNumber: flash.trackingNumber, sortCode: flash.sortCode, message: flash.message };
+      } else if (flash.draft) {
+        shipment = { ...shipment, status: "draft", message: flash.message };
+      } else {
+        shipment = { ...shipment, status: "failed", message: flash.message };
+      }
+    }
+
+    const finishedStatuses: JobStatus[] = ["Delivered / Picked Up", "Completed", "Cancelled"];
+    const nextStatus: JobStatus = finishedStatuses.includes(existingJob.status) ? existingJob.status : "Delivered / Picked Up";
+    const statusChanged = nextStatus !== existingJob.status;
+
+    setJobs((current) =>
+      current.map((job) => {
+        if (job.id !== jobId) return job;
+        return {
+          ...job,
+          shipping: shipment,
+          status: nextStatus,
+          statusHistory: statusChanged
+            ? [
+                ...job.statusHistory,
+                { id: crypto.randomUUID(), from: job.status, to: nextStatus, by: currentUser.name, at: new Date().toLocaleString("en-GB") }
+              ]
+            : job.statusHistory
+        };
+      })
+    );
+
+    if (supabase && existingJob.dbId && uuidPattern.test(currentUser.id)) {
+      const { error } = await supabase
+        .from("jobs")
+        .update({ shipping: shipment, tracking_number: shipment.trackingNumber ?? null, status: nextStatus })
+        .eq("id", existingJob.dbId);
+      if (error) {
+        setDataError(error.message);
+        void refreshWorkspaceData();
+        return { ok: false, message: error.message };
+      }
+      if (statusChanged) {
+        await supabase.from("job_status_history").insert({
+          job_id: existingJob.dbId,
+          from_status: existingJob.status,
+          to_status: nextStatus,
+          changed_by: currentUser.id
+        });
+      }
+    }
+
+    void appendAudit(
+      shipment.trackingNumber ? `shipped via ${shipment.courier} (${shipment.trackingNumber})` : `shipped via ${shipment.courier}`,
+      jobId,
+      "jobs",
+      existingJob.dbId
+    );
+    notifyAssignees(
+      "status_moved",
+      existingJob,
+      `งาน ${existingJob.id} ส่งสินค้าแล้วผ่าน ${shipment.courier}${shipment.trackingNumber ? ` · เลขพัสดุ ${shipment.trackingNumber}` : ""}`
+    );
+    return { ok: shipment.status !== "failed", message: resultMessage };
   }
 
   async function updatePayment(jobId: string, deposit: number) {
@@ -4223,7 +4315,7 @@ export default function Page() {
                   <>
                   <LineInvitePanel job={selectedJob} customer={customerRecords.find((item) => item.id === selectedJob.customerId)} onMarkFriend={markCustomerLineFriend} />
                   <HandoffPanel job={selectedJob} currentUser={currentUser} onSubmit={submitHandoff} onAccept={acceptHandoff} onReject={rejectHandoff} />
-                  <JobDetail job={selectedJob} companyProfile={companyProfile} canSeeMoney={canSeeMoney} canEditPayment={can("edit_payment")} canDeleteJob={can("delete_job")} canConfirmDeposit={can("manage_finance") || ["Owner", "Manager", "Admin"].includes(currentUser.role)} canApproveWaiver={currentUser.role === "Owner"} onPayment={updatePayment} onConfirmDeposit={confirmDeposit} onReceiveBalance={receiveBalance} onComment={addComment} onMove={requestMove} onDelete={removeJob} teamMembers={teamMembers} canAssign={can("assign_staff") && canAcceptJob(selectedJob)} onAssign={assignStaff} canEditJob={can("edit_job") && (currentUser.role === "Owner" || !["Ready for Production", "In Production", "QC", "Packing", "Delivered / Picked Up", "Completed", "Cancelled"].includes(selectedJob.status))} onUpdateJob={updateJob} canAttach={can("edit_job")} onUploadFile={uploadJobFile} onDeleteFile={removeJobFile} />
+                  <JobDetail job={selectedJob} companyProfile={companyProfile} canSeeMoney={canSeeMoney} canEditPayment={can("edit_payment")} canDeleteJob={can("delete_job")} canConfirmDeposit={can("manage_finance") || ["Owner", "Manager", "Admin"].includes(currentUser.role)} canApproveWaiver={currentUser.role === "Owner"} onPayment={updatePayment} onConfirmDeposit={confirmDeposit} onReceiveBalance={receiveBalance} onComment={addComment} onMove={requestMove} onDelete={removeJob} canShip={can("move_status")} onShip={(jobId) => setShippingJobId(jobId)} teamMembers={teamMembers} canAssign={can("assign_staff") && canAcceptJob(selectedJob)} onAssign={assignStaff} canEditJob={can("edit_job") && (currentUser.role === "Owner" || !["Ready for Production", "In Production", "QC", "Packing", "Delivered / Picked Up", "Completed", "Cancelled"].includes(selectedJob.status))} onUpdateJob={updateJob} canAttach={can("edit_job")} onUploadFile={uploadJobFile} onDeleteFile={removeJobFile} />
                   </>
                 ) : (
                   <EmptyState title="ยังไม่มีงานในระบบ" text="เริ่มจากสร้างลูกค้าและสร้างงานแรกได้เลย" action={() => setActiveView("Create Job")} />
@@ -4322,6 +4414,21 @@ export default function Page() {
           </div>
         </div>
       ) : null}
+
+      {shippingJobId ? (() => {
+        const shipJobTarget = jobs.find((job) => job.id === shippingJobId);
+        if (!shipJobTarget) return null;
+        const shipCustomer = customerRecords.find((customer) => customer.id === shipJobTarget.customerId);
+        return (
+          <ShipModal
+            job={shipJobTarget}
+            customer={shipCustomer}
+            flashConfigured={isFlashConfigured}
+            onSubmit={(shipment) => shipJob(shipJobTarget.id, shipment)}
+            onClose={() => setShippingJobId(null)}
+          />
+        );
+      })() : null}
 
       {showPersonalization ? (
         <PersonalizationModal
@@ -5482,6 +5589,213 @@ function PrintableDoc({ job, company, docType, docNumber, onClose }: { job: Job;
   );
 }
 
+function ShipModal({
+  job,
+  customer,
+  flashConfigured,
+  onSubmit,
+  onClose
+}: {
+  job: Job;
+  customer?: Customer;
+  flashConfigured: boolean;
+  onSubmit: (shipment: Shipment) => Promise<{ ok: boolean; message: string }>;
+  onClose: () => void;
+}) {
+  const defaultCategory: Record<JobType, string> = {
+    "DTG Shirt": "เสื้อผ้า / สิ่งทอ",
+    "UV Print": "ป้าย / งานพิมพ์",
+    "Laser Cut": "อะคริลิค / งานเปราะบาง",
+    Signage: "ป้าย / งานพิมพ์",
+    Acrylic: "อะคริลิค / งานเปราะบาง",
+    "3D Print": "ของพรีเมียม / ของชำร่วย",
+    Keychain: "ของพรีเมียม / ของชำร่วย",
+    Other: "สินค้าทั่วไป"
+  };
+  const s = job.shipping;
+  const [courier, setCourier] = useState(s?.courier ?? "Flash");
+  const [recipientName, setRecipientName] = useState(s?.recipientName ?? job.customerName ?? customer?.name ?? "");
+  const [recipientPhone, setRecipientPhone] = useState(s?.recipientPhone ?? job.phone ?? customer?.phone ?? "");
+  const [address, setAddress] = useState(s?.address ?? customer?.billingAddress ?? job.billingAddress ?? "");
+  const [subdistrict, setSubdistrict] = useState(s?.subdistrict ?? "");
+  const [district, setDistrict] = useState(s?.district ?? "");
+  const [province, setProvince] = useState(s?.province ?? "");
+  const [postalCode, setPostalCode] = useState(s?.postalCode ?? "");
+  const [parcelCategory, setParcelCategory] = useState(s?.parcelCategory ?? defaultCategory[job.type] ?? "สินค้าทั่วไป");
+  const [weightKg, setWeightKg] = useState(s?.weightKg ? String(s.weightKg) : "1");
+  const [widthCm, setWidthCm] = useState(s?.widthCm ? String(s.widthCm) : "");
+  const [lengthCm, setLengthCm] = useState(s?.lengthCm ? String(s.lengthCm) : "");
+  const [heightCm, setHeightCm] = useState(s?.heightCm ? String(s.heightCm) : "");
+  const [codEnabled, setCodEnabled] = useState(s?.codEnabled ?? job.remainingBalance > 0);
+  const [codAmount, setCodAmount] = useState(s?.codAmount != null ? String(s.codAmount) : job.remainingBalance > 0 ? String(job.remainingBalance) : "");
+  const [insured, setInsured] = useState(s?.insured ?? false);
+  const [insuredValue, setInsuredValue] = useState(s?.insuredValue != null ? String(s.insuredValue) : "");
+  const [note, setNote] = useState(s?.note ?? "");
+  const [error, setError] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [result, setResult] = useState<{ ok: boolean; message: string } | null>(null);
+
+  const isFlash = /flash/i.test(courier);
+  const field = "rounded-2xl border border-white/80 bg-white/85 px-4 py-3 text-sm font-semibold outline-none";
+
+  async function submit() {
+    setError("");
+    if (!recipientName.trim() || !recipientPhone.trim()) { setError("กรุณากรอกชื่อและเบอร์ผู้รับ"); return; }
+    if (!address.trim()) { setError("กรุณากรอกที่อยู่จัดส่ง"); return; }
+    const weight = Number(weightKg);
+    if (!(weight > 0)) { setError("กรุณากรอกน้ำหนัก (กก.) มากกว่า 0"); return; }
+    if (isFlash && (!province.trim() || !district.trim() || !postalCode.trim())) {
+      setError("Flash ต้องมีจังหวัด / อำเภอ-เขต / รหัสไปรษณีย์ ครบถ้วน");
+      return;
+    }
+    if (codEnabled && !(Number(codAmount) >= 0)) { setError("กรุณากรอกยอดเก็บเงินปลายทาง (COD)"); return; }
+    const shipment: Shipment = {
+      courier: courier.trim(),
+      recipientName: recipientName.trim(),
+      recipientPhone: recipientPhone.trim(),
+      address: address.trim(),
+      subdistrict: subdistrict.trim(),
+      district: district.trim(),
+      province: province.trim(),
+      postalCode: postalCode.trim(),
+      parcelCategory: parcelCategory.trim(),
+      weightKg: weight,
+      widthCm: widthCm ? Number(widthCm) : undefined,
+      lengthCm: lengthCm ? Number(lengthCm) : undefined,
+      heightCm: heightCm ? Number(heightCm) : undefined,
+      codEnabled,
+      codAmount: codEnabled ? Number(codAmount) : undefined,
+      insured,
+      insuredValue: insured && insuredValue ? Number(insuredValue) : undefined,
+      note: note.trim() || undefined
+    };
+    setSubmitting(true);
+    const res = await onSubmit(shipment);
+    setSubmitting(false);
+    setResult(res);
+    if (res.ok) {
+      window.setTimeout(onClose, 1400);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4 backdrop-blur-sm" onClick={onClose}>
+      <div className="glass-solid max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-[1.6rem] p-6" onClick={(event) => event.stopPropagation()}>
+        <div className="mb-4 flex items-center gap-3">
+          <div className="grid h-12 w-12 place-items-center rounded-2xl bg-k2-ink text-white"><Truck className="h-5 w-5" /></div>
+          <div className="min-w-0">
+            <h3 className="text-xl font-extrabold text-k2-ink">ส่งสินค้า · ข้อมูลพัสดุ</h3>
+            <p className="truncate text-sm font-semibold text-k2-muted">{job.id} · {job.title}</p>
+          </div>
+        </div>
+
+        {isFlash ? (
+          <p className={`mb-4 rounded-2xl px-4 py-2 text-xs font-bold ${flashConfigured ? "bg-emerald-50 text-emerald-700" : "bg-amber-50 text-amber-700"}`}>
+            {flashConfigured ? "✅ เชื่อม Flash API แล้ว — กดส่งจะเรียก Flash เข้ารับและออกเลขพัสดุอัตโนมัติ" : "⚠️ ยังไม่ได้เชื่อม Flash API — ระบบจะบันทึกข้อมูลพัสดุไว้ก่อน (ตั้งค่า NEXT_PUBLIC_FLASH_PICKUP_URL เพื่อเรียกเข้ารับอัตโนมัติ)"}
+          </p>
+        ) : null}
+
+        <div className="grid gap-3 sm:grid-cols-2">
+          <label className="space-y-1 sm:col-span-2">
+            <span className="text-sm font-semibold text-k2-muted">ขนส่ง</span>
+            <select value={courier} onChange={(event) => setCourier(event.target.value)} className={`w-full ${field}`}>
+              {["Flash", "Kerry", "J&T Express", "ไปรษณีย์ไทย", "Grab", "Lalamove", "อื่น ๆ"].map((option) => (
+                <option key={option} value={option}>{option}</option>
+              ))}
+            </select>
+          </label>
+          <label className="space-y-1">
+            <span className="text-sm font-semibold text-k2-muted">ชื่อผู้รับ</span>
+            <input value={recipientName} onChange={(event) => setRecipientName(event.target.value)} className={`w-full ${field}`} />
+          </label>
+          <label className="space-y-1">
+            <span className="text-sm font-semibold text-k2-muted">เบอร์ผู้รับ</span>
+            <input value={recipientPhone} onChange={(event) => setRecipientPhone(event.target.value)} className={`w-full ${field}`} />
+          </label>
+          <label className="space-y-1 sm:col-span-2">
+            <span className="text-sm font-semibold text-k2-muted">ที่อยู่ (บ้านเลขที่ / ถนน / รายละเอียด)</span>
+            <textarea value={address} onChange={(event) => setAddress(event.target.value)} className={`min-h-16 w-full ${field}`} placeholder="บ้านเลขที่ หมู่ ซอย ถนน" />
+          </label>
+          <label className="space-y-1">
+            <span className="text-sm font-semibold text-k2-muted">ตำบล / แขวง</span>
+            <input value={subdistrict} onChange={(event) => setSubdistrict(event.target.value)} className={`w-full ${field}`} />
+          </label>
+          <label className="space-y-1">
+            <span className="text-sm font-semibold text-k2-muted">อำเภอ / เขต{isFlash ? " *" : ""}</span>
+            <input value={district} onChange={(event) => setDistrict(event.target.value)} className={`w-full ${field}`} />
+          </label>
+          <label className="space-y-1">
+            <span className="text-sm font-semibold text-k2-muted">จังหวัด{isFlash ? " *" : ""}</span>
+            <input value={province} onChange={(event) => setProvince(event.target.value)} className={`w-full ${field}`} />
+          </label>
+          <label className="space-y-1">
+            <span className="text-sm font-semibold text-k2-muted">รหัสไปรษณีย์{isFlash ? " *" : ""}</span>
+            <input value={postalCode} onChange={(event) => setPostalCode(event.target.value)} inputMode="numeric" className={`w-full ${field}`} />
+          </label>
+          <label className="space-y-1 sm:col-span-2">
+            <span className="text-sm font-semibold text-k2-muted">ประเภทสินค้า</span>
+            <select value={parcelCategory} onChange={(event) => setParcelCategory(event.target.value)} className={`w-full ${field}`}>
+              {PARCEL_CATEGORY_OPTIONS.map((option) => (<option key={option} value={option}>{option}</option>))}
+            </select>
+          </label>
+          <label className="space-y-1">
+            <span className="text-sm font-semibold text-k2-muted">น้ำหนัก (กก.)</span>
+            <input value={weightKg} onChange={(event) => setWeightKg(event.target.value)} inputMode="decimal" className={`w-full ${field}`} />
+          </label>
+          <div className="grid grid-cols-3 gap-2">
+            <label className="space-y-1">
+              <span className="text-xs font-semibold text-k2-muted">กว้าง(ซม.)</span>
+              <input value={widthCm} onChange={(event) => setWidthCm(event.target.value)} inputMode="numeric" className={`w-full ${field}`} />
+            </label>
+            <label className="space-y-1">
+              <span className="text-xs font-semibold text-k2-muted">ยาว(ซม.)</span>
+              <input value={lengthCm} onChange={(event) => setLengthCm(event.target.value)} inputMode="numeric" className={`w-full ${field}`} />
+            </label>
+            <label className="space-y-1">
+              <span className="text-xs font-semibold text-k2-muted">สูง(ซม.)</span>
+              <input value={heightCm} onChange={(event) => setHeightCm(event.target.value)} inputMode="numeric" className={`w-full ${field}`} />
+            </label>
+          </div>
+          <label className="flex items-center gap-2 sm:col-span-2">
+            <input type="checkbox" checked={codEnabled} onChange={(event) => setCodEnabled(event.target.checked)} className="h-4 w-4" />
+            <span className="text-sm font-semibold text-k2-muted">เก็บเงินปลายทาง (COD)</span>
+          </label>
+          {codEnabled ? (
+            <label className="space-y-1 sm:col-span-2">
+              <span className="text-sm font-semibold text-k2-muted">ยอดเก็บปลายทาง (บาท)</span>
+              <input value={codAmount} onChange={(event) => setCodAmount(event.target.value)} inputMode="decimal" className={`w-full ${field}`} />
+            </label>
+          ) : null}
+          <label className="flex items-center gap-2 sm:col-span-2">
+            <input type="checkbox" checked={insured} onChange={(event) => setInsured(event.target.checked)} className="h-4 w-4" />
+            <span className="text-sm font-semibold text-k2-muted">ซื้อประกันพัสดุ</span>
+          </label>
+          {insured ? (
+            <label className="space-y-1 sm:col-span-2">
+              <span className="text-sm font-semibold text-k2-muted">มูลค่าที่แจ้งประกัน (บาท)</span>
+              <input value={insuredValue} onChange={(event) => setInsuredValue(event.target.value)} inputMode="decimal" className={`w-full ${field}`} />
+            </label>
+          ) : null}
+          <label className="space-y-1 sm:col-span-2">
+            <span className="text-sm font-semibold text-k2-muted">หมายเหตุถึงขนส่ง</span>
+            <input value={note} onChange={(event) => setNote(event.target.value)} className={`w-full ${field}`} placeholder="เช่น โทรก่อนเข้ารับ / สินค้าแตกหักง่าย" />
+          </label>
+        </div>
+
+        {error ? <p className="mt-3 rounded-2xl bg-rose-50 px-4 py-2 text-sm font-bold text-rose-600">{error}</p> : null}
+        {result ? <p className={`mt-3 rounded-2xl px-4 py-2 text-sm font-bold ${result.ok ? "bg-emerald-50 text-emerald-700" : "bg-rose-50 text-rose-600"}`}>{result.message}</p> : null}
+
+        <div className="mt-5 flex gap-3">
+          <button type="button" onClick={onClose} className="flex-1 rounded-2xl bg-white/70 px-4 py-3 font-bold text-k2-muted">ปิด</button>
+          <button type="button" onClick={submit} disabled={submitting} className="flex-1 rounded-2xl bg-k2-ink px-4 py-3 font-extrabold text-white disabled:opacity-50">
+            {submitting ? "กำลังส่ง..." : isFlash ? "ยืนยันส่ง · เรียก Flash เข้ารับ" : "ยืนยันส่งสินค้า"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function JobDetail({
   job,
   companyProfile,
@@ -5496,6 +5810,8 @@ function JobDetail({
   onComment,
   onMove,
   onDelete,
+  canShip,
+  onShip,
   teamMembers,
   canAssign,
   onAssign,
@@ -5518,6 +5834,8 @@ function JobDetail({
   onComment: (jobId: string, text: string) => void;
   onMove: (jobId: string, status: JobStatus) => void;
   onDelete: (jobId: string) => void;
+  canShip: boolean;
+  onShip: (jobId: string) => void;
   teamMembers: TeamMember[];
   canAssign: boolean;
   onAssign: (jobId: string, designer: string, production: string) => void;
@@ -5625,6 +5943,52 @@ function JobDetail({
           <Info label="ผู้รับผิดชอบผลิต" value={staffLabel(job.assignedProduction)} icon={Factory} />
           <Info label="โน้ตภายใน" value={job.internalNotes} icon={ClipboardList} />
         </div>
+
+        {(() => {
+          const readyToShip = (["QC", "Packing", "Delivered / Picked Up", "Completed"] as JobStatus[]).includes(job.status);
+          const ship = job.shipping;
+          if (!readyToShip && !ship) return null;
+          const statusBadge =
+            ship?.status === "booked"
+              ? { text: "เรียกขนส่งเข้ารับแล้ว", cls: "bg-emerald-100 text-emerald-700" }
+              : ship?.status === "failed"
+              ? { text: "เรียกขนส่งไม่สำเร็จ", cls: "bg-rose-100 text-rose-700" }
+              : ship
+              ? { text: "บันทึกข้อมูลแล้ว (ยังไม่เชื่อม API)", cls: "bg-amber-100 text-amber-700" }
+              : null;
+          return (
+            <div className="mt-5 rounded-3xl bg-white/60 p-5">
+              <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                <h4 className="flex items-center gap-2 font-semibold"><Truck className="h-4 w-4" /> การจัดส่งสินค้า</h4>
+                {statusBadge ? <span className={`rounded-full px-3 py-1 text-xs font-bold ${statusBadge.cls}`}>{statusBadge.text}</span> : null}
+              </div>
+              {ship ? (
+                <div className="space-y-2 text-sm font-semibold text-k2-muted">
+                  <p>🚚 ขนส่ง: <span className="text-k2-ink">{ship.courier}</span>{ship.codEnabled ? <span className="ml-2 rounded-lg bg-orange-50 px-2 py-0.5 text-xs text-orange-700">COD {money.format(ship.codAmount ?? 0)}</span> : null}</p>
+                  <p>👤 ผู้รับ: <span className="text-k2-ink">{ship.recipientName}</span> · {ship.recipientPhone}</p>
+                  <p>📍 {[ship.address, ship.subdistrict, ship.district, ship.province, ship.postalCode].filter(Boolean).join(" ")}</p>
+                  <p>📦 {ship.parcelCategory || "พัสดุ"} · {ship.weightKg} กก.{ship.widthCm || ship.lengthCm || ship.heightCm ? ` · ${ship.widthCm ?? "-"}×${ship.lengthCm ?? "-"}×${ship.heightCm ?? "-"} ซม.` : ""}</p>
+                  {ship.trackingNumber ? (
+                    <p>🔖 เลขพัสดุ: <a href={flashTrackingUrl(ship.trackingNumber)} target="_blank" rel="noreferrer" className="font-extrabold text-k2-ink underline">{ship.trackingNumber}</a></p>
+                  ) : null}
+                  {ship.message ? <p className="text-xs text-k2-muted">{ship.message}</p> : null}
+                  {ship.shippedBy ? <p className="text-xs text-k2-muted">ส่งโดย {ship.shippedBy}</p> : null}
+                </div>
+              ) : (
+                <p className="text-sm font-semibold text-k2-muted">งานพร้อมส่งแล้ว — กด “ส่งสินค้า” เพื่อกรอกข้อมูลพัสดุและเรียกขนส่งเข้ารับ</p>
+              )}
+              {canShip ? (
+                <button
+                  type="button"
+                  onClick={() => onShip(job.id)}
+                  className="mt-4 inline-flex items-center gap-2 rounded-2xl bg-k2-ink px-5 py-3 text-sm font-extrabold text-white"
+                >
+                  <PackageCheck className="h-4 w-4" /> {ship ? "แก้ไขข้อมูลจัดส่ง / เรียกขนส่งอีกครั้ง" : "ส่งสินค้า"}
+                </button>
+              ) : null}
+            </div>
+          );
+        })()}
 
         {canEditJob ? (
           <div className="mt-5 rounded-3xl bg-white/60 p-5">

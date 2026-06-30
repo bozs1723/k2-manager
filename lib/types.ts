@@ -84,6 +84,36 @@ export type Quotation = {
   createdAt: string;
 };
 
+// ข้อมูลการจัดส่ง/พัสดุ สำหรับเรียกขนส่ง (เช่น Flash) เข้ารับเมื่องานเสร็จ
+export type ShipmentStatus = "draft" | "booked" | "failed";
+
+export type Shipment = {
+  courier: string;            // ขนส่ง เช่น Flash / Kerry / J&T / ไปรษณีย์ไทย
+  recipientName: string;      // ชื่อผู้รับ (ลิงก์จากลูกค้า)
+  recipientPhone: string;     // เบอร์ผู้รับ
+  address: string;            // บ้านเลขที่ / รายละเอียดที่อยู่
+  subdistrict: string;        // ตำบล / แขวง
+  district: string;           // อำเภอ / เขต
+  province: string;           // จังหวัด
+  postalCode: string;         // รหัสไปรษณีย์
+  parcelCategory: string;     // ประเภทสินค้า
+  weightKg: number;           // น้ำหนัก (กก.)
+  widthCm?: number;
+  lengthCm?: number;
+  heightCm?: number;
+  codEnabled: boolean;        // เก็บเงินปลายทาง
+  codAmount?: number;         // ยอด COD
+  insured?: boolean;          // ประกันพัสดุ
+  insuredValue?: number;      // มูลค่าที่แจ้งประกัน
+  note?: string;              // หมายเหตุถึงขนส่ง
+  trackingNumber?: string;    // เลขพัสดุจากขนส่ง (เช่น pno ของ Flash)
+  sortCode?: string;          // รหัสคัดแยกของ Flash (ถ้ามี)
+  status?: ShipmentStatus;    // draft = ยังไม่เชื่อม API, booked = เรียกเข้ารับแล้ว, failed = ล้มเหลว
+  message?: string;           // ข้อความผลลัพธ์จากขนส่ง
+  shippedAt?: string;         // เวลาเรียกเข้ารับ
+  shippedBy?: string;         // พนักงานที่กดส่ง
+};
+
 export type ExpressRequest = {
   id: string;
   requestedById: string;
@@ -257,6 +287,7 @@ export type Job = {
   remainingBalance: number;
   paymentStatus: PaymentStatus;
   internalNotes: string;
+  shipping?: Shipment;
   comments: Comment[];
   statusHistory: StatusEvent[];
 };
