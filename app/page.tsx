@@ -2168,14 +2168,7 @@ export default function Page() {
       }
     }
     void appendAudit("accepted job", job.id, "jobs", job.dbId ?? null);
-    // เด้ง LINE กลุ่มกลางแบบเรียลไทม์ ว่าผู้จัดการอนุมัติงานนี้แล้ว
-    if (supabase && job.dbId) {
-      try {
-        await supabase.functions.invoke("notify-new-order", { body: { job_id: job.dbId, event: "approved", by: currentUser.name } });
-      } catch {
-        /* แจ้ง LINE ล้มเหลว ไม่ให้กระทบการอนุมัติ */
-      }
-    }
+    // หมายเหตุ: ปิดการเด้ง LINE "ผู้จัดการอนุมัติ" ต่อทุกครั้ง เพื่อประหยัดโควต้า LINE
   }
 
   async function rejectJob(jobId: string, reason: string) {
@@ -2723,14 +2716,8 @@ export default function Page() {
           }
         }
         await appendAudit("created job", insertedJobNumber, "jobs", insertedJob.id);
-        // งานที่รอผู้จัดการอนุมัติ → ยิงแจ้งเตือนเข้ากลุ่ม LINE กลาง (ไม่บล็อกการสร้างงานถ้าล้มเหลว)
-        if (jobAcceptance === "pending") {
-          try {
-            await supabase.functions.invoke("notify-new-order", { body: { job_id: insertedJob.id } });
-          } catch {
-            /* แจ้งเตือน LINE ล้มเหลว ไม่ให้กระทบการสร้างงาน */
-          }
-        }
+        // หมายเหตุ: ปิดการเด้ง LINE "ออเดอร์ใหม่" ต่อทุกงาน เพื่อประหยัดโควต้า LINE
+        // ผู้จัดการรับรู้งานรออนุมัติผ่านหน้าจอกระพริบในแอป (ไม่กิน LINE)
         notifyAssignees(
           "assigned",
           {
