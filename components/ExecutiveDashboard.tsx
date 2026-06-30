@@ -161,7 +161,7 @@ return (
 
 <div className="rounded-3xl bg-white p-5 shadow-glass">
 <h3 className="mb-1 text-lg font-bold">กำหนดส่ง 7 วัน</h3>
-<p className="mb-4 text-xs text-k2-muted">งานเลยกำหนดถูกกองไว้ที่ "วันนี้"</p>
+<p className="mb-4 text-xs text-k2-muted">งานเลยกำหนดถูกกองไว้ที่ &quot;วันนี้&quot;</p>
 <div className="flex h-44 items-end justify-between gap-2">
 {m.trend.map((t, i) => (
 <div key={i} className="flex flex-1 flex-col items-center gap-1">
