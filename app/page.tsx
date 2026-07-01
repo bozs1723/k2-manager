@@ -2166,8 +2166,10 @@ export default function Page() {
   // ยอมรับงานได้: เจ้าของ (ทุกสาขา) หรือ ผจก./แอดมิน เฉพาะงานที่ผลิตที่สาขาตัวเองเท่านั้น (ต้องตรงเป๊ะ)
   // ไม่มี fallback "งานไม่มีสาขา = เห็นทุกคน" อีก เพื่อกันงานสาขาอื่น (เช่น DTG พระรามเก้า) เด้งให้ผจก.พะเยา
   function canAcceptJob(job: Job) {
-    if (currentUser.role === "Owner") return true;
-    if (currentUser.role === "Manager" || currentUser.role === "Admin") {
+    // ใช้บทบาทรวม (บทบาทหลัก + บทบาทเสริม) — กันเคสเจ้าของที่ตั้ง Owner เป็นบทบาทเสริม แล้วกดอนุมัติไม่ได้
+    const roles: Role[] = [currentUser.role, ...(currentUser.roles ?? [])];
+    if (roles.includes("Owner")) return true;
+    if (roles.includes("Manager") || roles.includes("Admin")) {
       return !!currentUser.branch && job.productionBranch === currentUser.branch;
     }
     return false;
@@ -4277,7 +4279,7 @@ export default function Page() {
                   <>
                   <LineInvitePanel job={selectedJob} customer={customerRecords.find((item) => item.id === selectedJob.customerId)} onMarkFriend={markCustomerLineFriend} />
                   <HandoffPanel job={selectedJob} currentUser={currentUser} onSubmit={submitHandoff} onAccept={acceptHandoff} onReject={rejectHandoff} />
-                  <JobDetail job={selectedJob} companyProfile={companyProfile} canSeeMoney={canSeeMoney} canEditPayment={can("edit_payment")} canDeleteJob={can("delete_job")} canConfirmDeposit={can("manage_finance") || ["Owner", "Manager", "Admin"].includes(currentUser.role)} canApproveWaiver={currentUser.role === "Owner"} onPayment={updatePayment} onConfirmDeposit={confirmDeposit} onReceiveBalance={receiveBalance} onComment={addComment} onMove={requestMove} onDelete={removeJob} teamMembers={teamMembers} canAssign={can("assign_staff") && canAcceptJob(selectedJob)} onAssign={assignStaff} canEditJob={can("edit_job") && (currentUser.role === "Owner" || !["Ready for Production", "In Production", "QC", "Packing", "Delivered / Picked Up", "Completed", "Cancelled"].includes(selectedJob.status))} onUpdateJob={updateJob} canAttach={can("edit_job")} onUploadFile={uploadJobFile} onDeleteFile={removeJobFile} customer={customerRecords.find((c) => c.id === selectedJob.customerId)} canArtwork={can("edit_job") || (currentUser.role === "Designer" && selectedJob.assignedDesigner === currentUser.name)} onUploadArtworkImage={uploadArtworkImage} onSaveArtwork={saveJobArtwork} />
+                  <JobDetail job={selectedJob} companyProfile={companyProfile} canSeeMoney={canSeeMoney} canEditPayment={can("edit_payment")} canDeleteJob={can("delete_job")} canConfirmDeposit={can("manage_finance") || ["Owner", "Manager", "Admin"].includes(currentUser.role)} canApproveWaiver={currentUser.role === "Owner"} onPayment={updatePayment} onConfirmDeposit={confirmDeposit} onReceiveBalance={receiveBalance} onComment={addComment} onMove={requestMove} onDelete={removeJob} teamMembers={teamMembers} canAssign={can("assign_staff") && canAcceptJob(selectedJob)} onAssign={assignStaff} canEditJob={can("edit_job") && (currentUser.role === "Owner" || !["Ready for Production", "In Production", "QC", "Packing", "Delivered / Picked Up", "Completed", "Cancelled"].includes(selectedJob.status))} onUpdateJob={updateJob} canAttach={can("edit_job")} onUploadFile={uploadJobFile} onDeleteFile={removeJobFile} customer={customerRecords.find((c) => c.id === selectedJob.customerId)} canArtwork={can("edit_job") || (currentUser.role === "Designer" && selectedJob.assignedDesigner === currentUser.name)} onUploadArtworkImage={uploadArtworkImage} onSaveArtwork={saveJobArtwork} canAccept={canAcceptJob(selectedJob)} onAcceptJob={acceptJob} onRejectJob={rejectJob} />
                   </>
                 ) : (
                   <EmptyState title="ยังไม่มีงานในระบบ" text="เริ่มจากสร้างลูกค้าและสร้างงานแรกได้เลย" action={() => setActiveView("Create Job")} />
@@ -5715,7 +5717,10 @@ function JobDetail({
   customer,
   canArtwork,
   onUploadArtworkImage,
-  onSaveArtwork
+  onSaveArtwork,
+  canAccept,
+  onAcceptJob,
+  onRejectJob
 }: {
   job: Job;
   companyProfile: CompanyProfile;
@@ -5742,8 +5747,13 @@ function JobDetail({
   canArtwork: boolean;
   onUploadArtworkImage: (job: Job, file: File) => Promise<string | null>;
   onSaveArtwork: (job: Job, items: ArtworkItem[]) => void;
+  canAccept: boolean;
+  onAcceptJob: (jobId: string) => void;
+  onRejectJob: (jobId: string, reason: string) => void;
 }) {
   const [comment, setComment] = useState("");
+  const [rejectingJob, setRejectingJob] = useState(false);
+  const [rejectJobReason, setRejectJobReason] = useState("");
   const [editingJob, setEditingJob] = useState(false);
   const jobLocked = ["Ready for Production", "In Production", "QC", "Packing", "Delivered / Picked Up", "Completed", "Cancelled"].includes(job.status);
   const [jobEdit, setJobEdit] = useState({ title: job.title, type: job.type, description: job.description, quantity: job.quantity, dueDate: job.dueDate, priority: job.priority, internalNotes: job.internalNotes });
@@ -5816,6 +5826,39 @@ function JobDetail({
   return (
     <div className="grid gap-4 xl:grid-cols-[1.15fr_0.85fr]">
       <section className="glass rounded-[1.5rem] p-5">
+        {/* แถบอนุมัติงาน — โชว์เมื่องานยังรออนุมัติ และผู้ใช้มีสิทธิ์ (เจ้าของ/ผจก.สาขาที่ผลิต) */}
+        {job.acceptance === "pending" && canAccept ? (
+          <div className="mb-4 rounded-3xl bg-amber-50 p-4 ring-1 ring-amber-200">
+            <p className="text-sm font-extrabold text-amber-800">⏳ งานนี้รออนุมัติเข้าผลิต</p>
+            <p className="mt-0.5 text-xs font-semibold text-amber-700">
+              เพจ {job.salesPage || "-"} · รายได้เข้า {job.incomeBranch || "-"} · 🏭 สาขาที่ผลิต {job.productionBranch || job.branch || "-"}
+            </p>
+            {rejectingJob ? (
+              <div className="mt-3 space-y-2">
+                <textarea
+                  value={rejectJobReason}
+                  onChange={(event) => setRejectJobReason(event.target.value)}
+                  placeholder="เหตุผลที่ตีกลับ (เช่น ข้อมูลไม่ครบ / ราคาผิด)"
+                  className="w-full rounded-2xl border border-amber-200 bg-white px-3 py-2 text-sm outline-none"
+                  rows={2}
+                />
+                <div className="flex gap-2">
+                  <button type="button" onClick={() => { onRejectJob(job.id, rejectJobReason); setRejectingJob(false); setRejectJobReason(""); }} className="flex-1 rounded-2xl bg-rose-600 px-4 py-2.5 text-sm font-extrabold text-white">ยืนยันตีกลับ</button>
+                  <button type="button" onClick={() => { setRejectingJob(false); setRejectJobReason(""); }} className="rounded-2xl bg-white px-4 py-2.5 text-sm font-bold text-k2-ink ring-1 ring-black/5">ยกเลิก</button>
+                </div>
+              </div>
+            ) : (
+              <div className="mt-3 flex gap-2">
+                <button type="button" onClick={() => onAcceptJob(job.id)} className="flex-1 rounded-2xl bg-emerald-500 px-4 py-2.5 text-sm font-extrabold text-white shadow">✅ อนุมัติเข้าผลิต</button>
+                <button type="button" onClick={() => setRejectingJob(true)} className="rounded-2xl bg-rose-100 px-4 py-2.5 text-sm font-bold text-rose-700">ตีกลับ</button>
+              </div>
+            )}
+          </div>
+        ) : job.acceptance === "pending" ? (
+          <div className="mb-4 rounded-3xl bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-700 ring-1 ring-amber-200">⏳ งานนี้รอผู้จัดการสาขา{job.productionBranch ? ` (${job.productionBranch})` : ""}อนุมัติเข้าผลิต</div>
+        ) : job.acceptance === "rejected" ? (
+          <div className="mb-4 rounded-3xl bg-rose-50 px-4 py-3 text-sm font-semibold text-rose-700 ring-1 ring-rose-200">↩︎ งานนี้ถูกตีกลับ{job.rejectReason ? `: ${job.rejectReason}` : ""}</div>
+        ) : null}
         <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
           <div>
             <div className="mb-3 flex flex-wrap gap-2">
@@ -5955,14 +5998,26 @@ function JobDetail({
                 </select>
               </label>
             </div>
-            <button
-              type="button"
-              onClick={() => onAssign(job.id, assignDesigner, assignProduction)}
-              disabled={assignDesigner === job.assignedDesigner && assignProduction === job.assignedProduction}
-              className="mt-3 rounded-2xl bg-k2-ink px-5 py-3 text-sm font-extrabold text-white disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              บันทึกการมอบหมาย
-            </button>
+            {(() => {
+              const assignmentUnchanged = assignDesigner === job.assignedDesigner && assignProduction === job.assignedProduction;
+              return (
+                <div className="mt-3 flex flex-wrap items-center gap-3">
+                  <button
+                    type="button"
+                    onClick={() => onAssign(job.id, assignDesigner, assignProduction)}
+                    disabled={assignmentUnchanged}
+                    className="rounded-2xl bg-k2-ink px-5 py-3 text-sm font-extrabold text-white disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    บันทึกการมอบหมาย
+                  </button>
+                  {assignmentUnchanged ? (
+                    <span className="text-xs font-semibold text-k2-muted">✓ บันทึกไว้แล้ว — เปลี่ยนผู้รับผิดชอบด้านบนก่อนถึงจะกดบันทึกได้</span>
+                  ) : (
+                    <span className="text-xs font-semibold text-emerald-600">มีการเปลี่ยนแปลง — กดบันทึกเพื่อยืนยัน</span>
+                  )}
+                </div>
+              );
+            })()}
           </div>
         ) : null}
 
