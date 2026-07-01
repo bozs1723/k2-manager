@@ -20,6 +20,9 @@ alter table public.jobs add column if not exists sales_page text;
 -- โหมดภาษี (ถ้าเคยรันแล้วจะไม่มีผลซ้ำ)
 alter table public.jobs add column if not exists vat_mode text not null default 'none';
 
+-- อาร์ตเวิร์กในใบสั่งงาน (รูปงานที่ออกแบบเสร็จ + จำนวน) — ใหม่ ✅ ต้องรันก่อนใช้ปุ่มบันทึกอาร์ตเวิร์ก
+alter table public.jobs add column if not exists artwork jsonb;
+
 -- แก้เคส "งานสาขาอื่นเด้งให้ผจก.ผิดสาขา" (Aphicha):
 -- ตั้งสาขาที่ผลิตของงานที่ยังรออนุมัติ ให้ตรงตามประเภทงาน
 update public.jobs

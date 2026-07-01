@@ -52,7 +52,7 @@ import { CUSTOMER_CODE_ADMINS, CUSTOMER_CODE_PAGES, customerCodeYear, formatCust
 import { checkGeofence, lateMinutes } from "@/lib/attendance";
 import { branchForJobType } from "@/lib/job-routing";
 import { computeVat, normalizeVatMode, vatModeLabel, VAT_MODES, type VatMode } from "@/lib/vat";
-import type { AppNotification, Attendance, AuditEvent, BranchSetting, Customer, ExpressRequest, FileAsset, Holiday, Job, JobStatus, JobType, Lead, LeaveRequest, Overtime, PaymentStatus, Priority, Quotation, QuoteStatus, Role, TeamMember } from "@/lib/types";
+import type { AppNotification, ArtworkItem, Attendance, AuditEvent, BranchSetting, Customer, ExpressRequest, FileAsset, Holiday, Job, JobStatus, JobType, Lead, LeaveRequest, Overtime, PaymentStatus, Priority, Quotation, QuoteStatus, Role, TeamMember } from "@/lib/types";
 
 type ImportedCustomer = Pick<Customer, "name" | "phone" | "lineId" | "email"> & {
   notes: string;
@@ -166,6 +166,7 @@ type SupabaseJobRow = {
   production_branch?: string | null;
   income_branch?: string | null;
   sales_page?: string | null;
+  artwork?: unknown;
   acceptance?: "pending" | "accepted" | "rejected" | null;
   reject_reason?: string | null;
   handoff_status?: string | null;
@@ -478,6 +479,7 @@ const initialCompanyProfile: CompanyProfile = {
 const viewLabel: Record<string, string> = {
   Dashboard: "แดชบอร์ด", Executive: "ภาพรวมผู้บริหาร",
   "My Jobs": "งานของฉัน",
+  Backlog: "งานค้าง",
   Board: "บอร์ดคิวงาน",
   Completed: "งานที่เสร็จแล้ว",
   Leads: "กล่องลูกค้า",
@@ -944,6 +946,26 @@ function customerFromRow(row: SupabaseCustomerRow, jobs: SupabaseJobRow[]): Cust
   };
 }
 
+// แปลงค่า jsonb artwork จาก DB ให้เป็น ArtworkItem[] ที่ปลอดภัย (กันข้อมูลเพี้ยน/คอลัมน์ยังไม่มี)
+function sanitizeArtwork(raw: unknown): ArtworkItem[] {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .map((item) => {
+      if (!item || typeof item !== "object") return null;
+      const obj = item as Record<string, unknown>;
+      const url = typeof obj.url === "string" ? obj.url : "";
+      if (!url) return null;
+      return {
+        id: typeof obj.id === "string" ? obj.id : crypto.randomUUID(),
+        url,
+        label: typeof obj.label === "string" ? obj.label : "",
+        qty: Number(obj.qty) > 0 ? Number(obj.qty) : undefined,
+        note: typeof obj.note === "string" ? obj.note : ""
+      } as ArtworkItem;
+    })
+    .filter((item): item is ArtworkItem => item !== null);
+}
+
 function jobFromRow(
   row: SupabaseJobRow,
   profileNames: Map<string, string>,
@@ -979,6 +1001,7 @@ function jobFromRow(
       size: file.file_size ? `${Math.max(file.file_size / 1000000, 0.01).toFixed(2)} MB` : "ไฟล์แนบ",
       url: file.url ?? undefined
     })),
+    artwork: sanitizeArtwork(row.artwork),
     orderDate: row.order_date,
     dueDate: row.due_date,
     priority: row.priority,
@@ -1199,6 +1222,7 @@ export default function Page() {
       [
         { label: "Dashboard", icon: LayoutDashboard, visible: currentRolePermissions.includes("view_dashboard") }, { label: "Executive", icon: BarChart3, visible: currentRolePermissions.includes("view_finance") },
         { label: "My Jobs", icon: ListTodo, visible: true },
+        { label: "Backlog", icon: AlertTriangle, visible: true },
         { label: "Board", icon: ClipboardList, visible: currentRolePermissions.includes("view_dashboard") },
         { label: "Completed", icon: CheckCircle2, visible: currentRolePermissions.includes("assign_staff") },
         { label: "Leads", icon: Inbox, visible: currentRolePermissions.includes("create_job") },
@@ -2144,8 +2168,10 @@ export default function Page() {
   // ยอมรับงานได้: เจ้าของ (ทุกสาขา) หรือ ผจก./แอดมิน เฉพาะงานที่ผลิตที่สาขาตัวเองเท่านั้น (ต้องตรงเป๊ะ)
   // ไม่มี fallback "งานไม่มีสาขา = เห็นทุกคน" อีก เพื่อกันงานสาขาอื่น (เช่น DTG พระรามเก้า) เด้งให้ผจก.พะเยา
   function canAcceptJob(job: Job) {
-    if (currentUser.role === "Owner") return true;
-    if (currentUser.role === "Manager" || currentUser.role === "Admin") {
+    // ใช้บทบาทรวม (บทบาทหลัก + บทบาทเสริม) — กันเคสเจ้าของที่ตั้ง Owner เป็นบทบาทเสริม แล้วกดอนุมัติไม่ได้
+    const roles: Role[] = [currentUser.role, ...(currentUser.roles ?? [])];
+    if (roles.includes("Owner")) return true;
+    if (roles.includes("Manager") || roles.includes("Admin")) {
       return !!currentUser.branch && job.productionBranch === currentUser.branch;
     }
     return false;
@@ -2508,6 +2534,51 @@ export default function Page() {
     }
     setJobs((current) => current.map((item) => (item.id === job.id ? { ...item, files: item.files.filter((file) => file.id !== fileId) } : item)));
     void appendAudit("removed file", job.id, "jobs", job.dbId);
+  }
+
+  // อัปโหลดรูปอาร์ตเวิร์ก (รูปงานที่ออกแบบเสร็จ) ขึ้น storage แล้วคืน public URL เพื่อใส่ในใบสั่งงาน
+  async function uploadArtworkImage(job: Job, file: File): Promise<string | null> {
+    if (!file.type.startsWith("image/")) {
+      setDataError("กรุณาเลือกไฟล์รูปภาพ (อาร์ตเวิร์ก)");
+      return null;
+    }
+    if (file.size > 10_000_000) {
+      setDataError("รูปอาร์ตเวิร์กต้องไม่เกิน 10 MB");
+      return null;
+    }
+    if (supabase && isSupabaseConfigured && job.dbId && uuidPattern.test(job.dbId)) {
+      const safeName = file.name.replace(/[^\w.\-]+/g, "_");
+      const path = `${job.dbId}/artwork/${Date.now()}-${safeName}`;
+      const { error: upErr } = await supabase.storage.from("job-files").upload(path, file, { contentType: file.type || undefined });
+      if (upErr) {
+        setDataError(`อัปโหลดอาร์ตเวิร์กไม่สำเร็จ: ${upErr.message}`);
+        return null;
+      }
+      const { data: pub } = supabase.storage.from("job-files").getPublicUrl(path);
+      return pub.publicUrl;
+    }
+    // โหมดออฟไลน์/ไม่มี Supabase — ฝังเป็น data URL
+    return readImageAsDataUrl(file);
+  }
+
+  // บันทึกอาร์ตเวิร์กทั้งชุดลงงาน (คอลัมน์ jobs.artwork เป็น jsonb)
+  async function saveJobArtwork(job: Job, items: ArtworkItem[]) {
+    if (!can("edit_job") && !(currentUser.role === "Designer" && job.assignedDesigner === currentUser.name)) {
+      setDataError("บทบาทนี้ยังไม่มีสิทธิ์แก้อาร์ตเวิร์ก");
+      return;
+    }
+    const clean = items
+      .filter((item) => item.url)
+      .map((item) => ({ id: item.id, url: item.url, label: item.label?.trim() || "", qty: Number(item.qty) > 0 ? Number(item.qty) : undefined, note: item.note?.trim() || "" }));
+    setJobs((current) => current.map((item) => (item.id === job.id ? { ...item, artwork: clean } : item)));
+    if (supabase && isSupabaseConfigured && job.dbId && uuidPattern.test(job.dbId)) {
+      const { error } = await supabase.from("jobs").update({ artwork: clean }).eq("id", job.dbId);
+      if (error) {
+        setDataError(`บันทึกอาร์ตเวิร์กไม่สำเร็จ: ${error.message} (ถ้ายังไม่ได้เพิ่มคอลัมน์ artwork ที่ Supabase ให้รัน SQL ในเช็กลิสต์ก่อน)`);
+        return;
+      }
+    }
+    void appendAudit("updated artwork", job.id, "jobs", job.dbId);
   }
 
   async function addComment(jobId: string, text: string) {
@@ -4103,6 +4174,17 @@ export default function Page() {
                 />
               </motion.div>
             )}
+            {activeView === "Backlog" && (
+              <motion.div key="backlog" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }}>
+                <BacklogView
+                  jobs={filteredJobs}
+                  onSelect={(id) => {
+                    setSelectedJobId(id);
+                    setActiveView("Detail");
+                  }}
+                />
+              </motion.div>
+            )}
             {activeView === "Board" && (
               <motion.div key="board" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }}>
                 <Board
@@ -4190,6 +4272,7 @@ export default function Page() {
                 <SettingsView
                   currentUserId={currentUser.id}
                   currentRole={currentUser.role}
+                  currentPermissions={currentRolePermissions}
                   teamMembers={teamMembers}
                   companyProfile={companyProfile}
                   onUpdateCompany={saveCompanyProfile}
@@ -4210,7 +4293,7 @@ export default function Page() {
                   <>
                   <LineInvitePanel job={selectedJob} customer={customerRecords.find((item) => item.id === selectedJob.customerId)} onMarkFriend={markCustomerLineFriend} />
                   <HandoffPanel job={selectedJob} currentUser={currentUser} onSubmit={submitHandoff} onAccept={acceptHandoff} onReject={rejectHandoff} />
-                  <JobDetail job={selectedJob} companyProfile={companyProfile} canSeeMoney={canSeeMoney} canEditPayment={can("edit_payment")} canDeleteJob={can("delete_job")} canConfirmDeposit={can("manage_finance") || ["Owner", "Manager", "Admin"].includes(currentUser.role)} canApproveWaiver={currentUser.role === "Owner"} onPayment={updatePayment} onConfirmDeposit={confirmDeposit} onReceiveBalance={receiveBalance} onComment={addComment} onMove={requestMove} onDelete={removeJob} teamMembers={teamMembers} canAssign={can("assign_staff") && canAcceptJob(selectedJob)} onAssign={assignStaff} canEditJob={can("edit_job") && (currentUser.role === "Owner" || !["Ready for Production", "In Production", "QC", "Packing", "Delivered / Picked Up", "Completed", "Cancelled"].includes(selectedJob.status))} onUpdateJob={updateJob} canAttach={can("edit_job")} onUploadFile={uploadJobFile} onDeleteFile={removeJobFile} />
+                  <JobDetail job={selectedJob} companyProfile={companyProfile} canSeeMoney={canSeeMoney} canEditPayment={can("edit_payment")} canDeleteJob={can("delete_job")} canConfirmDeposit={can("manage_finance") || ["Owner", "Manager", "Admin"].includes(currentUser.role)} canApproveWaiver={currentUser.role === "Owner"} onPayment={updatePayment} onConfirmDeposit={confirmDeposit} onReceiveBalance={receiveBalance} onComment={addComment} onMove={requestMove} onDelete={removeJob} teamMembers={teamMembers} canAssign={can("assign_staff") && canAcceptJob(selectedJob)} onAssign={assignStaff} canEditJob={can("edit_job") && (currentUser.role === "Owner" || !["Ready for Production", "In Production", "QC", "Packing", "Delivered / Picked Up", "Completed", "Cancelled"].includes(selectedJob.status))} onUpdateJob={updateJob} canAttach={can("edit_job")} onUploadFile={uploadJobFile} onDeleteFile={removeJobFile} customer={customerRecords.find((c) => c.id === selectedJob.customerId)} canArtwork={can("edit_job") || (currentUser.role === "Designer" && selectedJob.assignedDesigner === currentUser.name)} onUploadArtworkImage={uploadArtworkImage} onSaveArtwork={saveJobArtwork} canAccept={canAcceptJob(selectedJob)} onAcceptJob={acceptJob} onRejectJob={rejectJob} />
                   </>
                 ) : (
                   <EmptyState title="ยังไม่มีงานในระบบ" text="เริ่มจากสร้างลูกค้าและสร้างงานแรกได้เลย" action={() => setActiveView("Create Job")} />
@@ -4811,6 +4894,83 @@ function MyJobsView({
   );
 }
 
+// หน้ารวม "งานค้าง" — งานที่ยังไม่เสร็จทั้งหมด จัดกลุ่มตามความเร่งด่วน + โชว์สถานะ/ผู้รับผิดชอบ
+// คลิกแถวเพื่อเปิดรายละเอียด (มีปุ่มพิมพ์/แชร์ใบสั่งงานในนั้น)
+function BacklogView({ jobs, onSelect }: { jobs: Job[]; onSelect: (id: string) => void }) {
+  const open = useMemo(
+    () => jobs.filter((job) => !["Completed", "Cancelled"].includes(job.status)).slice().sort((a, b) => a.dueDate.localeCompare(b.dueDate)),
+    [jobs]
+  );
+  // แผนกที่รับผิดชอบตอนนี้ (ก่อนผลิต=ดีไซเนอร์, ผลิตเป็นต้นไป=ฝ่ายผลิต)
+  const preProd = ["New Order", "Waiting for File", "Designing", "Waiting for Customer Approval"];
+  const responsibleOf = (job: Job) => {
+    const inDesign = preProd.includes(job.status);
+    const who = inDesign ? job.assignedDesigner : job.assignedProduction;
+    const dept = inDesign ? "ออกแบบ" : "ผลิต";
+    return who && who !== "Unassigned" ? `${dept}: ${who}` : `${dept}: ยังไม่มอบหมาย`;
+  };
+  const buckets = [
+    { key: "overdue", title: "🔴 เลยกำหนด", test: (d: number) => d < 0, tone: "text-rose-700" },
+    { key: "today", title: "🟠 วันนี้–พรุ่งนี้", test: (d: number) => d >= 0 && d <= 1, tone: "text-amber-700" },
+    { key: "soon", title: "🟡 ภายใน 5 วัน", test: (d: number) => d >= 2 && d <= 5, tone: "text-yellow-700" },
+    { key: "later", title: "🟢 หลังจากนั้น", test: (d: number) => d > 5, tone: "text-emerald-700" }
+  ];
+  const pending = open.filter((job) => job.acceptance === "pending").length;
+  const overdue = open.filter((job) => daysFromToday(job.dueDate) < 0).length;
+
+  return (
+    <div className="space-y-4">
+      <div className="glass flex flex-wrap items-center gap-3 rounded-[1.5rem] p-5">
+        <div>
+          <p className="text-sm font-semibold text-k2-muted">งานที่ยังไม่เสร็จทั้งหมด</p>
+          <h3 className="text-2xl font-semibold">งานค้าง {open.length} งาน</h3>
+        </div>
+        <div className="ml-auto flex flex-wrap gap-2 text-xs font-bold">
+          <span className={`rounded-full px-3 py-1.5 ${overdue ? "bg-k2-rose text-rose-700" : "bg-white/70 text-k2-muted"}`}>เลยกำหนด {overdue}</span>
+          {pending ? <span className="rounded-full bg-amber-100 px-3 py-1.5 text-amber-800">รออนุมัติ {pending}</span> : null}
+        </div>
+      </div>
+
+      {open.length === 0 ? (
+        <div className="glass rounded-[1.5rem] p-10 text-center text-sm font-semibold text-k2-muted">🎉 ไม่มีงานค้าง — เคลียร์หมดแล้ว</div>
+      ) : (
+        buckets.map((bucket) => {
+          const rows = open.filter((job) => bucket.test(daysFromToday(job.dueDate)));
+          if (rows.length === 0) return null;
+          return (
+            <div key={bucket.key} className="glass rounded-[1.5rem] p-5">
+              <h3 className={`mb-3 text-lg font-extrabold ${bucket.tone}`}>{bucket.title} · {rows.length}</h3>
+              <div className="space-y-2">
+                {rows.map((job) => {
+                  const urgency = dueUrgency(job.dueDate, job.status);
+                  return (
+                    <button key={job.id} type="button" onClick={() => onSelect(job.id)} className="grid w-full gap-2 rounded-2xl bg-white/60 p-4 text-left transition hover:bg-white lg:grid-cols-[1.3fr_0.9fr_0.9fr_auto] lg:items-center">
+                      <div className="min-w-0">
+                        <div className="mb-1 flex flex-wrap items-center gap-2">
+                          <span className="flex items-center gap-1.5 font-bold">{job.isExpress ? <Zap className="h-3.5 w-3.5 text-rose-500" /> : null}{job.id}</span>
+                          {job.acceptance === "pending" ? <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-bold text-amber-800">รออนุมัติ</span> : null}
+                        </div>
+                        <p className="truncate font-semibold">{job.title}</p>
+                        <p className="truncate text-sm text-k2-muted">{job.customerName} · {jobTypeLabel[job.type]}</p>
+                      </div>
+                      <span className={`w-fit rounded-full px-3 py-1 text-xs font-bold ${statusTint[job.status]}`}>{statusLabel[job.status]}</span>
+                      <span className="text-sm font-semibold text-k2-muted">{responsibleOf(job)}</span>
+                      <div className="flex flex-col items-start gap-1 text-sm text-k2-muted lg:items-end">
+                        <span>ส่ง {job.dueDate}</span>
+                        {urgency ? <span className={`flex w-fit items-center gap-1 rounded-full px-2 py-0.5 text-xs font-bold ${urgency.tone}`}><span className={`h-1.5 w-1.5 rounded-full ${urgency.dot}`} />{urgency.label}</span> : null}
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          );
+        })
+      )}
+    </div>
+  );
+}
+
 // แปลงวันที่จาก statusHistory (รูปแบบ en-GB "dd/mm/yyyy, hh:mm:ss") → ISO "yyyy-mm-dd"
 function parseEnGbDate(value: string): string | null {
   const datePart = value.split(",")[0]?.trim();
@@ -5359,9 +5519,10 @@ const printDocTitle: Record<PrintDocType, { th: string; en: string }> = {
   receipt: { th: "ใบเสร็จรับเงิน / บิลเงินสด", en: "RECEIPT" }
 };
 
-function PrintableDoc({ job, company, docType, docNumber, onClose }: { job: Job; company: CompanyProfile; docType: PrintDocType; docNumber: string; onClose: () => void }) {
+function PrintableDoc({ job, company, docType, docNumber, customer, onClose }: { job: Job; company: CompanyProfile; docType: PrintDocType; docNumber: string; customer?: Customer; onClose: () => void }) {
   const title = printDocTitle[docType];
   const isReceipt = docType === "receipt";
+  const isWorkOrder = docType === "workorder";
   const today = new Date().toLocaleDateString("th-TH", { year: "numeric", month: "long", day: "numeric" });
   const vatMode = normalizeVatMode(job.vatMode);
   const hasVat = vatMode !== "none";
@@ -5369,17 +5530,54 @@ function PrintableDoc({ job, company, docType, docNumber, onClose }: { job: Job;
   // คงเหลือคิดจากยอดรวม (รวม VAT) ลบมัดจำ — งานจ่ายครบแล้วถือว่าชำระเต็มยอดรวม
   const fullyPaid = isReceipt && job.remainingBalance <= 0;
   const outstanding = fullyPaid ? priceTotal : Math.max(priceTotal - job.deposit, 0);
+  const [sharing, setSharing] = useState(false);
+  const [shareMsg, setShareMsg] = useState("");
+  // แชร์เอกสารเป็นรูปภาพ — มือถือเปิดแผงแชร์ (ส่งเข้า LINE เองได้ ไม่กินโควต้า) · คอมดาวน์โหลดรูป
+  async function shareAsImage() {
+    const node = document.getElementById("print-doc");
+    if (!node) return;
+    setSharing(true);
+    setShareMsg("");
+    try {
+      const { toBlob } = await import("html-to-image");
+      const blob = await toBlob(node, { pixelRatio: 2, backgroundColor: "#ffffff", cacheBust: true });
+      if (!blob) throw new Error("สร้างรูปไม่สำเร็จ");
+      const fileName = `${title.th.replace(/\s+/g, "")}-${job.id}.png`;
+      const file = new File([blob], fileName, { type: "image/png" });
+      const navShare = navigator as Navigator & { canShare?: (data?: unknown) => boolean };
+      if (navShare.canShare && navShare.canShare({ files: [file] })) {
+        await navShare.share({ files: [file], title: `${title.th} ${job.id}`, text: `${title.th} ${job.id} · ${job.title}` });
+      } else {
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = fileName;
+        a.click();
+        URL.revokeObjectURL(url);
+        setShareMsg("บันทึกรูปแล้ว — ส่งเข้า LINE ได้เลย");
+      }
+    } catch (err) {
+      const name = (err as Error)?.name;
+      if (name !== "AbortError") setShareMsg("แชร์ไม่สำเร็จ ลองใหม่ หรือใช้ปุ่มพิมพ์แทน");
+    } finally {
+      setSharing(false);
+    }
+  }
   return (
     <div className="fixed inset-0 z-[60] flex items-start justify-center overflow-y-auto bg-slate-900/50 p-4 backdrop-blur-sm" onClick={onClose}>
       <div className="my-4 w-full max-w-3xl">
-        <div className="no-print mb-3 flex items-center justify-between gap-2" onClick={(e) => e.stopPropagation()}>
-          <p className="text-sm font-bold text-white">ตัวอย่างเอกสาร — {title.th}</p>
+        <div className="no-print mb-3 flex flex-wrap items-center justify-between gap-2" onClick={(e) => e.stopPropagation()}>
+          <p className="text-sm font-bold text-white">ตัวอย่างเอกสาร — {title.th}{shareMsg ? ` · ${shareMsg}` : ""}</p>
           <div className="flex gap-2">
-            <button type="button" onClick={() => window.print()} className="rounded-2xl bg-white px-5 py-2.5 text-sm font-extrabold text-k2-ink shadow">🖨️ พิมพ์ / บันทึก PDF</button>
+            <button type="button" onClick={shareAsImage} disabled={sharing} className="rounded-2xl bg-emerald-500 px-5 py-2.5 text-sm font-extrabold text-white shadow disabled:opacity-60">{sharing ? "กำลังสร้างรูป…" : "📤 แชร์ / ส่ง LINE"}</button>
+            <button type="button" onClick={() => window.print()} className="rounded-2xl bg-white px-5 py-2.5 text-sm font-extrabold text-k2-ink shadow">🖨️ พิมพ์ / PDF</button>
             <button type="button" onClick={onClose} className="rounded-2xl bg-white/20 px-4 py-2.5 text-sm font-bold text-white">ปิด</button>
           </div>
         </div>
 
+        {isWorkOrder ? (
+          <WorkOrderDoc job={job} company={company} docNumber={docNumber} customer={customer} onClick={(e) => e.stopPropagation()} />
+        ) : (
         <div id="print-doc" className="mx-auto bg-white p-8 text-slate-900 shadow-2xl" onClick={(e) => e.stopPropagation()} style={{ fontSize: "13px", lineHeight: 1.5 }}>
           <div className="flex items-start justify-between gap-4 border-b-2 border-slate-800 pb-4">
             <div className="flex items-center gap-3">
@@ -5464,7 +5662,157 @@ function PrintableDoc({ job, company, docType, docNumber, onClose }: { job: Job;
             </div>
           </div>
         </div>
+        )}
       </div>
+    </div>
+  );
+}
+
+// ===== ใบสั่งงาน (Work Order) — เอกสารสำหรับฝ่ายผลิต: โชว์อาร์ตเวิร์ก + จำนวน + กำหนดส่ง (ไม่มีราคา) =====
+function WorkOrderDoc({ job, company, docNumber, customer, onClick }: { job: Job; company: CompanyProfile; docNumber: string; customer?: Customer; onClick: (e: React.MouseEvent) => void }) {
+  const today = new Date().toLocaleDateString("th-TH", { year: "numeric", month: "long", day: "numeric" });
+  const dueInfo = dueUrgency(job.dueDate, job.status);
+  // อาร์ตเวิร์กที่ดีไซเนอร์วางไว้ — ถ้าไม่มี ใช้รูปจากไฟล์แนบเป็นตัวสำรอง (รองรับไม่จำกัดจำนวน)
+  const artwork: ArtworkItem[] = (job.artwork && job.artwork.length > 0)
+    ? job.artwork
+    : job.files.filter((file) => file.type === "image" && file.url).map((file) => ({ id: file.id, url: file.url as string, label: "", qty: undefined, note: "" }));
+  const totalArtQty = artwork.reduce((sum, item) => sum + (Number(item.qty) || 0), 0);
+  // โทนเอกสารทางการ: เขียวเข้มแบรนด์ + เส้นตีกรอบ ไม่มีสีสด/อีโมจิ
+  const ink = "#14383d";
+  const rule = "#1f2937";
+  const contact = [company.phone ? `โทร ${company.phone}` : "", company.email || ""].filter(Boolean).join("  ·  ");
+  const labelCell: React.CSSProperties = { border: "1px solid #94a3b8", padding: "6px 10px", background: "#f1f5f4", fontWeight: 800, fontSize: 11.5, color: ink, whiteSpace: "nowrap", verticalAlign: "top", width: 108 };
+  const valueCell: React.CSSProperties = { border: "1px solid #94a3b8", padding: "6px 10px", fontSize: 12.5, verticalAlign: "top" };
+  // รูปยิ่งเยอะ การ์ดยิ่งเล็กลงเพื่อลงหน้ากระดาษได้พอดี
+  const imgH = artwork.length <= 1 ? 340 : artwork.length <= 2 ? 250 : artwork.length <= 6 ? 200 : 150;
+  const minCol = artwork.length <= 1 ? 460 : artwork.length <= 4 ? 230 : 170;
+  return (
+    <div id="print-doc" className="mx-auto bg-white text-slate-900 shadow-2xl" onClick={onClick} style={{ fontSize: "13px", lineHeight: 1.5, padding: "30px 34px", fontFamily: "'Sarabun','Noto Sans Thai',sans-serif" }}>
+      {/* หัวเอกสาร — โลโก้ + ข้อมูลบริษัท / ป้ายชื่อเอกสาร */}
+      <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 20 }}>
+        <div style={{ display: "flex", alignItems: "flex-start", gap: 14 }}>
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src="/assets/k2smart-logo.png" alt="logo" style={{ width: 74, height: 74, objectFit: "contain" }} />
+          <div>
+            <p style={{ fontSize: 21, fontWeight: 900, letterSpacing: 0.3, color: ink }}>{company.name || "K2Smart"}</p>
+            {company.legalName ? <p style={{ color: "#334155", fontSize: 12.5 }}>{company.legalName}</p> : null}
+            {company.address ? <p style={{ color: "#475569", fontSize: 11.5 }}>{company.address}</p> : null}
+            {contact ? <p style={{ color: "#475569", fontSize: 11.5 }}>{contact}</p> : null}
+            {company.taxId ? <p style={{ color: "#475569", fontSize: 11.5 }}>เลขประจำตัวผู้เสียภาษี {company.taxId}</p> : null}
+          </div>
+        </div>
+        <div style={{ textAlign: "right", minWidth: 190 }}>
+          <div style={{ border: `2px solid ${ink}`, borderRadius: 4, padding: "8px 16px", textAlign: "center" }}>
+            <p style={{ fontSize: 20, fontWeight: 900, color: ink, lineHeight: 1.15 }}>ใบสั่งงาน</p>
+            <p style={{ letterSpacing: 3, fontSize: 10.5, color: "#64748b", fontWeight: 700 }}>WORK ORDER</p>
+          </div>
+          <table style={{ marginTop: 8, marginLeft: "auto", fontSize: 12 }}>
+            <tbody>
+              <tr><td style={{ color: "#64748b", textAlign: "right", paddingRight: 8 }}>เลขที่งาน</td><td style={{ fontWeight: 800, textAlign: "right" }}>{job.id}</td></tr>
+              <tr><td style={{ color: "#64748b", textAlign: "right", paddingRight: 8 }}>วันที่ออก</td><td style={{ fontWeight: 700, textAlign: "right" }}>{job.orderDate || today}</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* เส้นคาดหัวกระดาษ (หนา+บาง แบบเอกสารทางการ) */}
+      <div style={{ borderTop: `3px solid ${rule}`, borderBottom: `1px solid ${rule}`, height: 3, marginTop: 12 }} />
+
+      {/* ตารางข้อมูลงาน */}
+      <table style={{ width: "100%", borderCollapse: "collapse", marginTop: 16 }}>
+        <tbody>
+          <tr>
+            <td style={labelCell}>ลูกค้า</td>
+            <td style={valueCell}><b>{job.customerName || "-"}</b>{customer?.customerCode ? `  (${customer.customerCode})` : ""}</td>
+            <td style={labelCell}>วันที่คอนเฟิร์ม</td>
+            <td style={valueCell}>{job.orderDate || "-"}</td>
+          </tr>
+          <tr>
+            <td style={labelCell}>ติดต่อ</td>
+            <td style={valueCell}>{[job.phone ? `โทร ${job.phone}` : "", job.lineId ? `LINE ${job.lineId}` : ""].filter(Boolean).join("  ·  ") || "-"}</td>
+            <td style={labelCell}>กำหนดส่ง</td>
+            <td style={{ ...valueCell, fontWeight: 800, color: dueInfo ? "#b91c1c" : "#0f172a" }}>{job.dueDate || "-"}{job.isExpress ? "  (ด่วน)" : ""}</td>
+          </tr>
+          <tr>
+            <td style={labelCell}>สาขาผลิต</td>
+            <td style={valueCell}>{job.productionBranch || job.branch || "-"}</td>
+            <td style={labelCell}>ประเภทงาน</td>
+            <td style={valueCell}>{jobTypeLabel[job.type]}</td>
+          </tr>
+          <tr>
+            <td style={labelCell}>อ้างอิงใบเสนอราคา</td>
+            <td style={valueCell}>{job.quoteNumber || docNumber || "-"}</td>
+            <td style={labelCell}>ประวัติลูกค้า</td>
+            <td style={valueCell}>{customer ? `ลูกค้าเก่า ${customer.totalOrders || 0} ออเดอร์${customer.lastOrderDate ? `  ·  ล่าสุด ${customer.lastOrderDate}` : ""}` : "ลูกค้าใหม่"}</td>
+          </tr>
+        </tbody>
+      </table>
+
+      {/* รายละเอียดงาน */}
+      <div style={{ border: "1px solid #94a3b8", borderTop: "none", padding: "8px 10px" }}>
+        <p style={{ fontSize: 11.5, fontWeight: 800, color: ink }}>รายละเอียดงาน</p>
+        <p style={{ fontWeight: 800, fontSize: 14 }}>{job.title}</p>
+        {job.description ? <p style={{ marginTop: 2, color: "#334155", whiteSpace: "pre-wrap", fontSize: 12.5 }}>{job.description}</p> : null}
+      </div>
+
+      {/* แบบงาน / อาร์ตเวิร์ก (ไม่จำกัดจำนวน — เรียงต่อกันอัตโนมัติ) */}
+      <div style={{ marginTop: 18, marginBottom: 8, display: "flex", alignItems: "baseline", justifyContent: "space-between", borderBottom: `2px solid ${ink}`, paddingBottom: 4 }}>
+        <p style={{ fontWeight: 900, fontSize: 13.5, color: ink, letterSpacing: 0.3 }}>แบบงาน / อาร์ตเวิร์ก</p>
+        <p style={{ fontSize: 11, color: "#64748b", fontWeight: 700 }}>ทั้งหมด {artwork.length} รายการ</p>
+      </div>
+      {artwork.length > 0 ? (
+        <div style={{ display: "grid", gridTemplateColumns: `repeat(auto-fill, minmax(${minCol}px, 1fr))`, gap: 10 }}>
+          {artwork.map((item, index) => (
+            <div key={item.id} style={{ border: "1px solid #94a3b8", overflow: "hidden", breakInside: "avoid" }}>
+              <div style={{ background: "#f8fafc", display: "flex", alignItems: "center", justifyContent: "center", height: imgH, borderBottom: "1px solid #cbd5e1" }}>
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img src={item.url} alt={item.label || "artwork"} style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain" }} />
+              </div>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, padding: "6px 10px" }}>
+                <div style={{ minWidth: 0 }}>
+                  <p style={{ fontWeight: 800, fontSize: 12.5, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    <span style={{ color: "#64748b" }}>#{index + 1}</span>  {item.label || "รายการงาน"}
+                  </p>
+                  {item.note ? <p style={{ color: "#64748b", fontSize: 11, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{item.note}</p> : null}
+                </div>
+                {item.qty ? <span style={{ border: `1.5px solid ${ink}`, color: ink, borderRadius: 3, padding: "2px 10px", fontWeight: 900, fontSize: 13.5, whiteSpace: "nowrap" }}>{item.qty} ชิ้น</span> : null}
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div style={{ border: "1px dashed #94a3b8", padding: "28px 0", textAlign: "center", color: "#94a3b8", fontWeight: 700 }}>— ยังไม่มีอาร์ตเวิร์ก —</div>
+      )}
+
+      {/* สรุปจำนวน + ผู้รับผิดชอบ */}
+      <table style={{ width: "100%", borderCollapse: "collapse", marginTop: 16 }}>
+        <tbody>
+          <tr>
+            <td style={labelCell}>จำนวนรวม</td>
+            <td style={{ ...valueCell, fontWeight: 800 }}>{totalArtQty > 0 ? `${totalArtQty} ชิ้น` : `${job.quantity} ชิ้น`}</td>
+            <td style={labelCell}>ผู้ออกแบบ</td>
+            <td style={valueCell}>{job.assignedDesigner && job.assignedDesigner !== "Unassigned" ? job.assignedDesigner : "-"}</td>
+          </tr>
+          <tr>
+            <td style={labelCell}>ผู้ผลิต</td>
+            <td style={valueCell}>{job.assignedProduction && job.assignedProduction !== "Unassigned" ? job.assignedProduction : "-"}</td>
+            <td style={labelCell}>โน้ตภายใน</td>
+            <td style={valueCell}>{job.internalNotes || "-"}</td>
+          </tr>
+        </tbody>
+      </table>
+
+      {/* ช่องเซ็น/ตรวจ */}
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 24, marginTop: 34, fontSize: 12 }}>
+        {["ผู้ออกแบบ", "ผู้ตรวจสอบ", "ฝ่ายผลิต"].map((role) => (
+          <div key={role} style={{ textAlign: "center" }}>
+            <div style={{ height: 30 }} />
+            <div style={{ borderTop: "1px solid #334155", paddingTop: 4 }}>{role}</div>
+            <div style={{ color: "#94a3b8", fontSize: 10.5 }}>ลงชื่อ / วันที่</div>
+          </div>
+        ))}
+      </div>
+      <p style={{ marginTop: 16, fontSize: 10, color: "#94a3b8", textAlign: "center", borderTop: "1px solid #e2e8f0", paddingTop: 6 }}>เอกสารนี้ออกโดยระบบ {company.name || "K2 Manager"} · {today} · เลขที่งาน {job.id}</p>
     </div>
   );
 }
@@ -5490,7 +5838,14 @@ function JobDetail({
   onUpdateJob,
   canAttach,
   onUploadFile,
-  onDeleteFile
+  onDeleteFile,
+  customer,
+  canArtwork,
+  onUploadArtworkImage,
+  onSaveArtwork,
+  canAccept,
+  onAcceptJob,
+  onRejectJob
 }: {
   job: Job;
   companyProfile: CompanyProfile;
@@ -5513,8 +5868,17 @@ function JobDetail({
   canAttach: boolean;
   onUploadFile: (job: Job, file: File) => void;
   onDeleteFile: (job: Job, fileId: string) => void;
+  customer?: Customer;
+  canArtwork: boolean;
+  onUploadArtworkImage: (job: Job, file: File) => Promise<string | null>;
+  onSaveArtwork: (job: Job, items: ArtworkItem[]) => void;
+  canAccept: boolean;
+  onAcceptJob: (jobId: string) => void;
+  onRejectJob: (jobId: string, reason: string) => void;
 }) {
   const [comment, setComment] = useState("");
+  const [rejectingJob, setRejectingJob] = useState(false);
+  const [rejectJobReason, setRejectJobReason] = useState("");
   const [editingJob, setEditingJob] = useState(false);
   const jobLocked = ["Ready for Production", "In Production", "QC", "Packing", "Delivered / Picked Up", "Completed", "Cancelled"].includes(job.status);
   const [jobEdit, setJobEdit] = useState({ title: job.title, type: job.type, description: job.description, quantity: job.quantity, dueDate: job.dueDate, priority: job.priority, internalNotes: job.internalNotes });
@@ -5543,9 +5907,83 @@ function JobDetail({
   const [printType, setPrintType] = useState<PrintDocType | null>(null);
   const workOrderNumber = job.quoteNumber ?? quoteNumberFor(Number(job.id.replace(/\D/g, "").slice(-4)) || 1, companyProfile.quotePrefix);
   const dueInfo = dueUrgency(job.dueDate, job.status);
+
+  // ---- อาร์ตเวิร์กสำหรับใบสั่งงาน (ดีไซเนอร์วางรูปงานที่เสร็จ + ป้าย + จำนวน) ----
+  const [artworkDraft, setArtworkDraft] = useState<ArtworkItem[]>(job.artwork ?? []);
+  const [artworkDirty, setArtworkDirty] = useState(false);
+  const [artworkBusy, setArtworkBusy] = useState(false);
+  useEffect(() => {
+    setArtworkDraft(job.artwork ?? []);
+    setArtworkDirty(false);
+  }, [job.id, job.artwork]);
+  function patchArtwork(id: string, patch: Partial<ArtworkItem>) {
+    setArtworkDraft((current) => current.map((item) => (item.id === id ? { ...item, ...patch } : item)));
+    setArtworkDirty(true);
+  }
+  function removeArtwork(id: string) {
+    setArtworkDraft((current) => current.filter((item) => item.id !== id));
+    setArtworkDirty(true);
+  }
+  async function addArtworkFiles(fileList: FileList | null) {
+    if (!fileList || fileList.length === 0) return;
+    setArtworkBusy(true);
+    try {
+      const added: ArtworkItem[] = [];
+      for (const file of Array.from(fileList)) {
+        const url = await onUploadArtworkImage(job, file);
+        if (url) added.push({ id: crypto.randomUUID(), url, label: "", qty: undefined, note: "" });
+      }
+      if (added.length) {
+        setArtworkDraft((current) => [...current, ...added]);
+        setArtworkDirty(true);
+      }
+    } finally {
+      setArtworkBusy(false);
+    }
+  }
+  function pullImagesFromFiles() {
+    const existing = new Set(artworkDraft.map((item) => item.url));
+    const imgs = job.files.filter((file) => file.type === "image" && file.url && !existing.has(file.url));
+    if (imgs.length === 0) return;
+    setArtworkDraft((current) => [...current, ...imgs.map((file) => ({ id: crypto.randomUUID(), url: file.url as string, label: file.name.replace(/\.[^.]+$/, ""), qty: undefined, note: "" }))]);
+    setArtworkDirty(true);
+  }
   return (
     <div className="grid gap-4 xl:grid-cols-[1.15fr_0.85fr]">
       <section className="glass rounded-[1.5rem] p-5">
+        {/* แถบอนุมัติงาน — โชว์เมื่องานยังรออนุมัติ และผู้ใช้มีสิทธิ์ (เจ้าของ/ผจก.สาขาที่ผลิต) */}
+        {job.acceptance === "pending" && canAccept ? (
+          <div className="mb-4 rounded-3xl bg-amber-50 p-4 ring-1 ring-amber-200">
+            <p className="text-sm font-extrabold text-amber-800">⏳ งานนี้รออนุมัติเข้าผลิต</p>
+            <p className="mt-0.5 text-xs font-semibold text-amber-700">
+              เพจ {job.salesPage || "-"} · รายได้เข้า {job.incomeBranch || "-"} · 🏭 สาขาที่ผลิต {job.productionBranch || job.branch || "-"}
+            </p>
+            {rejectingJob ? (
+              <div className="mt-3 space-y-2">
+                <textarea
+                  value={rejectJobReason}
+                  onChange={(event) => setRejectJobReason(event.target.value)}
+                  placeholder="เหตุผลที่ตีกลับ (เช่น ข้อมูลไม่ครบ / ราคาผิด)"
+                  className="w-full rounded-2xl border border-amber-200 bg-white px-3 py-2 text-sm outline-none"
+                  rows={2}
+                />
+                <div className="flex gap-2">
+                  <button type="button" onClick={() => { onRejectJob(job.id, rejectJobReason); setRejectingJob(false); setRejectJobReason(""); }} className="flex-1 rounded-2xl bg-rose-600 px-4 py-2.5 text-sm font-extrabold text-white">ยืนยันตีกลับ</button>
+                  <button type="button" onClick={() => { setRejectingJob(false); setRejectJobReason(""); }} className="rounded-2xl bg-white px-4 py-2.5 text-sm font-bold text-k2-ink ring-1 ring-black/5">ยกเลิก</button>
+                </div>
+              </div>
+            ) : (
+              <div className="mt-3 flex gap-2">
+                <button type="button" onClick={() => onAcceptJob(job.id)} className="flex-1 rounded-2xl bg-emerald-500 px-4 py-2.5 text-sm font-extrabold text-white shadow">✅ อนุมัติเข้าผลิต</button>
+                <button type="button" onClick={() => setRejectingJob(true)} className="rounded-2xl bg-rose-100 px-4 py-2.5 text-sm font-bold text-rose-700">ตีกลับ</button>
+              </div>
+            )}
+          </div>
+        ) : job.acceptance === "pending" ? (
+          <div className="mb-4 rounded-3xl bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-700 ring-1 ring-amber-200">⏳ งานนี้รอผู้จัดการสาขา{job.productionBranch ? ` (${job.productionBranch})` : ""}อนุมัติเข้าผลิต</div>
+        ) : job.acceptance === "rejected" ? (
+          <div className="mb-4 rounded-3xl bg-rose-50 px-4 py-3 text-sm font-semibold text-rose-700 ring-1 ring-rose-200">↩︎ งานนี้ถูกตีกลับ{job.rejectReason ? `: ${job.rejectReason}` : ""}</div>
+        ) : null}
         <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
           <div>
             <div className="mb-3 flex flex-wrap gap-2">
@@ -5685,14 +6123,26 @@ function JobDetail({
                 </select>
               </label>
             </div>
-            <button
-              type="button"
-              onClick={() => onAssign(job.id, assignDesigner, assignProduction)}
-              disabled={assignDesigner === job.assignedDesigner && assignProduction === job.assignedProduction}
-              className="mt-3 rounded-2xl bg-k2-ink px-5 py-3 text-sm font-extrabold text-white disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              บันทึกการมอบหมาย
-            </button>
+            {(() => {
+              const assignmentUnchanged = assignDesigner === job.assignedDesigner && assignProduction === job.assignedProduction;
+              return (
+                <div className="mt-3 flex flex-wrap items-center gap-3">
+                  <button
+                    type="button"
+                    onClick={() => onAssign(job.id, assignDesigner, assignProduction)}
+                    disabled={assignmentUnchanged}
+                    className="rounded-2xl bg-k2-ink px-5 py-3 text-sm font-extrabold text-white disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    บันทึกการมอบหมาย
+                  </button>
+                  {assignmentUnchanged ? (
+                    <span className="text-xs font-semibold text-k2-muted">✓ บันทึกไว้แล้ว — เปลี่ยนผู้รับผิดชอบด้านบนก่อนถึงจะกดบันทึกได้</span>
+                  ) : (
+                    <span className="text-xs font-semibold text-emerald-600">มีการเปลี่ยนแปลง — กดบันทึกเพื่อยืนยัน</span>
+                  )}
+                </div>
+              );
+            })()}
           </div>
         ) : null}
 
@@ -5749,6 +6199,70 @@ function JobDetail({
               <p className="text-sm font-semibold text-k2-muted sm:col-span-2">ยังไม่มีไฟล์แนบ</p>
             ) : null}
           </div>
+        </div>
+
+        {/* อาร์ตเวิร์กสำหรับใบสั่งงาน — ดีไซเนอร์วางรูปงานที่ออกแบบเสร็จ + ป้าย + จำนวน เพื่อให้ฝ่ายผลิตปริ้น */}
+        <div className="mt-5 rounded-3xl bg-gradient-to-br from-violet-50 to-white p-5 ring-1 ring-violet-100">
+          <div className="mb-1 flex flex-wrap items-center justify-between gap-2">
+            <h4 className="flex items-center gap-2 font-semibold"><Sparkles className="h-4 w-4 text-violet-500" /> อาร์ตเวิร์กสำหรับใบสั่งงาน</h4>
+            <span className="rounded-full bg-violet-100 px-2.5 py-0.5 text-xs font-bold text-violet-700">{artworkDraft.length} รูป</span>
+          </div>
+          <p className="mb-4 text-xs font-semibold text-k2-muted">รูปงานที่ออกแบบเสร็จ + จำนวนต่อชิ้น จะไปแสดงในใบสั่งงานให้ฝ่ายผลิตปริ้น</p>
+
+          {canArtwork ? (
+            <div className="mb-4 flex flex-wrap gap-2">
+              <label className={`inline-flex cursor-pointer items-center gap-2 rounded-2xl bg-violet-600 px-4 py-2 text-sm font-bold text-white ${artworkBusy ? "opacity-60" : ""}`}>
+                <Upload className="h-4 w-4" /> {artworkBusy ? "กำลังอัปโหลด…" : "เพิ่มรูปอาร์ตเวิร์ก"}
+                <input type="file" accept="image/*" multiple disabled={artworkBusy} className="sr-only" onChange={(event) => { void addArtworkFiles(event.target.files); event.target.value = ""; }} />
+              </label>
+              {job.files.some((file) => file.type === "image" && file.url) ? (
+                <button type="button" onClick={pullImagesFromFiles} className="inline-flex items-center gap-2 rounded-2xl bg-white px-4 py-2 text-sm font-bold text-violet-700 ring-1 ring-violet-200">
+                  <FileImage className="h-4 w-4" /> ดึงจากไฟล์แนบ
+                </button>
+              ) : null}
+              {artworkDirty ? (
+                <button type="button" onClick={() => { onSaveArtwork(job, artworkDraft); setArtworkDirty(false); }} className="inline-flex items-center gap-2 rounded-2xl bg-emerald-500 px-4 py-2 text-sm font-bold text-white">
+                  💾 บันทึกอาร์ตเวิร์ก
+                </button>
+              ) : null}
+            </div>
+          ) : null}
+
+          {artworkDraft.length > 0 ? (
+            <div className="grid gap-3 sm:grid-cols-2">
+              {artworkDraft.map((item) => (
+                <div key={item.id} className="rounded-2xl bg-white p-3 ring-1 ring-black/5">
+                  <div className="relative mb-2 overflow-hidden rounded-xl bg-slate-100">
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img src={item.url} alt={item.label || "artwork"} className="h-36 w-full object-contain" />
+                    {canArtwork ? (
+                      <button type="button" onClick={() => removeArtwork(item.id)} className="absolute right-2 top-2 grid h-8 w-8 place-items-center rounded-xl bg-white/90 text-rose-600 shadow" title="ลบรูปนี้">
+                        <Trash2 className="h-4 w-4" />
+                      </button>
+                    ) : null}
+                  </div>
+                  {canArtwork ? (
+                    <div className="space-y-2">
+                      <input value={item.label ?? ""} onChange={(event) => patchArtwork(item.id, { label: event.target.value })} placeholder="ชื่อ/รายการ เช่น สแตนดี้, พวงกุญแจลายเขียว" className="w-full rounded-xl border border-violet-100 bg-violet-50/40 px-3 py-2 text-sm font-semibold outline-none" />
+                      <div className="flex gap-2">
+                        <input type="number" min={0} value={item.qty ?? ""} onChange={(event) => patchArtwork(item.id, { qty: event.target.value ? Number(event.target.value) : undefined })} placeholder="จำนวน" className="w-28 rounded-xl border border-violet-100 bg-violet-50/40 px-3 py-2 text-sm font-semibold outline-none" />
+                        <input value={item.note ?? ""} onChange={(event) => patchArtwork(item.id, { note: event.target.value })} placeholder="โน้ตผลิต (ขนาด/วัสดุ/สี)" className="flex-1 rounded-xl border border-violet-100 bg-violet-50/40 px-3 py-2 text-sm outline-none" />
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="flex items-baseline justify-between gap-2">
+                      <p className="truncate font-semibold">{item.label || "—"}</p>
+                      {item.qty ? <span className="shrink-0 font-bold text-violet-700">{item.qty} ชิ้น</span> : null}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="rounded-2xl bg-white/70 px-4 py-6 text-center text-sm font-semibold text-k2-muted">
+              ยังไม่มีอาร์ตเวิร์ก — {canArtwork ? "กด \"เพิ่มรูปอาร์ตเวิร์ก\" เพื่อวางรูปงานที่ออกแบบเสร็จ" : "รอดีไซเนอร์วางรูปงาน"}
+            </p>
+          )}
         </div>
       </section>
 
@@ -5926,7 +6440,7 @@ function JobDetail({
         </div>
         <QuoteDocumentPreview job={job} companyProfile={companyProfile} quoteNumber={workOrderNumber} canSeeMoney={canSeeMoney} />
       </section>
-      {printType ? <PrintableDoc job={job} company={companyProfile} docType={printType} docNumber={workOrderNumber} onClose={() => setPrintType(null)} /> : null}
+      {printType ? <PrintableDoc job={job} company={companyProfile} docType={printType} docNumber={workOrderNumber} customer={customer} onClose={() => setPrintType(null)} /> : null}
     </div>
   );
 }
@@ -7393,11 +7907,13 @@ function SettingsView({
   onRemoveMember,
   onResetMemberPassword,
   permissionMatrix,
+  currentPermissions,
   onUpdateRolePermission,
   onResetRolePermissions
 }: {
   currentUserId: string;
   currentRole: Role;
+  currentPermissions: PermissionKey[];
   teamMembers: TeamMember[];
   companyProfile: CompanyProfile;
   onUpdateCompany: (profile: CompanyProfile) => void;
@@ -7410,10 +7926,11 @@ function SettingsView({
   onUpdateRolePermission: (role: Role, permission: PermissionKey, enabled: boolean) => void;
   onResetRolePermissions: () => void;
 }) {
-  const currentPermissions = permissionMatrix[currentRole] ?? [];
-  const canManageTeam = currentPermissions.includes("manage_users");
-  const canManagePermissions = currentPermissions.includes("manage_permissions");
-  const canManageCompany = currentPermissions.includes("manage_company_settings");
+  // ใช้สิทธิ์รวม (บทบาทหลัก+เสริม) ให้ตรงกับ can() ทั้งแอป — กันปุ่มในตั้งค่าจางเพราะเช็คแค่บทบาทหลัก
+  const effectivePermissions = currentPermissions.length > 0 ? currentPermissions : (permissionMatrix[currentRole] ?? []);
+  const canManageTeam = effectivePermissions.includes("manage_users");
+  const canManagePermissions = effectivePermissions.includes("manage_permissions");
+  const canManageCompany = effectivePermissions.includes("manage_company_settings");
   const isOwner = currentRole === "Owner";
   const [pwBusyId, setPwBusyId] = useState<string | null>(null);
   const [pwResult, setPwResult] = useState<{ memberId: string; ok: boolean; password?: string; msg: string } | null>(null);
