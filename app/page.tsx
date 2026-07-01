@@ -1252,6 +1252,8 @@ export default function Page() {
   // เมนูมือถือแบบหุบ/กางได้ (ประหยัดพื้นที่ ไม่บังเนื้อหา)
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [showPendingPanel, setShowPendingPanel] = useState(false);
+  // เปิดใบสั่งงานแบบ pop-up จากหน้าไหนก็ได้ (ลิสต์งานของฉัน/งานค้าง ฯลฯ) โดยไม่ต้องเข้าหน้ารายละเอียด
+  const [workOrderJobId, setWorkOrderJobId] = useState<string | null>(null);
 
   useEffect(() => {
     if (!supabase) return;
@@ -3865,6 +3867,15 @@ export default function Page() {
           </div>
         </div>
       ) : null}
+
+      {/* ใบสั่งงานแบบ pop-up — เปิดจากลิสต์ได้เลย ไม่ต้องเข้าหน้ารายละเอียด */}
+      {workOrderJobId ? (() => {
+        const woJob = jobs.find((job) => job.id === workOrderJobId);
+        if (!woJob) return null;
+        const woNumber = woJob.quoteNumber ?? quoteNumberFor(Number(woJob.id.replace(/\D/g, "").slice(-4)) || 1, companyProfile.quotePrefix);
+        return <PrintableDoc job={woJob} company={companyProfile} docType="workorder" docNumber={woNumber} customer={customerRecords.find((c) => c.id === woJob.customerId)} onClose={() => setWorkOrderJobId(null)} />;
+      })() : null}
+
       <div className="mx-auto flex max-w-[1800px] gap-4">
         <aside className="glass soft-scrollbar sticky top-5 hidden h-[calc(100dvh-2.5rem)] w-72 shrink-0 overflow-y-auto rounded-[1.7rem] p-4 lg:block">
           <BrandBlock currentUser={currentUserPrefs} onEditProfile={() => setShowPersonalization(true)} />
@@ -4169,6 +4180,7 @@ export default function Page() {
                     setSelectedJobId(id);
                     setActiveView("Detail");
                   }}
+                  onPrintWorkOrder={setWorkOrderJobId}
                 />
               </motion.div>
             )}
@@ -4840,12 +4852,14 @@ function MyJobsView({
   jobs,
   currentUser,
   canSeeMoney,
-  onSelect
+  onSelect,
+  onPrintWorkOrder
 }: {
   jobs: Job[];
   currentUser: TeamMember;
   canSeeMoney: boolean;
   onSelect: (id: string) => void;
+  onPrintWorkOrder: (id: string) => void;
 }) {
   const mine = useMemo(() => jobs.filter((job) => jobIsAssignedTo(job, currentUser)), [jobs, currentUser]);
   const openJobs = mine.filter((job) => !["Completed", "Cancelled"].includes(job.status));
@@ -4869,11 +4883,19 @@ function MyJobsView({
       </div>
 
       <div className="glass rounded-[1.5rem] p-5">
-        <h3 className="mb-4 text-xl font-semibold">งานที่ต้องทำ</h3>
+        <h3 className="mb-1 text-xl font-semibold">งานที่ต้องทำ</h3>
+        <p className="mb-4 text-xs font-semibold text-k2-muted">แตะการ์ดเพื่อเปิดงาน (ใส่รูป/ส่งงาน) หรือกดปุ่มลัดด้านล่างเพื่อพิมพ์/แชร์ใบสั่งงานได้เลย</p>
         {ordered.length ? (
           <div className="space-y-3">
             {ordered.map((job) => (
-              <JobRow key={job.id} job={job} canSeeMoney={canSeeMoney} onSelect={onSelect} />
+              <div key={job.id} className="rounded-2xl bg-white/60 p-2">
+                <JobRow job={job} canSeeMoney={canSeeMoney} onSelect={onSelect} />
+                <div className="mt-1 flex flex-wrap gap-2 px-2 pb-1">
+                  <button type="button" onClick={() => onSelect(job.id)} className="rounded-xl bg-violet-100 px-3 py-1.5 text-xs font-bold text-violet-700">🎨 ทำใบสั่งงาน (ใส่รูป)</button>
+                  <button type="button" onClick={() => onPrintWorkOrder(job.id)} className="rounded-xl bg-k2-ink px-3 py-1.5 text-xs font-bold text-white">🖨️ พิมพ์ / 📤 แชร์ใบสั่งงาน</button>
+                  <button type="button" onClick={() => onSelect(job.id)} className="rounded-xl bg-white px-3 py-1.5 text-xs font-bold text-k2-ink ring-1 ring-black/5">ส่งงาน →</button>
+                </div>
+              </div>
             ))}
           </div>
         ) : (
