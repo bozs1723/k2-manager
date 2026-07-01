@@ -5545,111 +5545,147 @@ function PrintableDoc({ job, company, docType, docNumber, customer, onClose }: {
 function WorkOrderDoc({ job, company, docNumber, customer, onClick }: { job: Job; company: CompanyProfile; docNumber: string; customer?: Customer; onClick: (e: React.MouseEvent) => void }) {
   const today = new Date().toLocaleDateString("th-TH", { year: "numeric", month: "long", day: "numeric" });
   const dueInfo = dueUrgency(job.dueDate, job.status);
-  // อาร์ตเวิร์กที่ดีไซเนอร์วางไว้ — ถ้าไม่มี ใช้รูปจากไฟล์แนบเป็นตัวสำรอง
+  // อาร์ตเวิร์กที่ดีไซเนอร์วางไว้ — ถ้าไม่มี ใช้รูปจากไฟล์แนบเป็นตัวสำรอง (รองรับไม่จำกัดจำนวน)
   const artwork: ArtworkItem[] = (job.artwork && job.artwork.length > 0)
     ? job.artwork
     : job.files.filter((file) => file.type === "image" && file.url).map((file) => ({ id: file.id, url: file.url as string, label: "", qty: undefined, note: "" }));
   const totalArtQty = artwork.reduce((sum, item) => sum + (Number(item.qty) || 0), 0);
-  const accent = "#7c3aed";
-  const cell: React.CSSProperties = { border: "1px solid #cbd5e1", padding: "7px 10px", verticalAlign: "top" };
+  // โทนเอกสารทางการ: เขียวเข้มแบรนด์ + เส้นตีกรอบ ไม่มีสีสด/อีโมจิ
+  const ink = "#14383d";
+  const rule = "#1f2937";
+  const contact = [company.phone ? `โทร ${company.phone}` : "", company.email || ""].filter(Boolean).join("  ·  ");
+  const labelCell: React.CSSProperties = { border: "1px solid #94a3b8", padding: "6px 10px", background: "#f1f5f4", fontWeight: 800, fontSize: 11.5, color: ink, whiteSpace: "nowrap", verticalAlign: "top", width: 108 };
+  const valueCell: React.CSSProperties = { border: "1px solid #94a3b8", padding: "6px 10px", fontSize: 12.5, verticalAlign: "top" };
+  // รูปยิ่งเยอะ การ์ดยิ่งเล็กลงเพื่อลงหน้ากระดาษได้พอดี
+  const imgH = artwork.length <= 1 ? 340 : artwork.length <= 2 ? 250 : artwork.length <= 6 ? 200 : 150;
+  const minCol = artwork.length <= 1 ? 460 : artwork.length <= 4 ? 230 : 170;
   return (
-    <div id="print-doc" className="mx-auto bg-white text-slate-900 shadow-2xl" onClick={onClick} style={{ fontSize: "13px", lineHeight: 1.5, padding: "26px 30px" }}>
-      {/* หัวเอกสาร */}
-      <div style={{ display: "flex", alignItems: "stretch", justifyContent: "space-between", gap: 16, borderBottom: `3px solid ${accent}`, paddingBottom: 14 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+    <div id="print-doc" className="mx-auto bg-white text-slate-900 shadow-2xl" onClick={onClick} style={{ fontSize: "13px", lineHeight: 1.5, padding: "30px 34px", fontFamily: "'Sarabun','Noto Sans Thai',sans-serif" }}>
+      {/* หัวเอกสาร — โลโก้ + ข้อมูลบริษัท / ป้ายชื่อเอกสาร */}
+      <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 20 }}>
+        <div style={{ display: "flex", alignItems: "flex-start", gap: 14 }}>
           {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src="/assets/k2smart-logo.png" alt="logo" style={{ width: 60, height: 60, objectFit: "contain" }} />
+          <img src="/assets/k2smart-logo.png" alt="logo" style={{ width: 74, height: 74, objectFit: "contain" }} />
           <div>
-            <p style={{ fontSize: 20, fontWeight: 900, letterSpacing: 0.5 }}>{company.name || "K2Smart"}</p>
-            <p style={{ color: "#475569", fontSize: 12 }}>{company.legalName || "ระบบจัดการงานผลิต"}</p>
-            {company.phone ? <p style={{ color: "#475569", fontSize: 12 }}>โทร {company.phone}</p> : null}
+            <p style={{ fontSize: 21, fontWeight: 900, letterSpacing: 0.3, color: ink }}>{company.name || "K2Smart"}</p>
+            {company.legalName ? <p style={{ color: "#334155", fontSize: 12.5 }}>{company.legalName}</p> : null}
+            {company.address ? <p style={{ color: "#475569", fontSize: 11.5 }}>{company.address}</p> : null}
+            {contact ? <p style={{ color: "#475569", fontSize: 11.5 }}>{contact}</p> : null}
+            {company.taxId ? <p style={{ color: "#475569", fontSize: 11.5 }}>เลขประจำตัวผู้เสียภาษี {company.taxId}</p> : null}
           </div>
         </div>
-        <div style={{ textAlign: "right", display: "flex", flexDirection: "column", justifyContent: "center" }}>
-          <div style={{ display: "inline-block", background: accent, color: "#fff", borderRadius: 10, padding: "6px 16px", fontWeight: 900, fontSize: 19 }}>ใบสั่งงาน</div>
-          <p style={{ letterSpacing: 3, fontSize: 12, color: "#475569", marginTop: 3 }}>WORK ORDER</p>
-          <p style={{ marginTop: 6, fontSize: 13 }}>เลขที่ <b>{job.id}</b></p>
+        <div style={{ textAlign: "right", minWidth: 190 }}>
+          <div style={{ border: `2px solid ${ink}`, borderRadius: 4, padding: "8px 16px", textAlign: "center" }}>
+            <p style={{ fontSize: 20, fontWeight: 900, color: ink, lineHeight: 1.15 }}>ใบสั่งงาน</p>
+            <p style={{ letterSpacing: 3, fontSize: 10.5, color: "#64748b", fontWeight: 700 }}>WORK ORDER</p>
+          </div>
+          <table style={{ marginTop: 8, marginLeft: "auto", fontSize: 12 }}>
+            <tbody>
+              <tr><td style={{ color: "#64748b", textAlign: "right", paddingRight: 8 }}>เลขที่งาน</td><td style={{ fontWeight: 800, textAlign: "right" }}>{job.id}</td></tr>
+              <tr><td style={{ color: "#64748b", textAlign: "right", paddingRight: 8 }}>วันที่ออก</td><td style={{ fontWeight: 700, textAlign: "right" }}>{job.orderDate || today}</td></tr>
+            </tbody>
+          </table>
         </div>
       </div>
 
-      {/* แถบข้อมูลหลัก */}
-      <div style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr", gap: 0, marginTop: 14, border: "1px solid #cbd5e1", borderRadius: 10, overflow: "hidden" }}>
-        <div style={{ padding: "10px 14px", borderRight: "1px solid #e2e8f0" }}>
-          <p style={{ fontSize: 11, color: "#7c3aed", fontWeight: 800 }}>ลูกค้า</p>
-          <p style={{ fontWeight: 800, fontSize: 15 }}>{job.customerName || "-"}{customer?.customerCode ? ` · ${customer.customerCode}` : ""}</p>
-          <p style={{ color: "#475569", fontSize: 12 }}>
-            {job.phone ? `โทร ${job.phone}` : ""}{job.phone && job.lineId ? " · " : ""}{job.lineId ? `LINE ${job.lineId}` : ""}
-          </p>
-          {customer ? (
-            <p style={{ color: "#64748b", fontSize: 11, marginTop: 3 }}>
-              📦 ลูกค้าเก่า {customer.totalOrders || 0} ออเดอร์{customer.lastOrderDate ? ` · ล่าสุด ${customer.lastOrderDate}` : ""}
-            </p>
-          ) : null}
-        </div>
-        <div style={{ padding: "10px 14px", display: "grid", gridTemplateColumns: "1fr 1fr", gap: "6px 10px" }}>
-          <div><p style={{ fontSize: 11, color: "#64748b", fontWeight: 700 }}>วันที่คอนเฟิร์ม</p><p style={{ fontWeight: 800 }}>{job.orderDate || today}</p></div>
-          <div><p style={{ fontSize: 11, color: "#64748b", fontWeight: 700 }}>กำหนดส่ง</p><p style={{ fontWeight: 900, color: dueInfo ? "#dc2626" : "#0f172a" }}>{job.dueDate || "-"}{job.isExpress ? " ⚡" : ""}</p></div>
-          <div><p style={{ fontSize: 11, color: "#64748b", fontWeight: 700 }}>สาขาผลิต</p><p style={{ fontWeight: 800 }}>{job.productionBranch || job.branch || "-"}</p></div>
-          <div><p style={{ fontSize: 11, color: "#64748b", fontWeight: 700 }}>อ้างอิงใบเสนอราคา</p><p style={{ fontWeight: 800 }}>{job.quoteNumber || docNumber || "-"}</p></div>
-        </div>
+      {/* เส้นคาดหัวกระดาษ (หนา+บาง แบบเอกสารทางการ) */}
+      <div style={{ borderTop: `3px solid ${rule}`, borderBottom: `1px solid ${rule}`, height: 3, marginTop: 12 }} />
+
+      {/* ตารางข้อมูลงาน */}
+      <table style={{ width: "100%", borderCollapse: "collapse", marginTop: 16 }}>
+        <tbody>
+          <tr>
+            <td style={labelCell}>ลูกค้า</td>
+            <td style={valueCell}><b>{job.customerName || "-"}</b>{customer?.customerCode ? `  (${customer.customerCode})` : ""}</td>
+            <td style={labelCell}>วันที่คอนเฟิร์ม</td>
+            <td style={valueCell}>{job.orderDate || "-"}</td>
+          </tr>
+          <tr>
+            <td style={labelCell}>ติดต่อ</td>
+            <td style={valueCell}>{[job.phone ? `โทร ${job.phone}` : "", job.lineId ? `LINE ${job.lineId}` : ""].filter(Boolean).join("  ·  ") || "-"}</td>
+            <td style={labelCell}>กำหนดส่ง</td>
+            <td style={{ ...valueCell, fontWeight: 800, color: dueInfo ? "#b91c1c" : "#0f172a" }}>{job.dueDate || "-"}{job.isExpress ? "  (ด่วน)" : ""}</td>
+          </tr>
+          <tr>
+            <td style={labelCell}>สาขาผลิต</td>
+            <td style={valueCell}>{job.productionBranch || job.branch || "-"}</td>
+            <td style={labelCell}>ประเภทงาน</td>
+            <td style={valueCell}>{jobTypeLabel[job.type]}</td>
+          </tr>
+          <tr>
+            <td style={labelCell}>อ้างอิงใบเสนอราคา</td>
+            <td style={valueCell}>{job.quoteNumber || docNumber || "-"}</td>
+            <td style={labelCell}>ประวัติลูกค้า</td>
+            <td style={valueCell}>{customer ? `ลูกค้าเก่า ${customer.totalOrders || 0} ออเดอร์${customer.lastOrderDate ? `  ·  ล่าสุด ${customer.lastOrderDate}` : ""}` : "ลูกค้าใหม่"}</td>
+          </tr>
+        </tbody>
+      </table>
+
+      {/* รายละเอียดงาน */}
+      <div style={{ border: "1px solid #94a3b8", borderTop: "none", padding: "8px 10px" }}>
+        <p style={{ fontSize: 11.5, fontWeight: 800, color: ink }}>รายละเอียดงาน</p>
+        <p style={{ fontWeight: 800, fontSize: 14 }}>{job.title}</p>
+        {job.description ? <p style={{ marginTop: 2, color: "#334155", whiteSpace: "pre-wrap", fontSize: 12.5 }}>{job.description}</p> : null}
       </div>
 
-      {/* ชื่องาน + ประเภท */}
-      <div style={{ marginTop: 14, display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 12 }}>
-        <h2 style={{ fontSize: 18, fontWeight: 900 }}>{job.title}</h2>
-        <span style={{ background: "#f1f5f9", borderRadius: 999, padding: "3px 12px", fontWeight: 800, fontSize: 12 }}>{jobTypeLabel[job.type]}</span>
+      {/* แบบงาน / อาร์ตเวิร์ก (ไม่จำกัดจำนวน — เรียงต่อกันอัตโนมัติ) */}
+      <div style={{ marginTop: 18, marginBottom: 8, display: "flex", alignItems: "baseline", justifyContent: "space-between", borderBottom: `2px solid ${ink}`, paddingBottom: 4 }}>
+        <p style={{ fontWeight: 900, fontSize: 13.5, color: ink, letterSpacing: 0.3 }}>แบบงาน / อาร์ตเวิร์ก</p>
+        <p style={{ fontSize: 11, color: "#64748b", fontWeight: 700 }}>ทั้งหมด {artwork.length} รายการ</p>
       </div>
-      {job.description ? <p style={{ marginTop: 4, color: "#475569", whiteSpace: "pre-wrap", fontSize: 12.5 }}>{job.description}</p> : null}
-
-      {/* อาร์ตเวิร์ก */}
-      <p style={{ marginTop: 16, marginBottom: 8, fontWeight: 900, fontSize: 14, color: accent }}>🎨 แบบงาน / อาร์ตเวิร์ก</p>
       {artwork.length > 0 ? (
-        <div style={{ display: "grid", gridTemplateColumns: artwork.length === 1 ? "1fr" : "1fr 1fr", gap: 12 }}>
-          {artwork.map((item) => (
-            <div key={item.id} style={{ border: "1px solid #e2e8f0", borderRadius: 12, overflow: "hidden", breakInside: "avoid" }}>
-              <div style={{ background: "#f8fafc", display: "flex", alignItems: "center", justifyContent: "center", height: artwork.length === 1 ? 320 : 220 }}>
+        <div style={{ display: "grid", gridTemplateColumns: `repeat(auto-fill, minmax(${minCol}px, 1fr))`, gap: 10 }}>
+          {artwork.map((item, index) => (
+            <div key={item.id} style={{ border: "1px solid #94a3b8", overflow: "hidden", breakInside: "avoid" }}>
+              <div style={{ background: "#f8fafc", display: "flex", alignItems: "center", justifyContent: "center", height: imgH, borderBottom: "1px solid #cbd5e1" }}>
                 {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img src={item.url} alt={item.label || "artwork"} style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain" }} />
               </div>
-              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, padding: "8px 12px", borderTop: "1px solid #e2e8f0" }}>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, padding: "6px 10px" }}>
                 <div style={{ minWidth: 0 }}>
-                  <p style={{ fontWeight: 800, fontSize: 13, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{item.label || "รายการงาน"}</p>
-                  {item.note ? <p style={{ color: "#64748b", fontSize: 11 }}>{item.note}</p> : null}
+                  <p style={{ fontWeight: 800, fontSize: 12.5, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    <span style={{ color: "#64748b" }}>#{index + 1}</span>  {item.label || "รายการงาน"}
+                  </p>
+                  {item.note ? <p style={{ color: "#64748b", fontSize: 11, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{item.note}</p> : null}
                 </div>
-                {item.qty ? <span style={{ background: accent, color: "#fff", borderRadius: 8, padding: "4px 12px", fontWeight: 900, fontSize: 15, whiteSpace: "nowrap" }}>{item.qty} ชิ้น</span> : null}
+                {item.qty ? <span style={{ border: `1.5px solid ${ink}`, color: ink, borderRadius: 3, padding: "2px 10px", fontWeight: 900, fontSize: 13.5, whiteSpace: "nowrap" }}>{item.qty} ชิ้น</span> : null}
               </div>
             </div>
           ))}
         </div>
       ) : (
-        <div style={{ border: "1px dashed #cbd5e1", borderRadius: 12, padding: "30px 0", textAlign: "center", color: "#94a3b8", fontWeight: 700 }}>— ยังไม่มีอาร์ตเวิร์ก —</div>
+        <div style={{ border: "1px dashed #94a3b8", padding: "28px 0", textAlign: "center", color: "#94a3b8", fontWeight: 700 }}>— ยังไม่มีอาร์ตเวิร์ก —</div>
       )}
 
       {/* สรุปจำนวน + ผู้รับผิดชอบ */}
-      <table style={{ width: "100%", borderCollapse: "collapse", marginTop: 16, fontSize: 12.5 }}>
+      <table style={{ width: "100%", borderCollapse: "collapse", marginTop: 16 }}>
         <tbody>
           <tr>
-            <td style={{ ...cell, background: "#faf5ff", fontWeight: 800, width: 130 }}>จำนวนรวม</td>
-            <td style={cell}>{totalArtQty > 0 ? `${totalArtQty} ชิ้น` : `${job.quantity} ชิ้น`}</td>
-            <td style={{ ...cell, background: "#faf5ff", fontWeight: 800, width: 130 }}>ผู้ออกแบบ</td>
-            <td style={cell}>{job.assignedDesigner && job.assignedDesigner !== "Unassigned" ? job.assignedDesigner : "-"}</td>
+            <td style={labelCell}>จำนวนรวม</td>
+            <td style={{ ...valueCell, fontWeight: 800 }}>{totalArtQty > 0 ? `${totalArtQty} ชิ้น` : `${job.quantity} ชิ้น`}</td>
+            <td style={labelCell}>ผู้ออกแบบ</td>
+            <td style={valueCell}>{job.assignedDesigner && job.assignedDesigner !== "Unassigned" ? job.assignedDesigner : "-"}</td>
           </tr>
           <tr>
-            <td style={{ ...cell, background: "#faf5ff", fontWeight: 800 }}>ผู้ผลิต</td>
-            <td style={cell}>{job.assignedProduction && job.assignedProduction !== "Unassigned" ? job.assignedProduction : "-"}</td>
-            <td style={{ ...cell, background: "#faf5ff", fontWeight: 800 }}>โน้ตภายใน</td>
-            <td style={cell}>{job.internalNotes || "-"}</td>
+            <td style={labelCell}>ผู้ผลิต</td>
+            <td style={valueCell}>{job.assignedProduction && job.assignedProduction !== "Unassigned" ? job.assignedProduction : "-"}</td>
+            <td style={labelCell}>โน้ตภายใน</td>
+            <td style={valueCell}>{job.internalNotes || "-"}</td>
           </tr>
         </tbody>
       </table>
 
       {/* ช่องเซ็น/ตรวจ */}
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12, marginTop: 26, fontSize: 12 }}>
-        <div style={{ textAlign: "center" }}><div style={{ borderTop: "1px solid #94a3b8", paddingTop: 4 }}>ผู้ออกแบบ</div></div>
-        <div style={{ textAlign: "center" }}><div style={{ borderTop: "1px solid #94a3b8", paddingTop: 4 }}>ผู้ตรวจสอบ</div></div>
-        <div style={{ textAlign: "center" }}><div style={{ borderTop: "1px solid #94a3b8", paddingTop: 4 }}>ฝ่ายผลิต</div></div>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 24, marginTop: 34, fontSize: 12 }}>
+        {["ผู้ออกแบบ", "ผู้ตรวจสอบ", "ฝ่ายผลิต"].map((role) => (
+          <div key={role} style={{ textAlign: "center" }}>
+            <div style={{ height: 30 }} />
+            <div style={{ borderTop: "1px solid #334155", paddingTop: 4 }}>{role}</div>
+            <div style={{ color: "#94a3b8", fontSize: 10.5 }}>ลงชื่อ / วันที่</div>
+          </div>
+        ))}
       </div>
-      <p style={{ marginTop: 14, fontSize: 10.5, color: "#94a3b8", textAlign: "center" }}>ออกโดยระบบ K2 Manager · {today}</p>
+      <p style={{ marginTop: 16, fontSize: 10, color: "#94a3b8", textAlign: "center", borderTop: "1px solid #e2e8f0", paddingTop: 6 }}>เอกสารนี้ออกโดยระบบ {company.name || "K2 Manager"} · {today} · เลขที่งาน {job.id}</p>
     </div>
   );
 }
