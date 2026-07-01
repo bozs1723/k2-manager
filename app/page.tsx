@@ -2657,12 +2657,8 @@ export default function Page() {
       : existingCustomer;
     const price = input?.price ?? 14400;
     const deposit = input?.deposit ?? 4000;
-    // ทุกงานต้องให้ผู้จัดการสาขาอนุมัติก่อน — ยกเว้นคนสร้างเป็น "เจ้าของ" หรือ "ผู้จัดการของสาขาที่ผลิตเอง" (เป็นผู้อนุมัติอยู่แล้ว)
-    const newJobBranch = input?.productionBranch ?? null;
-    const creatorIsApprover =
-      currentUser.role === "Owner" ||
-      (currentUser.role === "Manager" && (!currentUser.branch || !newJobBranch || newJobBranch === currentUser.branch));
-    const jobAcceptance: "pending" | "accepted" = creatorIsApprover ? "accepted" : "pending";
+    // อนุมัติอัตโนมัติทันทีที่สร้างงาน (รวมถึงเซลสร้าง) — งานพร้อมให้มอบหมาย/ผลิตได้เลย ไม่ต้องรอผจก.กดอนุมัติ
+    const jobAcceptance: "pending" | "accepted" = "accepted";
     const initialJobNumber = jobNumberFor(jobs);
     const initialQuoteNumber = quoteNumberFromValues(
       jobs.map((job) => job.quoteNumber ?? ""),
