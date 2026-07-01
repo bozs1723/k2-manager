@@ -4259,6 +4259,7 @@ export default function Page() {
                 <SettingsView
                   currentUserId={currentUser.id}
                   currentRole={currentUser.role}
+                  currentPermissions={currentRolePermissions}
                   teamMembers={teamMembers}
                   companyProfile={companyProfile}
                   onUpdateCompany={saveCompanyProfile}
@@ -7782,11 +7783,13 @@ function SettingsView({
   onRemoveMember,
   onResetMemberPassword,
   permissionMatrix,
+  currentPermissions,
   onUpdateRolePermission,
   onResetRolePermissions
 }: {
   currentUserId: string;
   currentRole: Role;
+  currentPermissions: PermissionKey[];
   teamMembers: TeamMember[];
   companyProfile: CompanyProfile;
   onUpdateCompany: (profile: CompanyProfile) => void;
@@ -7799,10 +7802,11 @@ function SettingsView({
   onUpdateRolePermission: (role: Role, permission: PermissionKey, enabled: boolean) => void;
   onResetRolePermissions: () => void;
 }) {
-  const currentPermissions = permissionMatrix[currentRole] ?? [];
-  const canManageTeam = currentPermissions.includes("manage_users");
-  const canManagePermissions = currentPermissions.includes("manage_permissions");
-  const canManageCompany = currentPermissions.includes("manage_company_settings");
+  // ใช้สิทธิ์รวม (บทบาทหลัก+เสริม) ให้ตรงกับ can() ทั้งแอป — กันปุ่มในตั้งค่าจางเพราะเช็คแค่บทบาทหลัก
+  const effectivePermissions = currentPermissions.length > 0 ? currentPermissions : (permissionMatrix[currentRole] ?? []);
+  const canManageTeam = effectivePermissions.includes("manage_users");
+  const canManagePermissions = effectivePermissions.includes("manage_permissions");
+  const canManageCompany = effectivePermissions.includes("manage_company_settings");
   const isOwner = currentRole === "Owner";
   const [pwBusyId, setPwBusyId] = useState<string | null>(null);
   const [pwResult, setPwResult] = useState<{ memberId: string; ok: boolean; password?: string; msg: string } | null>(null);
