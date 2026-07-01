@@ -1875,9 +1875,9 @@ export default function Page() {
     // งานเก่าที่ไม่มีสลิป (ก่อนมีระบบนี้) ไม่ถูกกั้น เพื่อไม่ให้งานเดิมหายจากคิว
     const depositOk = (job: Job) => job.depositConfirmed || (!job.depositSlip && !job.depositWaived);
     const unassigned = (name?: string) => !name || name === "Unassigned";
-    // ดีไซเนอร์: เห็นเฉพาะงานที่ "มอบหมายให้ตัวเอง" เท่านั้น (ผู้จัดการมอบหมายให้แล้ว อีกคนจะไม่เห็น)
+    // ดีไซเนอร์: เห็นงานของตัวเอง + งานใหม่ที่ยังไม่มีคนรับ (กราฟิกแบ่งกันเอง กด "รับงาน") — งานที่คนอื่นรับแล้วจะไม่เห็น
     if (currentUser.role === "Designer") {
-      return byBranch.filter((job) => depositOk(job) && job.assignedDesigner === currentUser.name);
+      return byBranch.filter((job) => depositOk(job) && (job.assignedDesigner === currentUser.name || unassigned(job.assignedDesigner)));
     }
     // ฝ่ายผลิต: เห็นเฉพาะงานที่มอบหมายให้ตัวเอง หรือยังไม่ได้มอบหมาย (กันงานหลุดถ้ายังไม่ระบุคน)
     if (currentUser.role === "Production Staff") {
@@ -2221,12 +2221,37 @@ export default function Page() {
     void appendAudit("rejected job", job.id, "jobs", job.dbId ?? null);
   }
 
-  // ผจก./เจ้าของ ส่งงานเข้าฝ่ายผลิตโดยตรง (ข้ามด่านส่ง-รับ) จากหน้างานค้าง
+  // กราฟิก/ฝ่ายผลิต "รับงาน" เอง (แบ่งงานกันเอง) — เซ็ตผู้รับผิดชอบเป็นตัวเอง แล้วคนอื่นจะไม่เห็นงานนี้อีก
+  async function claimJob(jobId: string) {
+    const job = jobs.find((item) => item.id === jobId);
+    if (!job) return;
+    const isDesigner = userHasRole(currentUser, "Designer");
+    const isProd = userHasRole(currentUser, "Production Staff");
+    if (!isDesigner && !isProd) {
+      setDataError("เฉพาะกราฟิก/ฝ่ายผลิตที่กดรับงานเองได้");
+      return;
+    }
+    const myId = uuidPattern.test(currentUser.id) ? currentUser.id : teamIdByName(teamMembers, currentUser.name);
+    const localPatch = isDesigner ? { assignedDesigner: currentUser.name } : { assignedProduction: currentUser.name };
+    const dbPatch = isDesigner ? { assigned_designer: myId } : { assigned_production: myId };
+    setJobs((current) => current.map((item) => (item.id === jobId ? { ...item, ...localPatch } : item)));
+    if (supabase && job.dbId && uuidPattern.test(job.dbId)) {
+      const { error } = await supabase.from("jobs").update(dbPatch).eq("id", job.dbId);
+      if (error) {
+        setDataError(error.message);
+        void refreshWorkspaceData();
+        return;
+      }
+    }
+    void appendAudit("claimed job", job.id, "jobs", job.dbId ?? null);
+  }
+
+  // ส่งงานเข้าฝ่ายผลิตโดยตรง (ข้ามด่านส่ง-รับ) — ผจก./เจ้าของ หรือ กราฟิกที่รับงานนั้นเอง
   async function sendToProduction(jobId: string) {
     const job = jobs.find((item) => item.id === jobId);
     if (!job) return;
-    if (!canAcceptJob(job)) {
-      setDataError("เฉพาะผู้จัดการสาขานั้นหรือเจ้าของเท่านั้นที่ส่งงานเข้าผลิตได้");
+    if (!canAcceptJob(job) && job.assignedDesigner !== currentUser.name) {
+      setDataError("เฉพาะผู้จัดการ/เจ้าของ หรือกราฟิกที่รับงานนี้ ที่ส่งเข้าผลิตได้");
       return;
     }
     setJobs((current) => current.map((item) => (item.id === jobId ? { ...item, status: "Ready for Production", acceptance: "accepted", handoffStatus: undefined, handoffGate: undefined, handoffFromUser: undefined, handoffFromStatus: undefined, handoffNote: undefined } : item)));
@@ -4201,6 +4226,8 @@ export default function Page() {
                     setActiveView("Detail");
                   }}
                   onPrintWorkOrder={setWorkOrderJobId}
+                  onClaimJob={claimJob}
+                  onSendToProduction={sendToProduction}
                 />
               </motion.div>
             )}
@@ -4875,20 +4902,37 @@ function MyJobsView({
   currentUser,
   canSeeMoney,
   onSelect,
-  onPrintWorkOrder
+  onPrintWorkOrder,
+  onClaimJob,
+  onSendToProduction
 }: {
   jobs: Job[];
   currentUser: TeamMember;
   canSeeMoney: boolean;
   onSelect: (id: string) => void;
   onPrintWorkOrder: (id: string) => void;
+  onClaimJob: (id: string) => void;
+  onSendToProduction: (id: string) => void;
 }) {
+  const isDesigner = userHasRole(currentUser, "Designer");
   const mine = useMemo(() => jobs.filter((job) => jobIsAssignedTo(job, currentUser)), [jobs, currentUser]);
   const openJobs = mine.filter((job) => !["Completed", "Cancelled"].includes(job.status));
   const doneJobs = mine.filter((job) => ["Completed", "Cancelled"].includes(job.status));
   const overdue = openJobs.filter((job) => daysFromToday(job.dueDate) < 0).length;
   const dueToday = openJobs.filter((job) => daysFromToday(job.dueDate) === 0).length;
   const ordered = openJobs.slice().sort((a, b) => a.dueDate.localeCompare(b.dueDate));
+  // งานใหม่ที่ยังไม่มีกราฟิกรับ (แบ่งกันเอง) — โชว์ให้กราฟิกกด "รับงาน"
+  const unclaimed = useMemo(
+    () => (isDesigner ? jobs.filter((job) => (!job.assignedDesigner || job.assignedDesigner === "Unassigned") && !["Completed", "Cancelled"].includes(job.status)).sort((a, b) => a.dueDate.localeCompare(b.dueDate)) : []),
+    [jobs, isDesigner]
+  );
+  const notYetProduction = (job: Job) => !["Ready for Production", "In Production", "QC", "Packing", "Delivered / Picked Up", "Completed", "Cancelled"].includes(job.status);
+  function confirmClaim(job: Job) {
+    if (window.confirm(`รับงานนี้มาทำเอง?\n\n${job.id} · ${job.title}\n(งานจะเข้ามาอยู่ใน "งานที่ต้องทำ" ของคุณ และกราฟิกคนอื่นจะไม่เห็น)`)) onClaimJob(job.id);
+  }
+  function confirmSendProd(job: Job) {
+    if (window.confirm(`ส่งงานนี้เข้าฝ่ายผลิต?\n\n${job.id} · ${job.title}\n(งานจะเปลี่ยนเป็น "พร้อมผลิต")`)) onSendToProduction(job.id);
+  }
 
   return (
     <div className="space-y-4">
@@ -4904,9 +4948,27 @@ function MyJobsView({
         </div>
       </div>
 
+      {isDesigner && unclaimed.length > 0 ? (
+        <div className="glass rounded-[1.5rem] p-5 ring-2 ring-sky-300">
+          <h3 className="mb-1 text-xl font-extrabold text-sky-700">🆕 งานใหม่รอรับ ({unclaimed.length})</h3>
+          <p className="mb-4 text-xs font-semibold text-k2-muted">กราฟิกแบ่งงานกันเอง — กด &quot;รับงานนี้&quot; งานจะเป็นของคุณ และคนอื่นจะไม่เห็น</p>
+          <div className="space-y-3">
+            {unclaimed.map((job) => (
+              <div key={job.id} className="rounded-2xl bg-white/70 p-2 ring-1 ring-sky-200">
+                <JobRow job={job} canSeeMoney={canSeeMoney} onSelect={onSelect} />
+                <div className="mt-1 flex flex-wrap gap-2 px-2 pb-1">
+                  <button type="button" onClick={() => confirmClaim(job)} className="rounded-xl bg-sky-500 px-4 py-1.5 text-xs font-extrabold text-white shadow-sm">✋ รับงานนี้</button>
+                  <button type="button" onClick={() => onSelect(job.id)} className="rounded-xl bg-white px-3 py-1.5 text-xs font-bold text-k2-ink ring-1 ring-black/5">ดูรายละเอียด</button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : null}
+
       <div className="glass rounded-[1.5rem] p-5">
         <h3 className="mb-1 text-xl font-semibold">งานที่ต้องทำ</h3>
-        <p className="mb-4 text-xs font-semibold text-k2-muted">แตะการ์ดเพื่อเปิดงาน (ใส่รูป/ส่งงาน) หรือกดปุ่มลัดด้านล่างเพื่อพิมพ์/แชร์ใบสั่งงานได้เลย</p>
+        <p className="mb-4 text-xs font-semibold text-k2-muted">แตะการ์ดเพื่อเปิดงาน (ใส่รูป) หรือกดปุ่มลัดด้านล่างเพื่อพิมพ์/แชร์/ส่งเข้าผลิต</p>
         {ordered.length ? (
           <div className="space-y-3">
             {ordered.map((job) => (
@@ -4915,7 +4977,7 @@ function MyJobsView({
                 <div className="mt-1 flex flex-wrap gap-2 px-2 pb-1">
                   <button type="button" onClick={() => onSelect(job.id)} className="rounded-xl bg-violet-100 px-3 py-1.5 text-xs font-bold text-violet-700">🎨 ทำใบสั่งงาน (ใส่รูป)</button>
                   <button type="button" onClick={() => onPrintWorkOrder(job.id)} className="rounded-xl bg-k2-ink px-3 py-1.5 text-xs font-bold text-white">🖨️ พิมพ์ / 📤 แชร์ใบสั่งงาน</button>
-                  <button type="button" onClick={() => onSelect(job.id)} className="rounded-xl bg-white px-3 py-1.5 text-xs font-bold text-k2-ink ring-1 ring-black/5">ส่งงาน →</button>
+                  {isDesigner && notYetProduction(job) ? <button type="button" onClick={() => confirmSendProd(job)} className="rounded-xl bg-orange-500 px-3 py-1.5 text-xs font-extrabold text-white">🏭 ส่งเข้าฝ่ายผลิต</button> : null}
                 </div>
               </div>
             ))}
