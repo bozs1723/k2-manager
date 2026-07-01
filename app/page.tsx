@@ -479,6 +479,7 @@ const initialCompanyProfile: CompanyProfile = {
 const viewLabel: Record<string, string> = {
   Dashboard: "แดชบอร์ด",
   "My Jobs": "งานของฉัน",
+  Backlog: "งานค้าง",
   Board: "บอร์ดคิวงาน",
   Completed: "งานที่เสร็จแล้ว",
   Leads: "กล่องลูกค้า",
@@ -1221,6 +1222,7 @@ export default function Page() {
       [
         { label: "Dashboard", icon: LayoutDashboard, visible: currentRolePermissions.includes("view_dashboard") },
         { label: "My Jobs", icon: ListTodo, visible: true },
+        { label: "Backlog", icon: AlertTriangle, visible: true },
         { label: "Board", icon: ClipboardList, visible: currentRolePermissions.includes("view_dashboard") },
         { label: "Completed", icon: CheckCircle2, visible: currentRolePermissions.includes("assign_staff") },
         { label: "Leads", icon: Inbox, visible: currentRolePermissions.includes("create_job") },
@@ -4172,6 +4174,17 @@ export default function Page() {
                 />
               </motion.div>
             )}
+            {activeView === "Backlog" && (
+              <motion.div key="backlog" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }}>
+                <BacklogView
+                  jobs={filteredJobs}
+                  onSelect={(id) => {
+                    setSelectedJobId(id);
+                    setActiveView("Detail");
+                  }}
+                />
+              </motion.div>
+            )}
             {activeView === "Board" && (
               <motion.div key="board" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }}>
                 <Board
@@ -4881,6 +4894,83 @@ function MyJobsView({
   );
 }
 
+// หน้ารวม "งานค้าง" — งานที่ยังไม่เสร็จทั้งหมด จัดกลุ่มตามความเร่งด่วน + โชว์สถานะ/ผู้รับผิดชอบ
+// คลิกแถวเพื่อเปิดรายละเอียด (มีปุ่มพิมพ์/แชร์ใบสั่งงานในนั้น)
+function BacklogView({ jobs, onSelect }: { jobs: Job[]; onSelect: (id: string) => void }) {
+  const open = useMemo(
+    () => jobs.filter((job) => !["Completed", "Cancelled"].includes(job.status)).slice().sort((a, b) => a.dueDate.localeCompare(b.dueDate)),
+    [jobs]
+  );
+  // แผนกที่รับผิดชอบตอนนี้ (ก่อนผลิต=ดีไซเนอร์, ผลิตเป็นต้นไป=ฝ่ายผลิต)
+  const preProd = ["New Order", "Waiting for File", "Designing", "Waiting for Customer Approval"];
+  const responsibleOf = (job: Job) => {
+    const inDesign = preProd.includes(job.status);
+    const who = inDesign ? job.assignedDesigner : job.assignedProduction;
+    const dept = inDesign ? "ออกแบบ" : "ผลิต";
+    return who && who !== "Unassigned" ? `${dept}: ${who}` : `${dept}: ยังไม่มอบหมาย`;
+  };
+  const buckets = [
+    { key: "overdue", title: "🔴 เลยกำหนด", test: (d: number) => d < 0, tone: "text-rose-700" },
+    { key: "today", title: "🟠 วันนี้–พรุ่งนี้", test: (d: number) => d >= 0 && d <= 1, tone: "text-amber-700" },
+    { key: "soon", title: "🟡 ภายใน 5 วัน", test: (d: number) => d >= 2 && d <= 5, tone: "text-yellow-700" },
+    { key: "later", title: "🟢 หลังจากนั้น", test: (d: number) => d > 5, tone: "text-emerald-700" }
+  ];
+  const pending = open.filter((job) => job.acceptance === "pending").length;
+  const overdue = open.filter((job) => daysFromToday(job.dueDate) < 0).length;
+
+  return (
+    <div className="space-y-4">
+      <div className="glass flex flex-wrap items-center gap-3 rounded-[1.5rem] p-5">
+        <div>
+          <p className="text-sm font-semibold text-k2-muted">งานที่ยังไม่เสร็จทั้งหมด</p>
+          <h3 className="text-2xl font-semibold">งานค้าง {open.length} งาน</h3>
+        </div>
+        <div className="ml-auto flex flex-wrap gap-2 text-xs font-bold">
+          <span className={`rounded-full px-3 py-1.5 ${overdue ? "bg-k2-rose text-rose-700" : "bg-white/70 text-k2-muted"}`}>เลยกำหนด {overdue}</span>
+          {pending ? <span className="rounded-full bg-amber-100 px-3 py-1.5 text-amber-800">รออนุมัติ {pending}</span> : null}
+        </div>
+      </div>
+
+      {open.length === 0 ? (
+        <div className="glass rounded-[1.5rem] p-10 text-center text-sm font-semibold text-k2-muted">🎉 ไม่มีงานค้าง — เคลียร์หมดแล้ว</div>
+      ) : (
+        buckets.map((bucket) => {
+          const rows = open.filter((job) => bucket.test(daysFromToday(job.dueDate)));
+          if (rows.length === 0) return null;
+          return (
+            <div key={bucket.key} className="glass rounded-[1.5rem] p-5">
+              <h3 className={`mb-3 text-lg font-extrabold ${bucket.tone}`}>{bucket.title} · {rows.length}</h3>
+              <div className="space-y-2">
+                {rows.map((job) => {
+                  const urgency = dueUrgency(job.dueDate, job.status);
+                  return (
+                    <button key={job.id} type="button" onClick={() => onSelect(job.id)} className="grid w-full gap-2 rounded-2xl bg-white/60 p-4 text-left transition hover:bg-white lg:grid-cols-[1.3fr_0.9fr_0.9fr_auto] lg:items-center">
+                      <div className="min-w-0">
+                        <div className="mb-1 flex flex-wrap items-center gap-2">
+                          <span className="flex items-center gap-1.5 font-bold">{job.isExpress ? <Zap className="h-3.5 w-3.5 text-rose-500" /> : null}{job.id}</span>
+                          {job.acceptance === "pending" ? <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-bold text-amber-800">รออนุมัติ</span> : null}
+                        </div>
+                        <p className="truncate font-semibold">{job.title}</p>
+                        <p className="truncate text-sm text-k2-muted">{job.customerName} · {jobTypeLabel[job.type]}</p>
+                      </div>
+                      <span className={`w-fit rounded-full px-3 py-1 text-xs font-bold ${statusTint[job.status]}`}>{statusLabel[job.status]}</span>
+                      <span className="text-sm font-semibold text-k2-muted">{responsibleOf(job)}</span>
+                      <div className="flex flex-col items-start gap-1 text-sm text-k2-muted lg:items-end">
+                        <span>ส่ง {job.dueDate}</span>
+                        {urgency ? <span className={`flex w-fit items-center gap-1 rounded-full px-2 py-0.5 text-xs font-bold ${urgency.tone}`}><span className={`h-1.5 w-1.5 rounded-full ${urgency.dot}`} />{urgency.label}</span> : null}
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          );
+        })
+      )}
+    </div>
+  );
+}
+
 // แปลงวันที่จาก statusHistory (รูปแบบ en-GB "dd/mm/yyyy, hh:mm:ss") → ISO "yyyy-mm-dd"
 function parseEnGbDate(value: string): string | null {
   const datePart = value.split(",")[0]?.trim();
@@ -5440,13 +5530,47 @@ function PrintableDoc({ job, company, docType, docNumber, customer, onClose }: {
   // คงเหลือคิดจากยอดรวม (รวม VAT) ลบมัดจำ — งานจ่ายครบแล้วถือว่าชำระเต็มยอดรวม
   const fullyPaid = isReceipt && job.remainingBalance <= 0;
   const outstanding = fullyPaid ? priceTotal : Math.max(priceTotal - job.deposit, 0);
+  const [sharing, setSharing] = useState(false);
+  const [shareMsg, setShareMsg] = useState("");
+  // แชร์เอกสารเป็นรูปภาพ — มือถือเปิดแผงแชร์ (ส่งเข้า LINE เองได้ ไม่กินโควต้า) · คอมดาวน์โหลดรูป
+  async function shareAsImage() {
+    const node = document.getElementById("print-doc");
+    if (!node) return;
+    setSharing(true);
+    setShareMsg("");
+    try {
+      const { toBlob } = await import("html-to-image");
+      const blob = await toBlob(node, { pixelRatio: 2, backgroundColor: "#ffffff", cacheBust: true });
+      if (!blob) throw new Error("สร้างรูปไม่สำเร็จ");
+      const fileName = `${title.th.replace(/\s+/g, "")}-${job.id}.png`;
+      const file = new File([blob], fileName, { type: "image/png" });
+      const navShare = navigator as Navigator & { canShare?: (data?: unknown) => boolean };
+      if (navShare.canShare && navShare.canShare({ files: [file] })) {
+        await navShare.share({ files: [file], title: `${title.th} ${job.id}`, text: `${title.th} ${job.id} · ${job.title}` });
+      } else {
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = fileName;
+        a.click();
+        URL.revokeObjectURL(url);
+        setShareMsg("บันทึกรูปแล้ว — ส่งเข้า LINE ได้เลย");
+      }
+    } catch (err) {
+      const name = (err as Error)?.name;
+      if (name !== "AbortError") setShareMsg("แชร์ไม่สำเร็จ ลองใหม่ หรือใช้ปุ่มพิมพ์แทน");
+    } finally {
+      setSharing(false);
+    }
+  }
   return (
     <div className="fixed inset-0 z-[60] flex items-start justify-center overflow-y-auto bg-slate-900/50 p-4 backdrop-blur-sm" onClick={onClose}>
       <div className="my-4 w-full max-w-3xl">
-        <div className="no-print mb-3 flex items-center justify-between gap-2" onClick={(e) => e.stopPropagation()}>
-          <p className="text-sm font-bold text-white">ตัวอย่างเอกสาร — {title.th}</p>
+        <div className="no-print mb-3 flex flex-wrap items-center justify-between gap-2" onClick={(e) => e.stopPropagation()}>
+          <p className="text-sm font-bold text-white">ตัวอย่างเอกสาร — {title.th}{shareMsg ? ` · ${shareMsg}` : ""}</p>
           <div className="flex gap-2">
-            <button type="button" onClick={() => window.print()} className="rounded-2xl bg-white px-5 py-2.5 text-sm font-extrabold text-k2-ink shadow">🖨️ พิมพ์ / บันทึก PDF</button>
+            <button type="button" onClick={shareAsImage} disabled={sharing} className="rounded-2xl bg-emerald-500 px-5 py-2.5 text-sm font-extrabold text-white shadow disabled:opacity-60">{sharing ? "กำลังสร้างรูป…" : "📤 แชร์ / ส่ง LINE"}</button>
+            <button type="button" onClick={() => window.print()} className="rounded-2xl bg-white px-5 py-2.5 text-sm font-extrabold text-k2-ink shadow">🖨️ พิมพ์ / PDF</button>
             <button type="button" onClick={onClose} className="rounded-2xl bg-white/20 px-4 py-2.5 text-sm font-bold text-white">ปิด</button>
           </div>
         </div>
