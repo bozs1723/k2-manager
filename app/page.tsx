@@ -481,6 +481,7 @@ const viewLabel: Record<string, string> = {
   "My Jobs": "งานของฉัน",
   Backlog: "งานค้าง",
   Board: "บอร์ดคิวงาน",
+  "Sales Orders": "รับงาน (เซล)",
   Completed: "งานที่เสร็จแล้ว",
   Leads: "กล่องลูกค้า",
   Quotations: "ใบเสนอราคา",
@@ -1224,6 +1225,7 @@ export default function Page() {
         { label: "My Jobs", icon: ListTodo, visible: true },
         { label: "Backlog", icon: AlertTriangle, visible: true },
         { label: "Board", icon: ClipboardList, visible: currentRolePermissions.includes("view_dashboard") },
+        { label: "Sales Orders", icon: Inbox, visible: currentRolePermissions.includes("view_finance") || currentRolePermissions.includes("assign_staff") },
         { label: "Completed", icon: CheckCircle2, visible: currentRolePermissions.includes("assign_staff") },
         { label: "Leads", icon: Inbox, visible: currentRolePermissions.includes("create_job") },
         { label: "Quotations", icon: ReceiptText, visible: currentRolePermissions.includes("create_job") },
@@ -4198,6 +4200,11 @@ export default function Page() {
                 />
               </motion.div>
             )}
+            {activeView === "Sales Orders" && (
+              <motion.div key="sales-orders" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }}>
+                <SalesOrdersView jobs={branchScopedJobs} teamMembers={teamMembers} canSeeMoney={canSeeMoney} onSelect={openJobDetail} />
+              </motion.div>
+            )}
             {activeView === "Completed" && (
               <motion.div key="completed" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }}>
                 <CompletedJobsView jobs={branchScopedJobs} canSeeMoney={canSeeMoney} onSelect={openJobDetail} />
@@ -5114,6 +5121,163 @@ function CompletedJobsView({ jobs, canSeeMoney, onSelect }: { jobs: Job[]; canSe
         ) : (
           <div className="rounded-2xl border border-dashed border-white/90 bg-white/40 px-4 py-10 text-center text-sm font-semibold text-k2-muted">
             {closedJobs.length ? "ไม่พบงานที่ตรงกับตัวกรอง" : "ยังไม่มีงานที่เสร็จหรือปิดแล้ว"}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// หน้ารวม "งานที่เซลรับเข้า" — ดูงานที่พนักงานขายรับมา กรองตามวัน (ช่วงวัน) + เลือกเซลได้
+function SalesOrdersView({ jobs, teamMembers, canSeeMoney, onSelect }: { jobs: Job[]; teamMembers: TeamMember[]; canSeeMoney: boolean; onSelect: (id: string) => void }) {
+  const [fromDate, setFromDate] = useState("");
+  const [toDate, setToDate] = useState("");
+  const [seller, setSeller] = useState("all");
+  const [query, setQuery] = useState("");
+
+  // ตัวช่วยวันที่ (ใช้วันที่ท้องถิ่น กันเพี้ยนข้ามวันเพราะ timezone)
+  const localISO = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  function applyPreset(preset: "today" | "7d" | "month" | "all") {
+    if (preset === "all") { setFromDate(""); setToDate(""); return; }
+    const now = new Date();
+    const today = localISO(now);
+    if (preset === "today") { setFromDate(today); setToDate(today); return; }
+    if (preset === "7d") { const past = new Date(now); past.setDate(now.getDate() - 6); setFromDate(localISO(past)); setToDate(today); return; }
+    setFromDate(`${today.slice(0, 7)}-01`); setToDate(today);
+  }
+
+  // รายชื่อเซลที่เคยสร้างงาน (เอาจาก createdBy จริง) + ทีมที่มีบทบาท Sales Staff
+  const sellerNames = useMemo(() => {
+    const set = new Set<string>();
+    jobs.forEach((job) => { if (job.createdBy) set.add(job.createdBy); });
+    teamMembers.forEach((m) => { if (m.role === "Sales Staff" || (m.roles ?? []).includes("Sales Staff")) set.add(m.name); });
+    return Array.from(set).sort((a, b) => a.localeCompare(b, "th"));
+  }, [jobs, teamMembers]);
+
+  const filtered = useMemo(() => {
+    const normalized = query.trim().toLowerCase();
+    return jobs
+      .filter((job) => {
+        const d = job.orderDate || "";
+        if (fromDate && d < fromDate) return false;
+        if (toDate && d > toDate) return false;
+        if (seller !== "all" && (job.createdBy || "") !== seller) return false;
+        if (normalized) {
+          const hay = [job.id, job.customerName, job.title, job.type, job.createdBy ?? "", job.salesPage ?? ""].join(" ").toLowerCase();
+          if (!hay.includes(normalized)) return false;
+        }
+        return true;
+      })
+      .sort((a, b) => (b.orderDate || "").localeCompare(a.orderDate || ""));
+  }, [jobs, fromDate, toDate, seller, query]);
+
+  const totalValue = filtered.reduce((sum, job) => sum + (Number(job.price) || 0), 0);
+  // สรุปยอดต่อเซล (จำนวนงาน + มูลค่า) ในช่วงที่กรอง
+  const perSeller = useMemo(() => {
+    const map = new Map<string, { count: number; value: number }>();
+    filtered.forEach((job) => {
+      const name = job.createdBy || "ไม่ระบุผู้สร้าง";
+      const cur = map.get(name) ?? { count: 0, value: 0 };
+      cur.count += 1;
+      cur.value += Number(job.price) || 0;
+      map.set(name, cur);
+    });
+    return Array.from(map.entries()).map(([name, v]) => ({ name, ...v })).sort((a, b) => b.value - a.value || b.count - a.count);
+  }, [filtered]);
+
+  const hasFilters = Boolean(query.trim() || fromDate || toDate || seller !== "all");
+  const rangeLabel = fromDate || toDate ? `${fromDate || "เริ่มต้น"} → ${toDate || "ล่าสุด"}` : "ทุกช่วงเวลา";
+
+  return (
+    <div className="space-y-4">
+      <div className="glass flex flex-wrap items-center gap-3 rounded-[1.5rem] p-5">
+        <div>
+          <p className="text-sm font-semibold text-k2-muted">งานที่พนักงานขายรับเข้า · {rangeLabel}</p>
+          <h3 className="text-2xl font-semibold">รับงาน (เซล)</h3>
+        </div>
+        <div className="ml-auto flex flex-wrap gap-2 text-xs font-bold">
+          <span className="rounded-full bg-k2-sky px-3 py-1.5">จำนวนงาน {filtered.length}</span>
+          {canSeeMoney ? <span className="rounded-full bg-emerald-100 px-3 py-1.5 text-emerald-700">มูลค่ารวม {money.format(totalValue)}</span> : null}
+        </div>
+      </div>
+
+      <div className="glass space-y-3 rounded-[1.5rem] p-5">
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-center">
+          <label className="flex min-w-0 flex-1 items-center gap-2 rounded-2xl border border-white/70 bg-white/70 px-3 py-2 shadow-sm">
+            <Search className="h-4 w-4 shrink-0 text-k2-muted" />
+            <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="ค้นหาเลขงาน ลูกค้า ชื่องาน เพจ" className="w-full min-w-0 bg-transparent text-sm outline-none" />
+          </label>
+          <select value={seller} onChange={(e) => setSeller(e.target.value)} className="rounded-2xl border border-white/70 bg-white/70 px-3 py-2 text-sm font-semibold shadow-sm outline-none">
+            <option value="all">เซลทุกคน</option>
+            {sellerNames.map((name) => <option key={name} value={name}>{name}</option>)}
+          </select>
+        </div>
+        <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center">
+          <label className="flex items-center gap-2 rounded-2xl border border-white/70 bg-white/70 px-3 py-2 text-sm shadow-sm">
+            <span className="shrink-0 font-semibold text-k2-muted">ตั้งแต่</span>
+            <input type="date" value={fromDate} max={toDate || undefined} onChange={(e) => setFromDate(e.target.value)} className="bg-transparent text-sm outline-none" />
+          </label>
+          <label className="flex items-center gap-2 rounded-2xl border border-white/70 bg-white/70 px-3 py-2 text-sm shadow-sm">
+            <span className="shrink-0 font-semibold text-k2-muted">ถึง</span>
+            <input type="date" value={toDate} min={fromDate || undefined} onChange={(e) => setToDate(e.target.value)} className="bg-transparent text-sm outline-none" />
+          </label>
+          <div className="flex flex-wrap gap-2">
+            {[{ k: "today", l: "วันนี้" }, { k: "7d", l: "7 วัน" }, { k: "month", l: "เดือนนี้" }, { k: "all", l: "ทั้งหมด" }].map((p) => (
+              <button key={p.k} type="button" onClick={() => applyPreset(p.k as "today" | "7d" | "month" | "all")} className="rounded-full bg-white/70 px-3 py-1.5 text-xs font-bold text-k2-muted shadow-sm transition hover:bg-k2-mint hover:text-k2-ink">{p.l}</button>
+            ))}
+            {hasFilters ? <button type="button" onClick={() => { setQuery(""); setFromDate(""); setToDate(""); setSeller("all"); }} className="rounded-full bg-white/70 px-3 py-1.5 text-xs font-bold text-k2-muted shadow-sm transition hover:bg-k2-rose hover:text-rose-700">ล้างตัวกรอง</button> : null}
+          </div>
+        </div>
+      </div>
+
+      {perSeller.length > 0 ? (
+        <div className="glass rounded-[1.5rem] p-5">
+          <h4 className="mb-3 text-sm font-bold text-k2-muted">สรุปต่อเซล ({rangeLabel})</h4>
+          <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
+            {perSeller.map((s) => (
+              <div key={s.name} className="flex items-center justify-between gap-2 rounded-2xl bg-white/70 px-4 py-3">
+                <div className="min-w-0">
+                  <p className="truncate font-bold">{s.name}</p>
+                  <p className="text-xs font-semibold text-k2-muted">{s.count} งาน</p>
+                </div>
+                {canSeeMoney ? <span className="shrink-0 font-extrabold text-emerald-700">{money.format(s.value)}</span> : null}
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : null}
+
+      <div className="glass rounded-[1.5rem] p-5">
+        {filtered.length ? (
+          <div className="space-y-2">
+            {filtered.map((job) => {
+              const urgency = dueUrgency(job.dueDate, job.status);
+              return (
+                <button key={job.id} type="button" onClick={() => onSelect(job.id)} className="grid w-full gap-2 rounded-2xl bg-white/60 p-4 text-left transition hover:bg-white lg:grid-cols-[1.3fr_0.8fr_0.9fr_auto] lg:items-center">
+                  <div className="min-w-0">
+                    <div className="mb-1 flex flex-wrap items-center gap-2">
+                      <span className="flex items-center gap-1.5 font-bold">{job.isExpress ? <Zap className="h-3.5 w-3.5 text-rose-500" /> : null}{job.id}</span>
+                      <span className="rounded-full bg-white/80 px-2 py-0.5 text-[11px] font-bold text-k2-muted">รับ {job.orderDate}</span>
+                    </div>
+                    <p className="truncate font-semibold">{job.title}</p>
+                    <p className="truncate text-sm text-k2-muted">{job.customerName} · {jobTypeLabel[job.type]}</p>
+                  </div>
+                  <div className="text-sm">
+                    <p className="font-semibold text-k2-ink">เซล: {job.createdBy || "ไม่ระบุ"}</p>
+                    {job.salesPage ? <p className="text-xs text-k2-muted">เพจ {job.salesPage}</p> : null}
+                  </div>
+                  <span className={`w-fit rounded-full px-3 py-1 text-xs font-bold ${statusTint[job.status]}`}>{statusLabel[job.status]}</span>
+                  <div className="flex flex-col items-start gap-1 lg:items-end">
+                    {canSeeMoney ? <span className="font-extrabold">{money.format(job.price)}</span> : null}
+                    {urgency ? <span className={`flex w-fit items-center gap-1 rounded-full px-2 py-0.5 text-xs font-bold ${urgency.tone}`}><span className={`h-1.5 w-1.5 rounded-full ${urgency.dot}`} />{urgency.label}</span> : null}
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        ) : (
+          <div className="rounded-2xl border border-dashed border-white/90 bg-white/40 px-4 py-10 text-center text-sm font-semibold text-k2-muted">
+            {jobs.length ? "ไม่พบงานที่ตรงกับตัวกรอง" : "ยังไม่มีข้อมูลงาน"}
           </div>
         )}
       </div>
