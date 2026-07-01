@@ -349,6 +349,44 @@ const statusTint: Record<JobStatus, string> = {
   Cancelled: "bg-red-100 text-red-700"
 };
 
+// สีปุ่มเปลี่ยนสถานะ (พื้นเข้ม ตัวหนังสือขาว) — ไล่ตามสถานะให้เห็นชัด
+const statusButton: Record<JobStatus, string> = {
+  Quotation: "bg-slate-500",
+  "Waiting Deposit": "bg-amber-500",
+  "Verifying Payment": "bg-yellow-500",
+  "Deposit Confirmed": "bg-teal-500",
+  "New Order": "bg-sky-500",
+  "Waiting for File": "bg-slate-400",
+  Designing: "bg-violet-500",
+  "Waiting for Customer Approval": "bg-amber-500",
+  "Ready for Production": "bg-emerald-500",
+  "In Production": "bg-cyan-600",
+  QC: "bg-indigo-500",
+  Packing: "bg-orange-500",
+  "Delivered / Picked Up": "bg-lime-600",
+  Completed: "bg-green-600",
+  Cancelled: "bg-red-500"
+};
+
+// สีพื้นกล่องงาน (อ่อน + เส้นขอบ) — เปลี่ยนตามสถานะ
+const statusCardBg: Record<JobStatus, string> = {
+  Quotation: "bg-slate-50 border-slate-200",
+  "Waiting Deposit": "bg-amber-50 border-amber-200",
+  "Verifying Payment": "bg-yellow-50 border-yellow-200",
+  "Deposit Confirmed": "bg-teal-50 border-teal-200",
+  "New Order": "bg-sky-50 border-sky-200",
+  "Waiting for File": "bg-slate-50 border-slate-200",
+  Designing: "bg-violet-50 border-violet-200",
+  "Waiting for Customer Approval": "bg-amber-50 border-amber-200",
+  "Ready for Production": "bg-emerald-50 border-emerald-200",
+  "In Production": "bg-cyan-50 border-cyan-200",
+  QC: "bg-indigo-50 border-indigo-200",
+  Packing: "bg-orange-50 border-orange-200",
+  "Delivered / Picked Up": "bg-lime-50 border-lime-200",
+  Completed: "bg-green-50 border-green-200",
+  Cancelled: "bg-red-50 border-red-200"
+};
+
 const statusDot: Record<JobStatus, string> = {
   Quotation: "bg-slate-400",
   "Waiting Deposit": "bg-amber-400",
@@ -2155,14 +2193,16 @@ export default function Page() {
       setDataError(`ต้องส่งตรวจผ่านปุ่ม "${sendGate.label}" ก่อน (กันงานข้ามขั้น)`);
       return;
     }
+    // เจ้าของ/ผู้จัดการ/แอดมิน (หรือฝ่ายการเงิน) = เปลี่ยนสถานะได้ทุกอย่าง ไม่ต้องรอฝ่ายการเงิน
+    const financeExempt = can("manage_finance") || ["Owner", "Manager", "Admin"].includes(currentUser.role);
     // ด่านการเงิน 1: ยืนยันมัดจำ ทำได้โดยฝ่ายการเงิน หรือ เจ้าของ/ผู้จัดการ/แอดมิน
-    if (nextStatus === "Deposit Confirmed" && !can("manage_finance") && !["Owner", "Manager", "Admin"].includes(currentUser.role)) {
+    if (nextStatus === "Deposit Confirmed" && !financeExempt) {
       setDataError("เฉพาะฝ่ายการเงิน/เจ้าของ/ผู้จัดการ/แอดมินเท่านั้นที่ยืนยันมัดจำได้");
       return;
     }
-    // ด่านการเงิน 2: ห้ามข้ามเข้าขั้นผลิต จนกว่าฝ่ายการเงินจะยืนยันมัดจำ (สถานะต้องถึง "มัดจำแล้ว" ก่อน)
+    // ด่านการเงิน 2: ห้ามข้ามเข้าขั้นผลิต จนกว่าฝ่ายการเงินจะยืนยันมัดจำ — ยกเว้นเจ้าของ/ผจก./แอดมิน
     const movingIntoProduction = !FINANCE_PHASE.includes(nextStatus) && nextStatus !== "Cancelled";
-    if (movingIntoProduction && FINANCE_PHASE.includes(job.status) && job.status !== "Deposit Confirmed") {
+    if (!financeExempt && movingIntoProduction && FINANCE_PHASE.includes(job.status) && job.status !== "Deposit Confirmed") {
       setDataError("ต้องผ่านการยืนยันมัดจำจากฝ่ายการเงินก่อน จึงจะเข้าสู่ขั้นผลิตได้");
       return;
     }
@@ -5632,8 +5672,8 @@ function Board({
                 <motion.div
                   layout
                   key={job.id}
-                  className={`overflow-hidden rounded-[1.25rem] border bg-white/75 shadow-sm transition hover:bg-white ${
-                    urgency && urgency.days <= 1 ? "border-l-4 border-l-rose-400 border-white/80" : "border-white/80"
+                  className={`overflow-hidden rounded-[1.25rem] border-2 shadow-sm transition ${statusCardBg[job.status]} ${
+                    urgency && urgency.days <= 1 ? "border-l-[6px] border-l-rose-500" : ""
                   }`}
                 >
                   {/* แตะเพื่อดูรายละเอียด / ลากเพื่อย้ายขั้นตอน (desktop) */}
@@ -5709,15 +5749,23 @@ function Board({
                         ) : null}
                       </div>
                     ) : (
-                      <select
-                        value={status}
-                        onChange={(event) => moveJob(job.id, event.target.value as JobStatus)}
-                        className="w-full cursor-pointer rounded-xl bg-white/60 px-3 py-2 text-xs font-bold text-k2-muted outline-none"
-                      >
-                        {statuses.map((s) => (
-                          <option key={s} value={s}>{statusLabel[s]}</option>
-                        ))}
-                      </select>
+                      <div>
+                        <p className="mb-1 flex items-center gap-1 text-[10px] font-extrabold uppercase tracking-wide text-k2-muted">🔄 แตะเพื่อเปลี่ยนสถานะ</p>
+                        <select
+                          value={status}
+                          onChange={(event) => {
+                            const next = event.target.value as JobStatus;
+                            if (next !== status && window.confirm(`ยืนยันเปลี่ยนสถานะงาน?\n\n${job.id} · ${job.title}\n${statusLabel[status]}  →  ${statusLabel[next]}`)) {
+                              moveJob(job.id, next);
+                            }
+                          }}
+                          className={`w-full cursor-pointer appearance-none rounded-xl px-3 py-3 text-center text-sm font-extrabold text-white shadow-md outline-none ${statusButton[status]}`}
+                        >
+                          {statuses.map((s) => (
+                            <option key={s} value={s} style={{ color: "#1f2a3d", backgroundColor: "#ffffff", fontWeight: 700 }}>{statusLabel[s]}</option>
+                          ))}
+                        </select>
+                      </div>
                     )}
                   </div>
                 </motion.div>
