@@ -2179,22 +2179,25 @@ export default function Page() {
     }
     const job = jobs.find((item) => item.id === jobId);
     if (!job || job.status === nextStatus) return;
-    if (job.acceptance === "pending") {
+    // เจ้าของ/ผู้จัดการ/แอดมิน = เปลี่ยนสถานะได้ทุกอย่าง ข้ามทุกด่าน (อนุมัติ/ตรวจรับ/ส่งงาน/การเงิน)
+    const roleSet: Role[] = [currentUser.role, ...(currentUser.roles ?? [])];
+    const isBoss = roleSet.includes("Owner") || roleSet.includes("Manager") || roleSet.includes("Admin");
+    if (!isBoss && job.acceptance === "pending") {
       setDataError("งานนี้รอผู้จัดการสาขายอมรับก่อน จึงจะย้ายสถานะได้");
       return;
     }
     // ด่านส่ง–รับงาน: งานที่รอตรวจรับอยู่ ห้ามย้ายตรงๆ ต้องให้ผู้ตรวจรับ/ตีกลับก่อน
-    if (job.handoffStatus === "pending") {
+    if (!isBoss && job.handoffStatus === "pending") {
       setDataError("งานนี้กำลังรอตรวจรับ — ให้ผู้ตรวจกดรับหรือตีกลับก่อน");
       return;
     }
     const sendGate = gateFromStatus(job.status);
-    if (sendGate && nextStatus === sendGate.approveStatus) {
+    if (!isBoss && sendGate && nextStatus === sendGate.approveStatus) {
       setDataError(`ต้องส่งตรวจผ่านปุ่ม "${sendGate.label}" ก่อน (กันงานข้ามขั้น)`);
       return;
     }
-    // เจ้าของ/ผู้จัดการ/แอดมิน (หรือฝ่ายการเงิน) = เปลี่ยนสถานะได้ทุกอย่าง ไม่ต้องรอฝ่ายการเงิน
-    const financeExempt = can("manage_finance") || ["Owner", "Manager", "Admin"].includes(currentUser.role);
+    // ฝ่ายการเงินก็ข้ามด่านการเงินได้ (นอกจากหัวหน้า)
+    const financeExempt = isBoss || can("manage_finance");
     // ด่านการเงิน 1: ยืนยันมัดจำ ทำได้โดยฝ่ายการเงิน หรือ เจ้าของ/ผู้จัดการ/แอดมิน
     if (nextStatus === "Deposit Confirmed" && !financeExempt) {
       setDataError("เฉพาะฝ่ายการเงิน/เจ้าของ/ผู้จัดการ/แอดมินเท่านั้นที่ยืนยันมัดจำได้");
@@ -5755,9 +5758,7 @@ function Board({
                           value={status}
                           onChange={(event) => {
                             const next = event.target.value as JobStatus;
-                            if (next !== status && window.confirm(`ยืนยันเปลี่ยนสถานะงาน?\n\n${job.id} · ${job.title}\n${statusLabel[status]}  →  ${statusLabel[next]}`)) {
-                              moveJob(job.id, next);
-                            }
+                            if (next !== status) moveJob(job.id, next);
                           }}
                           className={`w-full cursor-pointer appearance-none rounded-xl px-3 py-3 text-center text-sm font-extrabold text-white shadow-md outline-none ${statusButton[status]}`}
                         >
@@ -6257,13 +6258,11 @@ function JobDetail({
   const [statusMenuOpen, setStatusMenuOpen] = useState(false);
   const workOrderNumber = job.quoteNumber ?? quoteNumberFor(Number(job.id.replace(/\D/g, "").slice(-4)) || 1, companyProfile.quotePrefix);
   const dueInfo = dueUrgency(job.dueDate, job.status);
-  // เปลี่ยนสถานะแบบยืนยันทุกครั้ง (กันมือไปโดน)
+  // เปลี่ยนสถานะ — มีกล่องยืนยัน "ยืนยันการย้ายสถานะ" ต่ออีกชั้น (กันมือไปโดน)
   function handleStatusPick(next: JobStatus) {
     setStatusMenuOpen(false);
     if (next === job.status) return;
-    if (window.confirm(`ยืนยันเปลี่ยนสถานะงาน?\n\n${job.id} · ${job.title}\n${statusLabel[job.status]}  →  ${statusLabel[next]}`)) {
-      onMove(job.id, next);
-    }
+    onMove(job.id, next);
   }
 
   // ---- อาร์ตเวิร์กสำหรับใบสั่งงาน (ดีไซเนอร์วางรูปงานที่เสร็จ + ป้าย + จำนวน) ----
