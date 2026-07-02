@@ -1048,7 +1048,8 @@ function jobFromRow(
     productionBranch: row.production_branch ?? "",
     incomeBranch: row.income_branch ?? undefined,
     salesPage: row.sales_page ?? undefined,
-    acceptance: row.acceptance ?? "accepted",
+    // เลิกใช้ระบบรออนุมัติแล้ว (งานอนุมัติอัตโนมัติตอนสร้าง) — งานเก่าที่ค้าง pending ให้ถือว่าอนุมัติแล้ว
+    acceptance: row.acceptance === "pending" ? "accepted" : (row.acceptance ?? "accepted"),
     rejectReason: row.reject_reason ?? "",
     handoffStatus: row.handoff_status === "pending" || row.handoff_status === "accepted" ? row.handoff_status : undefined,
     handoffGate: row.handoff_gate ?? undefined,
@@ -1828,11 +1829,12 @@ export default function Page() {
       ] = await Promise.all([
         supabase.from("profiles").select("id, email, full_name, role, extra_roles, avatar_url, phone, branch, is_active").eq("is_active", true).order("created_at", { ascending: true }),
         supabase.from("company_settings").select("*").order("created_at", { ascending: true }).limit(1),
-        supabase.from("customers").select("*").order("created_at", { ascending: false }),
-        supabase.from("jobs").select("*").order("created_at", { ascending: false }),
-        supabase.from("job_comments").select("id, job_id, comment, created_at, author_id").order("created_at", { ascending: false }),
-        supabase.from("job_status_history").select("id, job_id, from_status, to_status, created_at, changed_by").order("created_at", { ascending: true }),
-        supabase.from("job_files").select("id, job_id, file_name, file_type, file_size, url").order("created_at", { ascending: true }),
+        supabase.from("customers").select("*").order("created_at", { ascending: false }).limit(1000),
+        // จำกัดจำนวนแถว กัน statement timeout (57014) — jobs มีรูปสลิป base64 ใหญ่ โหลดทั้งตารางไม่ไหว
+        supabase.from("jobs").select("*").order("created_at", { ascending: false }).limit(300),
+        supabase.from("job_comments").select("id, job_id, comment, created_at, author_id").order("created_at", { ascending: false }).limit(2000),
+        supabase.from("job_status_history").select("id, job_id, from_status, to_status, created_at, changed_by").order("created_at", { ascending: false }).limit(3000),
+        supabase.from("job_files").select("id, job_id, file_name, file_type, file_size, url").order("created_at", { ascending: false }).limit(2000),
         supabase.from("audit_log").select("id, action, target_table, target_id, metadata, created_at, actor_id").order("created_at", { ascending: false }).limit(80),
         supabase.from("role_permissions").select("role, permissions"),
         supabase.from("shop_state").select("express_orders_enabled").limit(1),
@@ -1870,13 +1872,16 @@ export default function Page() {
 
       const jobRows = (jobsResult.data ?? []) as SupabaseJobRow[];
       const customerRows = (customersResult.data ?? []) as SupabaseCustomerRow[];
+      // history/files ดึงมาแบบใหม่→เก่า (เพื่อ limit เอาแถวล่าสุด) — กลับเป็นเก่า→ใหม่ให้เหมือนเดิมก่อนใช้
+      const historyRowsAsc = ((historyResult.data ?? []) as Array<{ id: string; job_id: string; from_status: JobStatus | null; to_status: JobStatus; created_at: string; changed_by: string | null }>).slice().reverse();
+      const fileRowsAsc = ((filesResult.data ?? []) as Array<{ id: string; job_id: string; file_name: string; file_type: string; file_size: number | null; url?: string | null }>).slice().reverse();
       const nextJobs = jobRows.map((row) =>
         jobFromRow(
           row,
           profileNames,
           (commentsResult.data ?? []) as Array<{ id: string; job_id: string; comment: string; created_at: string; author_id: string | null }>,
-          (historyResult.data ?? []) as Array<{ id: string; job_id: string; from_status: JobStatus | null; to_status: JobStatus; created_at: string; changed_by: string | null }>,
-          (filesResult.data ?? []) as Array<{ id: string; job_id: string; file_name: string; file_type: string; file_size: number | null; url?: string | null }>
+          historyRowsAsc,
+          fileRowsAsc
         )
       );
       setJobs((current) => reuseIfSame(current, nextJobs));
