@@ -2173,15 +2173,16 @@ export default function Page() {
 
   // ขอย้ายสถานะ -> เปิด popup ยืนยันก่อนเสมอ (กันลากผิด/กดพลาด โดยเฉพาะย้ายถอยหลัง)
   function requestMove(jobId: string, nextStatus: JobStatus) {
-    if (!can("move_status")) {
+    // เจ้าของ/ผู้จัดการ/แอดมิน = เปลี่ยนสถานะได้ทุกอย่าง ข้ามทุกด่าน (สิทธิ์/อนุมัติ/ตรวจรับ/ส่งงาน/การเงิน)
+    // เช็คเป็นบทบาทตรงๆ ไม่พึ่ง permission matrix ใน DB (กันค่าที่บันทึกไว้เก่าทับจนเจ้าของกดไม่ได้)
+    const roleSet: Role[] = [currentUser.role, ...(currentUser.roles ?? [])];
+    const isBoss = roleSet.includes("Owner") || roleSet.includes("Manager") || roleSet.includes("Admin");
+    if (!isBoss && !can("move_status")) {
       setDataError("บทบาทนี้ยังไม่มีสิทธิ์ย้ายสถานะงาน");
       return;
     }
     const job = jobs.find((item) => item.id === jobId);
     if (!job || job.status === nextStatus) return;
-    // เจ้าของ/ผู้จัดการ/แอดมิน = เปลี่ยนสถานะได้ทุกอย่าง ข้ามทุกด่าน (อนุมัติ/ตรวจรับ/ส่งงาน/การเงิน)
-    const roleSet: Role[] = [currentUser.role, ...(currentUser.roles ?? [])];
-    const isBoss = roleSet.includes("Owner") || roleSet.includes("Manager") || roleSet.includes("Admin");
     if (!isBoss && job.acceptance === "pending") {
       setDataError("งานนี้รอผู้จัดการสาขายอมรับก่อน จึงจะย้ายสถานะได้");
       return;
@@ -2419,7 +2420,9 @@ export default function Page() {
   }
 
   async function moveJob(jobId: string, nextStatus: JobStatus) {
-    if (!can("move_status")) {
+    const bossRoles: Role[] = [currentUser.role, ...(currentUser.roles ?? [])];
+    const isBossMove = bossRoles.includes("Owner") || bossRoles.includes("Manager") || bossRoles.includes("Admin");
+    if (!isBossMove && !can("move_status")) {
       setDataError("บทบาทนี้ยังไม่มีสิทธิ์ย้ายสถานะงาน");
       return;
     }
@@ -5751,8 +5754,10 @@ function Board({
                           <button type="button" onClick={() => onAccept(job.id)} className="w-full rounded-xl bg-emerald-500 px-2 py-2 text-xs font-bold text-white">ยอมรับเข้าคิว</button>
                         ) : null}
                       </div>
-                    ) : (
-                      <div>
+                    ) : null}
+                    {/* ช่องเปลี่ยนสถานะ — โชว์ทุกการ์ด (การ์ดรออนุมัติ/ตีกลับ โชว์ให้ ผจก./เจ้าของ ที่ข้ามด่านได้) */}
+                    {job.acceptance === "accepted" || !job.acceptance || canAccept(job) ? (
+                      <div className={job.acceptance === "pending" || job.acceptance === "rejected" ? "mt-2" : undefined}>
                         <p className="mb-1 flex items-center gap-1 text-[10px] font-extrabold uppercase tracking-wide text-k2-muted">🔄 แตะเพื่อเปลี่ยนสถานะ</p>
                         <select
                           value={status}
@@ -5767,7 +5772,7 @@ function Board({
                           ))}
                         </select>
                       </div>
-                    )}
+                    ) : null}
                   </div>
                 </motion.div>
                 );
