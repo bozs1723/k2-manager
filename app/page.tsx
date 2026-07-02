@@ -4966,17 +4966,25 @@ function MyJobsView({
   onSendToProduction: (id: string) => void;
 }) {
   const isDesigner = userHasRole(currentUser, "Designer");
+  const isProduction = userHasRole(currentUser, "Production Staff");
   const mine = useMemo(() => jobs.filter((job) => jobIsAssignedTo(job, currentUser)), [jobs, currentUser]);
   const openJobs = mine.filter((job) => !["Completed", "Cancelled"].includes(job.status));
   const doneJobs = mine.filter((job) => ["Completed", "Cancelled"].includes(job.status));
   const overdue = openJobs.filter((job) => daysFromToday(job.dueDate) < 0).length;
   const dueToday = openJobs.filter((job) => daysFromToday(job.dueDate) === 0).length;
   const ordered = openJobs.slice().sort((a, b) => a.dueDate.localeCompare(b.dueDate));
-  // งานใหม่ที่ยังไม่มีกราฟิกรับ (แบ่งกันเอง) — โชว์ให้กราฟิกกด "รับงาน"
-  const unclaimed = useMemo(
-    () => (isDesigner ? jobs.filter((job) => (!job.assignedDesigner || job.assignedDesigner === "Unassigned") && !["Completed", "Cancelled"].includes(job.status)).sort((a, b) => a.dueDate.localeCompare(b.dueDate)) : []),
-    [jobs, isDesigner]
-  );
+  // งานใหม่ที่ยังไม่มีคนรับ (แบ่งกันเอง) — กราฟิก: งานยังไม่มีดีไซเนอร์ · ฝ่ายผลิต: งานเข้าคิวผลิตที่ยังไม่มีคนผลิต
+  const unassignedName = (name?: string) => !name || name === "Unassigned";
+  const unclaimed = useMemo(() => {
+    if (isDesigner) {
+      return jobs.filter((job) => unassignedName(job.assignedDesigner) && !["Completed", "Cancelled"].includes(job.status)).sort((a, b) => a.dueDate.localeCompare(b.dueDate));
+    }
+    if (isProduction) {
+      return jobs.filter((job) => unassignedName(job.assignedProduction) && ["Ready for Production", "In Production", "QC", "Packing"].includes(job.status)).sort((a, b) => a.dueDate.localeCompare(b.dueDate));
+    }
+    return [];
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [jobs, isDesigner, isProduction]);
   const notYetProduction = (job: Job) => !["Ready for Production", "In Production", "QC", "Packing", "Delivered / Picked Up", "Completed", "Cancelled"].includes(job.status);
   function confirmClaim(job: Job) {
     if (window.confirm(`รับงานนี้มาทำเอง?\n\n${job.id} · ${job.title}\n(งานจะเข้ามาอยู่ใน "งานที่ต้องทำ" ของคุณ และกราฟิกคนอื่นจะไม่เห็น)`)) onClaimJob(job.id);
@@ -4999,10 +5007,10 @@ function MyJobsView({
         </div>
       </div>
 
-      {isDesigner && unclaimed.length > 0 ? (
+      {unclaimed.length > 0 ? (
         <div className="glass rounded-[1.5rem] p-5 ring-2 ring-sky-300">
           <h3 className="mb-1 text-xl font-extrabold text-sky-700">🆕 งานใหม่รอรับ ({unclaimed.length})</h3>
-          <p className="mb-4 text-xs font-semibold text-k2-muted">กราฟิกแบ่งงานกันเอง — กด &quot;รับงานนี้&quot; งานจะเป็นของคุณ และคนอื่นจะไม่เห็น</p>
+          <p className="mb-4 text-xs font-semibold text-k2-muted">{isDesigner ? "กราฟิกแบ่งงานกันเอง" : "ฝ่ายผลิตแบ่งงานกันเอง"} — กด &quot;รับงานนี้&quot; งานจะเป็นของคุณ</p>
           <div className="space-y-3">
             {unclaimed.map((job) => (
               <div key={job.id} className="rounded-2xl bg-white/70 p-2 ring-1 ring-sky-200">
