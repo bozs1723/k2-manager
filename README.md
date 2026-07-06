@@ -2,6 +2,10 @@
 
 A production job queue management app for custom printing and merchandise teams.
 
+## Sw.Work — Smart Workflow & Production System
+
+ระบบใหม่ที่เส้นทาง `/sw-work`: ฝ่ายขายกรอกข้อมูลครั้งเดียว ระบบสร้างใบเสนอราคา ใบคอนเฟิร์มลูกค้า ใบสั่งผลิต ใบ QC และใบจัดส่งให้อัตโนมัติ พร้อมแดชบอร์ดและบอร์ด pipeline (Sales → Quotation → Confirm → Design → Production → QC → Delivery → Completed) ทำงานได้ทั้งโหมดเดโม (ไม่ต้องตั้งค่า) และโหมด Supabase เต็มรูปแบบ — รัน `supabase/migrations/20260706000000_sw_work.sql` ก่อนใช้โหมด cloud อ่านรายละเอียด สคีมา ER diagram โครงสร้าง API และ roadmap ได้ที่ [`docs/sw-work/`](docs/sw-work/README.md)
+
 ## First Version
 
 - Supabase Auth-ready login and signup for Owner, Admin, Designer, Production Staff, Packing Staff, and Sales Staff.

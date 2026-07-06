@@ -203,6 +203,51 @@ button:focus-visible {
   border-radius: 999px;
 }
 
+/* ===== Sw.Work — Modern / Minimal / Apple Style (พื้นขาว + ส้ม) =====
+   ต้อง override สไตล์ปุ่มกระจก (glass) ของแอปหลักที่ประกาศแบบ global */
+.sw-root {
+  min-height: 100vh;
+  background: #ffffff;
+  color: #1d1d1f;
+}
+
+.sw-root button[class] {
+  border-color: transparent;
+  background-image: none;
+  box-shadow: none;
+  backdrop-filter: none;
+}
+
+.sw-root button::before,
+.sw-root button::after {
+  display: none;
+}
+
+.sw-root button:hover {
+  transform: none;
+  filter: none;
+  box-shadow: none;
+}
+
+.sw-root button:active {
+  transform: scale(0.98);
+  box-shadow: none;
+}
+
+.sw-root button:focus-visible {
+  outline: 3px solid rgba(249, 115, 22, 0.45);
+  outline-offset: 2px;
+}
+
+.sw-doc {
+  font-family: "Nunito", "Noto Sans Thai", ui-sans-serif, system-ui, sans-serif;
+}
+
+.sw-doc table {
+  border-collapse: collapse;
+  width: 100%;
+}
+
 /* ===== เอกสารพิมพ์ PDF (ใบเสนอราคา/ใบสั่งงาน/ใบเสร็จ) ===== */
 @media print {
   body { background: #ffffff !important; }
