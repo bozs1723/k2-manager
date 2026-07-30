@@ -1,10 +1,9 @@
 import type { AuditEvent, Customer, Job, JobStatus, TeamMember } from "./types";
 
+// สถานะที่แสดงบน UI (บอร์ด/dropdown) — ระบบผลิตอย่างเดียว: สร้างงานได้เฉพาะงานที่มัดจำแล้ว
+// สถานะการเงินเก่า (Quotation / Waiting Deposit / Verifying Payment / Deposit Confirmed)
+// ยังอยู่ใน enum JobStatus สำหรับงานเก่าใน DB แต่ไม่แสดงเป็นคอลัมน์/ตัวเลือกอีก
 export const statuses: JobStatus[] = [
-  "Quotation",
-  "Waiting Deposit",
-  "Verifying Payment",
-  "Deposit Confirmed",
   "New Order",
   "Waiting for File",
   "Designing",

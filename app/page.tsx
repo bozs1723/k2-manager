@@ -1267,7 +1267,8 @@ export default function Page() {
         { label: "Sales Orders", icon: Inbox, visible: currentRolePermissions.includes("view_finance") || currentRolePermissions.includes("assign_staff") },
         { label: "Completed", icon: CheckCircle2, visible: currentRolePermissions.includes("assign_staff") },
         { label: "Leads", icon: Inbox, visible: currentRolePermissions.includes("create_job") },
-        { label: "Quotations", icon: ReceiptText, visible: currentRolePermissions.includes("create_job") },
+        // Quotations: ซ่อนจากเมนู — ระบบผลิตอย่างเดียว ฝ่ายการเงินออกใบเสนอราคาเองนอกระบบ (ข้อมูลเก่ายังอยู่ใน DB)
+        { label: "Quotations", icon: ReceiptText, visible: false },
         { label: "Create Job", icon: ClipboardPlus, visible: currentRolePermissions.includes("create_job") },
         { label: "Calendar", icon: CalendarDays, visible: currentRolePermissions.includes("view_dashboard") },
         { label: "Customers", icon: UsersRound, visible: currentRolePermissions.includes("create_customer") || currentRolePermissions.includes("edit_customer") || currentRolePermissions.includes("delete_customer") },
@@ -1597,17 +1598,18 @@ export default function Page() {
     void appendAudit(`lead ${status}`, id, "leads", id);
   }
 
-  // แปลง Lead → ใบเสนอราคา (สถานะ lead เป็น quoted แล้วเด้งไปหน้าใบเสนอราคา)
-  async function convertLeadToQuotation(lead: Lead) {
-    await createQuotation({
+  // แปลง Lead → สร้างงานทันที (ระบบผลิตอย่างเดียว: ลูกค้ามัดจำแล้วจึงเปิดงาน ไม่ผ่านใบเสนอราคาในระบบ)
+  async function convertLeadToJob(lead: Lead) {
+    setCreateJobPrefill({
+      customerId: "new",
       customerName: lead.name,
-      customerPhone: lead.phone,
+      phone: lead.phone,
       title: `งานของ ${lead.name}`,
-      description: lead.message,
-      amount: 0
+      description: lead.message
     });
-    await updateLeadStatus(lead.id, "quoted");
-    setActiveView("Quotations");
+    setCreateJobNonce((n) => n + 1);
+    setActiveView("Create Job");
+    await updateLeadStatus(lead.id, "won");
   }
 
   const canManageExpress = currentUser.role === "Owner" || currentUser.role === "Manager";
@@ -2841,7 +2843,7 @@ export default function Page() {
               sales_page: input?.salesPage || null,
               acceptance: jobAcceptance,
               reject_reason: null,
-              status: "Quotation",
+              status: "New Order",
               assigned_designer: teamIdByName(teamMembers, input?.assignedDesigner),
               assigned_production: teamIdByName(teamMembers, input?.assignedProduction),
               price,
@@ -2863,7 +2865,7 @@ export default function Page() {
           await supabase.from("job_status_history").insert({
             job_id: insertedJob.id,
             from_status: null,
-            to_status: "Quotation",
+            to_status: "New Order",
             changed_by: currentUser.id
           });
         }
@@ -2940,7 +2942,7 @@ export default function Page() {
       salesPage: input?.salesPage || undefined,
       acceptance: jobAcceptance,
       rejectReason: "",
-      status: "Quotation",
+      status: "New Order",
       assignedDesigner: input?.assignedDesigner ?? "Beam S.",
       assignedProduction: input?.assignedProduction ?? "Unassigned",
       createdBy: currentUser.name,
@@ -2951,7 +2953,7 @@ export default function Page() {
       paymentStatus: getPaymentStatus(price, deposit),
       internalNotes: input?.internalNotes ?? "สร้างจากฟอร์มสร้างงาน",
       comments: [],
-      statusHistory: [{ id: crypto.randomUUID(), from: "Created", to: "Quotation", by: currentUser.name, at: new Date().toLocaleString("en-GB") }]
+      statusHistory: [{ id: crypto.randomUUID(), from: "Created", to: "New Order", by: currentUser.name, at: new Date().toLocaleString("en-GB") }]
     };
     if (isNewCustomer) {
       setCustomerRecords((current) => [
@@ -4338,7 +4340,7 @@ export default function Page() {
                   leads={leads}
                   onCreate={createLead}
                   onSetStatus={updateLeadStatus}
-                  onConvert={convertLeadToQuotation}
+                  onConvert={convertLeadToJob}
                 />
               </motion.div>
             )}
@@ -6381,7 +6383,7 @@ function JobDetail({
             {/* พิมพ์เอกสาร PDF */}
             <div className="mt-3 flex flex-wrap items-center gap-2">
               <span className="text-xs font-bold text-k2-muted">🖨️ พิมพ์:</span>
-              <button type="button" onClick={() => setPrintType("quote")} className="rounded-xl bg-white/80 px-3 py-1.5 text-xs font-bold text-k2-ink shadow-sm">ใบเสนอราคา</button>
+              {/* ใบเสนอราคา: ตัดออก — ฝ่ายการเงินออกใบเสนอราคาเองนอกระบบ (เหลือใบสั่งงาน + ใบเสร็จ) */}
               <button type="button" onClick={() => setPrintType("workorder")} className="rounded-xl bg-white/80 px-3 py-1.5 text-xs font-bold text-k2-ink shadow-sm">ใบสั่งงาน</button>
               {canSeeMoney ? <button type="button" onClick={() => setPrintType("receipt")} className="rounded-xl bg-white/80 px-3 py-1.5 text-xs font-bold text-k2-ink shadow-sm">ใบเสร็จ</button> : null}
             </div>
@@ -7205,7 +7207,7 @@ function LeadsView({
                     <button type="button" onClick={() => onSetStatus(lead.id, "contacting")} className="rounded-xl bg-amber-500 px-3 py-2 text-xs font-extrabold text-white">เริ่มคุย</button>
                   ) : null}
                   {lead.status !== "quoted" && lead.status !== "won" && lead.status !== "lost" ? (
-                    <button type="button" onClick={() => onConvert(lead)} className="rounded-xl bg-k2-ink px-3 py-2 text-xs font-extrabold text-white">→ แปลงเป็นใบเสนอราคา</button>
+                    <button type="button" onClick={() => onConvert(lead)} className="rounded-xl bg-k2-ink px-3 py-2 text-xs font-extrabold text-white">→ สร้างงาน (มัดจำแล้ว)</button>
                   ) : null}
                   {lead.status !== "won" ? (
                     <button type="button" onClick={() => onSetStatus(lead.id, "won")} className="rounded-xl bg-teal-500 px-3 py-2 text-xs font-extrabold text-white">ปิดการขาย</button>
@@ -7544,8 +7546,18 @@ function CreateJobView({
           setFormError("กรุณากรอกชื่อลูกค้า หรือเลือกลูกค้าเดิมจากช่องค้นหา");
           return;
         }
-        // หมายเหตุ: ไม่บังคับแนบสลิป/มัดจำตอนสร้าง — ตาม flow ใหม่ของทีม (งานเริ่มที่ "Quotation")
-        // มัดจำ/สลิปจะเก็บภายหลังในขั้นการเงิน (แนบที่นี่ก่อนได้ ถ้ามีแล้ว)
+        // ระบบผลิตอย่างเดียว: สร้างงานได้เฉพาะงานที่ลูกค้ามัดจำมาแล้ว (การเงินออกใบเสนอราคาเองข้างนอก)
+        // จึงบังคับบันทึกมัดจำ + แนบสลิปตอนสร้าง — ยกเว้นติ๊ก "ไม่ต้องมัดจำ" ซึ่งต้องรอเจ้าของอนุมัติ
+        if (!form.depositWaived) {
+          if (!(Number(form.deposit) > 0)) {
+            setFormError("กรุณากรอกยอดมัดจำ (ลูกค้าต้องมัดจำก่อนเปิดงาน) หรือติ๊ก \"ไม่ต้องมัดจำ\" เพื่อขออนุมัติเจ้าของ");
+            return;
+          }
+          if (!form.depositSlip) {
+            setFormError("กรุณาแนบสลิปมัดจำ (บังคับตอนสร้างงาน) หรือติ๊ก \"ไม่ต้องมัดจำ\" เพื่อขออนุมัติเจ้าของ");
+            return;
+          }
+        }
         setFormError("");
         const workOrderSpec = [
           `ช่องทางรับงาน: ${form.sourceChannel || "-"}`,
@@ -7803,7 +7815,7 @@ function CreateJobView({
               );
             })()}
           </label>
-          <NumberField label="มัดจำ" value={form.deposit} onChange={(value) => setField("deposit", value)} />
+          <NumberField label="มัดจำ (บังคับ — ลูกค้าจ่ายมาแล้ว)" value={form.deposit} onChange={(value) => setField("deposit", value)} />
           <TextField
             label="วันที่รับเงินมัดจำ"
             type="date"
@@ -7836,7 +7848,7 @@ function CreateJobView({
               </div>
             ) : null}
           </div>
-          {/* สลิปมัดจำ — ไม่บังคับตอนสร้าง (เก็บภายหลังในขั้นการเงินได้) */}
+          {/* สลิปมัดจำ — บังคับตอนสร้าง (ลูกค้ามัดจำมาแล้วจึงเปิดงานได้) ยกเว้นติ๊ก "ไม่ต้องมัดจำ" รอเจ้าของอนุมัติ */}
           <div className={`space-y-3 md:col-span-2 rounded-2xl border p-4 ${form.depositWaived ? "border-amber-200 bg-amber-50/60" : "border-white/80 bg-white/55"}`}>
             <label className="flex items-center justify-between gap-3">
               <span className="flex items-center gap-2 text-sm font-extrabold text-k2-ink">
@@ -7856,7 +7868,7 @@ function CreateJobView({
               <>
                 <span className="flex items-center gap-2 text-sm font-extrabold text-k2-ink">
                   <WalletCards className="h-4 w-4 text-rose-500" />
-                  สลิปมัดจำ <span className="text-xs font-bold text-k2-muted">(ไม่บังคับ — เก็บภายหลังในขั้นการเงินได้)</span>
+                  สลิปมัดจำ <span className="text-xs font-bold text-rose-500">(บังคับแนบ — ลูกค้าโอนมัดจำแล้วจึงเปิดงานได้)</span>
                 </span>
                 <div className="flex flex-wrap items-center gap-3">
                   <label className="inline-flex cursor-pointer items-center gap-2 rounded-2xl bg-white px-4 py-2.5 text-sm font-bold text-k2-ink shadow-sm">
@@ -8025,7 +8037,7 @@ function CreateJobView({
           <div className="mt-4 space-y-3">
             <MiniStat label="ยอดคงเหลือ" value={money.format(Math.max(form.price - form.deposit, 0))} />
             <MiniStat label="สถานะชำระเงิน" value={paymentLabel[getPaymentStatus(form.price, form.deposit)]} />
-            <MiniStat label="สถานะแรก" value={statusLabel["Quotation"]} />
+            <MiniStat label="สถานะแรก" value={statusLabel["New Order"]} />
           </div>
           {formError ? (
             <p className="mt-4 rounded-2xl bg-amber-50 px-4 py-3 text-sm font-bold text-amber-700">{formError}</p>
