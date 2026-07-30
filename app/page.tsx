@@ -774,6 +774,7 @@ export default function Page() {
   const [selectedJobId, setSelectedJobId] = useState(initialJobs[0].id);
   const [query, setQuery] = useState("");
   const [draggedJobId, setDraggedJobId] = useState<string | null>(null);
+  const [pendingMove, setPendingMove] = useState<{ jobId: string; fromStatus: JobStatus; toStatus: JobStatus } | null>(null);
   const [notifications, setNotifications] = useState<AppNotification[]>([]);
   const [showNotifPanel, setShowNotifPanel] = useState(false);
   const notifPanelRef = useRef<HTMLDivElement>(null);
@@ -1285,6 +1286,16 @@ export default function Page() {
     }
     void appendAudit(`moved status to ${nextStatus}`, jobId, "jobs", existingJob.dbId);
     notifyAssignees("status_moved", existingJob, `งาน ${existingJob.id} ย้ายไป "${statusLabel[nextStatus]}" แล้ว`);
+  }
+
+  function requestMove(jobId: string, nextStatus: JobStatus) {
+    if (!can("move_status")) {
+      setDataError("บทบาทนี้ยังไม่มีสิทธิ์ย้ายสถานะงาน");
+      return;
+    }
+    const job = jobs.find((j) => j.id === jobId);
+    if (!job || job.status === nextStatus) return;
+    setPendingMove({ jobId, fromStatus: job.status, toStatus: nextStatus });
   }
 
   async function updatePayment(jobId: string, deposit: number) {
@@ -2213,7 +2224,8 @@ export default function Page() {
                   jobs={filteredJobs}
                   draggedJobId={draggedJobId}
                   setDraggedJobId={setDraggedJobId}
-                  moveJob={moveJob}
+                  moveJob={requestMove}
+                  canMoveStatus={can("move_status")}
                   onSelect={(id) => {
                     setSelectedJobId(id);
                     setActiveView("Detail");
@@ -2295,7 +2307,72 @@ export default function Page() {
         </section>
       </div>
 
+      {pendingMove ? (
+        <ConfirmMoveModal
+          job={jobs.find((j) => j.id === pendingMove.jobId)!}
+          from={pendingMove.fromStatus}
+          to={pendingMove.toStatus}
+          onConfirm={() => {
+            void moveJob(pendingMove.jobId, pendingMove.toStatus);
+            setPendingMove(null);
+          }}
+          onCancel={() => setPendingMove(null)}
+        />
+      ) : null}
     </main>
+  );
+}
+
+function ConfirmMoveModal({
+  job,
+  from,
+  to,
+  onConfirm,
+  onCancel,
+}: {
+  job: Job;
+  from: JobStatus;
+  to: JobStatus;
+  onConfirm: () => void;
+  onCancel: () => void;
+}) {
+  const isBackward = statuses.indexOf(to) < statuses.indexOf(from);
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4 backdrop-blur-sm"
+      onClick={onCancel}
+    >
+      <div
+        className="glass w-full max-w-sm rounded-3xl p-6 shadow-2xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <h3 className="mb-1 text-lg font-extrabold text-k2-ink">
+          {isBackward ? "⚠️ ย้ายสถานะย้อนหลัง?" : "ยืนยันย้ายสถานะ"}
+        </h3>
+        <p className="mb-4 text-sm text-k2-muted">
+          {job?.id} · {job?.title}
+        </p>
+        <div className="mb-5 flex items-center gap-2 text-sm font-semibold">
+          <span className={`rounded-full px-3 py-1.5 ${statusTint[from]}`}>{statusLabel[from]}</span>
+          <span className="text-k2-muted">→</span>
+          <span className={`rounded-full px-3 py-1.5 ${statusTint[to]}`}>{statusLabel[to]}</span>
+        </div>
+        <div className="flex gap-3">
+          <button
+            onClick={onCancel}
+            className="flex-1 rounded-2xl border border-white/80 px-4 py-2.5 text-sm font-bold text-k2-muted"
+          >
+            ยกเลิก
+          </button>
+          <button
+            onClick={onConfirm}
+            className={`flex-1 rounded-2xl px-4 py-2.5 text-sm font-bold text-white ${isBackward ? "bg-rose-500" : "bg-k2-ink"}`}
+          >
+            ยืนยัน
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -2492,16 +2569,18 @@ function Board({
   draggedJobId,
   setDraggedJobId,
   moveJob,
+  canMoveStatus,
   onSelect
 }: {
   jobs: Job[];
   draggedJobId: string | null;
   setDraggedJobId: (id: string | null) => void;
   moveJob: (jobId: string, status: JobStatus) => void;
+  canMoveStatus: boolean;
   onSelect: (id: string) => void;
 }) {
   return (
-    <div className="soft-scrollbar flex gap-4 overflow-x-auto pb-4">
+    <div className="soft-scrollbar flex gap-3 overflow-x-auto pb-4">
       {statuses.map((status) => {
         const columnJobs = jobs.filter((job) => job.status === status);
         return (
@@ -2512,24 +2591,26 @@ function Board({
               if (draggedJobId) moveJob(draggedJobId, status);
               setDraggedJobId(null);
             }}
-            className="glass min-h-[68vh] w-80 shrink-0 rounded-[1.5rem] p-3"
+            className="glass min-h-[68vh] w-64 shrink-0 rounded-[1.5rem] p-3"
           >
-            <div className="mb-3 rounded-[1.25rem] border border-white/75 bg-white/50 px-4 py-3 shadow-sm">
-              <div className="flex items-center justify-between gap-3">
-                <div className="flex min-w-0 items-center gap-2.5">
-                  <span className={`h-2.5 w-2.5 shrink-0 rounded-full ${statusDot[status]} shadow-[0_0_0_4px_rgba(255,255,255,0.7)]`} />
-                  <h3 className="truncate text-sm font-extrabold text-k2-ink">{statusLabel[status]}</h3>
+            <div className="mb-3 rounded-[1.25rem] border border-white/75 bg-white/50 px-3 py-2.5 shadow-sm">
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex min-w-0 items-center gap-2">
+                  <span className={`h-2 w-2 shrink-0 rounded-full ${statusDot[status]} shadow-[0_0_0_3px_rgba(255,255,255,0.7)]`} />
+                  <h3 className="truncate text-xs font-extrabold text-k2-ink">{statusLabel[status]}</h3>
                 </div>
-                <span className={`shrink-0 rounded-full px-2.5 py-1 text-[11px] font-extrabold ${statusTint[status]}`}>
-                  {columnJobs.length} งาน
+                <span className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-extrabold ${statusTint[status]}`}>
+                  {columnJobs.length}
                 </span>
               </div>
-              <p className="mt-1.5 text-xs font-semibold text-k2-muted">
-                <span className="hidden sm:inline">ลากการ์ดมาวางเพื่อเปลี่ยนสถานะ · </span>
-                <span>แตะ ▼ ใต้การ์ดเพื่อย้ายขั้นตอน</span>
-              </p>
+              {canMoveStatus ? (
+                <p className="mt-1 text-[10px] font-semibold text-k2-muted">
+                  <span className="hidden sm:inline">ลากการ์ด · </span>
+                  <span>แตะ ▼ เพื่อย้าย</span>
+                </p>
+              ) : null}
             </div>
-            <div className="space-y-3">
+            <div className="space-y-2.5">
               {columnJobs.map((job) => {
                 const urgency = dueUrgency(job.dueDate, job.status);
                 return (
@@ -2540,52 +2621,52 @@ function Board({
                     urgency && urgency.days <= 1 ? "border-l-4 border-l-rose-400 border-white/80" : "border-white/80"
                   }`}
                 >
-                  {/* แตะเพื่อดูรายละเอียด / ลากเพื่อย้ายขั้นตอน (desktop) */}
                   <button
-                    draggable
-                    onDragStart={() => setDraggedJobId(job.id)}
+                    draggable={canMoveStatus}
+                    onDragStart={() => canMoveStatus && setDraggedJobId(job.id)}
                     onClick={() => onSelect(job.id)}
-                    className="w-full p-4 text-left"
+                    className="w-full p-3 text-left"
                   >
-                    <div className="mb-3 flex items-center justify-between gap-2">
-                      <span className="flex items-center gap-1.5 text-sm font-bold">
-                        {job.isExpress ? <Zap className="h-3.5 w-3.5 text-rose-500" /> : null}
+                    <div className="mb-2 flex items-center justify-between gap-1.5">
+                      <span className="flex items-center gap-1 text-xs font-bold">
+                        {job.isExpress ? <Zap className="h-3 w-3 text-rose-500" /> : null}
                         {job.id}
                       </span>
-                      <span className={`rounded-full px-2 py-1 text-[11px] font-bold ${priorityClass[job.priority]}`}>{priorityLabel[job.priority]}</span>
+                      <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${priorityClass[job.priority]}`}>{priorityLabel[job.priority]}</span>
                     </div>
-                    <p className="font-semibold leading-5">{job.title}</p>
-                    <p className="mt-1 text-sm text-k2-muted">{job.customerName}</p>
-                    <div className="mt-4 flex items-center justify-between gap-2 text-xs font-semibold text-k2-muted">
-                      <span>{jobTypeLabel[job.type]}</span>
+                    <p className="text-sm font-semibold leading-4">{job.title}</p>
+                    <p className="mt-1 text-xs text-k2-muted">{job.customerName}</p>
+                    <div className="mt-2.5 flex items-center justify-between gap-1.5 text-[11px] font-semibold text-k2-muted">
+                      <span className="truncate">{jobTypeLabel[job.type]}</span>
                       {urgency ? (
-                        <span className={`flex items-center gap-1 rounded-full px-2 py-1 ${urgency.tone}`}>
+                        <span className={`flex shrink-0 items-center gap-1 rounded-full px-2 py-0.5 ${urgency.tone}`}>
                           <span className={`h-1.5 w-1.5 rounded-full ${urgency.dot}`} />
                           {urgency.label}
                         </span>
                       ) : (
-                        <span>{job.dueDate}</span>
+                        <span className="shrink-0">{job.dueDate}</span>
                       )}
                     </div>
                   </button>
-                  {/* เลือกขั้นตอนใหม่ — ใช้งานได้ทั้ง mobile touch และ desktop */}
-                  <div className="border-t border-white/60 px-3 py-2">
-                    <select
-                      value={status}
-                      onChange={(event) => moveJob(job.id, event.target.value as JobStatus)}
-                      className="w-full cursor-pointer rounded-xl bg-white/60 px-3 py-2 text-xs font-bold text-k2-muted outline-none"
-                    >
-                      {statuses.map((s) => (
-                        <option key={s} value={s}>{statusLabel[s]}</option>
-                      ))}
-                    </select>
-                  </div>
+                  {canMoveStatus ? (
+                    <div className="border-t border-white/60 px-2.5 py-1.5">
+                      <select
+                        value={status}
+                        onChange={(event) => moveJob(job.id, event.target.value as JobStatus)}
+                        className="w-full cursor-pointer rounded-xl bg-white/60 px-2.5 py-1.5 text-[11px] font-bold text-k2-muted outline-none"
+                      >
+                        {statuses.map((s) => (
+                          <option key={s} value={s}>{statusLabel[s]}</option>
+                        ))}
+                      </select>
+                    </div>
+                  ) : null}
                 </motion.div>
                 );
               })}
               {columnJobs.length === 0 ? (
-                <div className="rounded-[1.25rem] border border-dashed border-white/90 bg-white/35 px-4 py-6 text-center text-sm font-semibold text-k2-muted">
-                  ยังไม่มีงานในขั้นตอนนี้
+                <div className="rounded-[1.25rem] border border-dashed border-white/90 bg-white/35 px-3 py-5 text-center text-xs font-semibold text-k2-muted">
+                  ยังไม่มีงาน
                 </div>
               ) : null}
             </div>
