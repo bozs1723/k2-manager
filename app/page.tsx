@@ -6438,6 +6438,9 @@ function JobDetail({
   const [rejectJobReason, setRejectJobReason] = useState("");
   const [editingJob, setEditingJob] = useState(false);
   const jobLocked = ["Ready for Production", "In Production", "QC", "Packing", "Delivered / Picked Up", "Completed", "Cancelled"].includes(job.status);
+  // อาร์ตเวิร์ก: งานเข้าผลิตแล้วห้ามแก้ (สถานะชุดเดียวกับที่ล็อกข้อมูลงาน) ยกเว้นเจ้าของ/ผจก.
+  // — กันแบบในระบบไม่ตรงกับที่ลูกค้าเซ็นในใบยืนยันแบบ
+  const artworkEditable = canArtwork && (!jobLocked || userHasAnyRole(currentUser, ["Owner", "Manager"]));
   const [jobEdit, setJobEdit] = useState({ title: job.title, type: job.type, description: job.description, quantity: job.quantity, dueDate: job.dueDate, priority: job.priority, internalNotes: job.internalNotes });
   useEffect(() => {
     setJobEdit({ title: job.title, type: job.type, description: job.description, quantity: job.quantity, dueDate: job.dueDate, priority: job.priority, internalNotes: job.internalNotes });
@@ -6849,7 +6852,10 @@ function JobDetail({
           </div>
           <p className="mb-4 text-xs font-semibold text-k2-muted">รูปงานที่ออกแบบเสร็จ + จำนวนต่อชิ้น จะไปแสดงในใบสั่งงานให้ฝ่ายผลิตปริ้น</p>
 
-          {canArtwork ? (
+          {canArtwork && !artworkEditable ? (
+            <p className="mb-4 rounded-2xl bg-white/70 px-4 py-2.5 text-xs font-bold text-k2-muted">🔒 งานเข้าผลิตแล้ว — แก้อาร์ตเวิร์กได้เฉพาะเจ้าของ/ผู้จัดการ (กันแบบไม่ตรงกับที่ลูกค้าเซ็นในใบยืนยันแบบ)</p>
+          ) : null}
+          {artworkEditable ? (
             <div className="mb-4 flex flex-wrap gap-2">
               <label className={`inline-flex cursor-pointer items-center gap-2 rounded-2xl bg-violet-600 px-4 py-2 text-sm font-bold text-white ${artworkBusy ? "opacity-60" : ""}`}>
                 <Upload className="h-4 w-4" /> {artworkBusy ? "กำลังอัปโหลด…" : "เพิ่มรูปอาร์ตเวิร์ก"}
@@ -6875,13 +6881,13 @@ function JobDetail({
                   <div className="relative mb-2 overflow-hidden rounded-xl bg-slate-100">
                     {/* eslint-disable-next-line @next/next/no-img-element */}
                     <img src={item.url} alt={item.label || "artwork"} className="h-36 w-full object-contain" />
-                    {canArtwork ? (
+                    {artworkEditable ? (
                       <button type="button" onClick={() => removeArtwork(item.id)} className="absolute right-2 top-2 grid h-8 w-8 place-items-center rounded-xl bg-white/90 text-rose-600 shadow" title="ลบรูปนี้">
                         <Trash2 className="h-4 w-4" />
                       </button>
                     ) : null}
                   </div>
-                  {canArtwork ? (
+                  {artworkEditable ? (
                     <div className="space-y-2">
                       <input value={item.label ?? ""} onChange={(event) => patchArtwork(item.id, { label: event.target.value })} placeholder="ชื่อ/รายการ เช่น สแตนดี้, พวงกุญแจลายเขียว" className="w-full rounded-xl border border-violet-100 bg-violet-50/40 px-3 py-2 text-sm font-semibold outline-none" />
                       {/* ขนาดต่อรูป (กว้าง × สูง + หน่วย) — ใช้ในใบยืนยันแบบ + ใบสั่งงาน */}
@@ -6910,7 +6916,7 @@ function JobDetail({
             </div>
           ) : (
             <p className="rounded-2xl bg-white/70 px-4 py-6 text-center text-sm font-semibold text-k2-muted">
-              ยังไม่มีอาร์ตเวิร์ก — {canArtwork ? "กด \"เพิ่มรูปอาร์ตเวิร์ก\" เพื่อวางรูปงานที่ออกแบบเสร็จ" : "รอดีไซเนอร์วางรูปงาน"}
+              ยังไม่มีอาร์ตเวิร์ก — {artworkEditable ? "กด \"เพิ่มรูปอาร์ตเวิร์ก\" เพื่อวางรูปงานที่ออกแบบเสร็จ" : "รอดีไซเนอร์วางรูปงาน"}
             </p>
           )}
         </div>
