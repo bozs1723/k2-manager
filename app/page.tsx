@@ -439,15 +439,20 @@ const roleSummaryPermissions: Record<Role, string[]> = {
 };
 
 const roles: Role[] = ["Owner", "Manager", "Admin", "HR", "Accounting", "Designer", "Production Staff", "Packing Staff", "Sales Staff"];
-const BRANCH_LIST = ["พระรามเก้า", "พะเยา"];
+// รวมสาขาเหลือสาขาเดียว: สำนักงานใหญ่ พระรามเก้า
+// ค่าที่เก็บใน DB คงเป็น "พระรามเก้า" (โปรไฟล์/งานเดิมใช้ค่านี้อยู่ และด่าน handoff เทียบสาขาแบบตรงตัว)
+// ส่วนป้ายที่ผู้ใช้เห็นใช้ MAIN_BRANCH_LABEL
+const MAIN_BRANCH = "พระรามเก้า";
+const MAIN_BRANCH_LABEL = "สำนักงานใหญ่ พระรามเก้า";
+const BRANCH_LIST = [MAIN_BRANCH];
+const branchDisplay = (branch?: string) => (!branch || branch === MAIN_BRANCH ? MAIN_BRANCH_LABEL : branch);
 
-// เพจที่รับงาน → สาขา (ใช้แยกรายได้/สาขาที่รับผิดชอบ ตอนสร้างงาน)
-//   พะเยา: K2sign, k2 phayao · พระรามเก้า: Sweetdesign, Fluffi
+// เพจที่รับงาน → ใช้บันทึกช่องทางขายเท่านั้น (สาขาเดียว รายได้/ผลิตเข้าสำนักงานใหญ่ทั้งหมด)
 const SALES_PAGES: Array<{ page: string; branch: string }> = [
-  { page: "K2sign", branch: "พะเยา" },
-  { page: "k2 phayao", branch: "พะเยา" },
-  { page: "Sweetdesign", branch: "พระรามเก้า" },
-  { page: "Fluffi", branch: "พระรามเก้า" }
+  { page: "K2sign", branch: MAIN_BRANCH },
+  { page: "k2 phayao", branch: MAIN_BRANCH },
+  { page: "Sweetdesign", branch: MAIN_BRANCH },
+  { page: "Fluffi", branch: MAIN_BRANCH }
 ];
 const PAGE_TO_BRANCH: Record<string, string> = Object.fromEntries(SALES_PAGES.map((p) => [p.page, p.branch]));
 
@@ -740,6 +745,42 @@ const gateById = (id?: string) => HANDOFF_GATES.find((gate) => gate.id === id);
 const gateFromStatus = (status: JobStatus) => HANDOFF_GATES.find((gate) => gate.fromStatus === status);
 const userHasRole = (member: TeamMember, role: Role) => member.role === role || (member.roles ?? []).includes(role);
 const userHasAnyRole = (member: TeamMember, list: Role[]) => list.some((role) => userHasRole(member, role));
+
+// "ขั้นถัดไปต้องทำอะไร" 1 บรรทัดต่องาน — ให้ทีมรู้ทันทีว่างานค้างอยู่ที่ใคร (โชว์บนบอร์ด/งานของฉัน/รายละเอียดงาน)
+function nextStepText(job: Job): string {
+  if (job.status === "Cancelled") return "งานถูกยกเลิกแล้ว";
+  if (job.status === "Completed") return "งานเสร็จสิ้นแล้ว";
+  if (job.acceptance === "pending") return `รอ ผจก.สาขา${job.productionBranch ? ` ${job.productionBranch}` : ""} กด "รับ + มอบหมาย"`;
+  if (job.acceptance === "rejected") return "ถูกตีกลับ — รอเซลแก้ข้อมูลแล้วส่งเข้าคิวใหม่";
+  if (job.handoffStatus === "pending") {
+    const gate = gateById(job.handoffGate);
+    if (gate?.id === "production_approval") return "รอ ผจก.สาขากด \"รับงาน\" เพื่ออนุมัติเข้าผลิต";
+    return "รอเซลตรวจแบบ — กด \"รับงาน\" หรือ \"ตีกลับ\"";
+  }
+  switch (job.status) {
+    case "New Order":
+      return staffLabel(job.assignedDesigner) === "ยังไม่มอบหมาย" ? "รอ ผจก.มอบหมายกราฟิก" : `รอกราฟิก (${job.assignedDesigner}) เริ่มออกแบบ`;
+    case "Waiting for File":
+      return "รอไฟล์จากลูกค้า — ได้ไฟล์แล้วกราฟิกเริ่มออกแบบ";
+    case "Designing":
+      return `กราฟิก${job.assignedDesigner !== "Unassigned" ? ` (${job.assignedDesigner})` : ""}ออกแบบอยู่ — เสร็จแล้วกด "ส่งแบบให้ตรวจ"`;
+    case "Waiting for Customer Approval":
+      return "รอลูกค้า/เซลยืนยันแบบ";
+    case "Ready for Production":
+      return job.assignedProduction === "Unassigned" ? "รอฝ่ายผลิตกดรับงานแล้วเริ่มผลิต" : `รอฝ่ายผลิต (${job.assignedProduction}) กด "เริ่มผลิต"`;
+    case "In Production":
+      return "กำลังผลิต — เสร็จแล้วกดส่งตรวจ QC";
+    case "QC":
+      return "รอตรวจคุณภาพ (QC) — ผ่านแล้วส่งแพ็กของ";
+    case "Packing":
+      return "รอแพ็กของ + จัดส่ง/นัดรับ";
+    case "Delivered / Picked Up":
+      return "ส่งมอบแล้ว — รอปิดงาน (เก็บยอดคงเหลือถ้ามี)";
+    default:
+      // สถานะการเงินเก่า (งานก่อนตัดใบเสนอราคา) — ให้ย้ายเข้าคิวผลิตทางเดียว
+      return "งานเก่าค้างขั้นการเงิน — ย้ายเข้า \"รับงานใหม่\" เพื่อเข้าคิวผลิต";
+  }
+}
 
 type DueUrgency = { days: number; label: string; tone: string; dot: string };
 
@@ -1250,7 +1291,8 @@ export default function Page() {
     return Array.from(merged);
   }, [permissionMatrix, currentUser.role, currentUser.roles]);
   const can = (permission: PermissionKey) => currentRolePermissions.includes(permission);
-  const canSeeMoney = can("view_finance");
+  // ข้อมูลการเงิน (ราคา/มัดจำ/สลิป/ยอดคงเหลือ) โชว์เฉพาะ เจ้าของ + ฝ่ายการเงิน เท่านั้น
+  const canSeeMoney = userHasAnyRole(currentUser, ["Owner", "Accounting"]);
   const activeJobs = useMemo(() => jobs.filter((job) => !["Completed", "Cancelled"].includes(job.status)), [jobs]);
   // callback คงที่สำหรับเปิดรายละเอียดงาน — ช่วยให้ view ที่ครอบด้วย memo ไม่ re-render เพราะ prop เปลี่ยน reference
   const openJobDetail = useCallback((id: string) => {
@@ -1272,9 +1314,10 @@ export default function Page() {
         { label: "Create Job", icon: ClipboardPlus, visible: currentRolePermissions.includes("create_job") },
         { label: "Calendar", icon: CalendarDays, visible: currentRolePermissions.includes("view_dashboard") },
         { label: "Customers", icon: UsersRound, visible: currentRolePermissions.includes("create_customer") || currentRolePermissions.includes("edit_customer") || currentRolePermissions.includes("delete_customer") },
-        { label: "Payments", icon: WalletCards, visible: currentRolePermissions.includes("view_finance") || currentRolePermissions.includes("edit_payment") },
+        // เมนูการเงิน: เห็นเฉพาะเจ้าของ/ฝ่ายการเงิน (ข้อมูลเงินไม่โชว์บทบาทอื่น)
+        { label: "Payments", icon: WalletCards, visible: canSeeMoney },
         { label: "Reports", icon: BarChart3, visible: currentRolePermissions.includes("view_dashboard") },
-        { label: "Finance", icon: Coins, visible: currentRolePermissions.includes("view_finance") },
+        { label: "Finance", icon: Coins, visible: canSeeMoney },
         { label: "Attendance", icon: Clock3, visible: currentRolePermissions.includes("view_dashboard") },
         { label: "Leave", icon: CalendarDays, visible: currentRolePermissions.includes("view_dashboard") },
         { label: "HR", icon: UsersRound, visible: currentRolePermissions.includes("manage_hr") },
@@ -1283,7 +1326,7 @@ export default function Page() {
         { label: "Detail", icon: FileImage, visible: currentRolePermissions.includes("view_dashboard") },
         { label: "Audit", icon: ShieldCheck, visible: currentRolePermissions.includes("view_audit_log") }
       ].filter((item) => item.visible),
-    [currentRolePermissions, currentUser.role]
+    [currentRolePermissions, currentUser.role, canSeeMoney]
   );
   // เมนูที่แสดงจริง — ตัด "Detail" (เปิดผ่านการเลือกงานเท่านั้น ไม่ใช่ปุ่มเมนู)
   const menuItems = useMemo(() => navigationItems.filter((item) => item.label !== "Detail"), [navigationItems]);
@@ -1911,29 +1954,10 @@ export default function Page() {
     }
   }
 
-  // เจ้าของ/คนไม่มีสาขาประจำ → เห็นทุกสาขา; คนมีสาขา → เห็นเฉพาะงานสาขาตัวเอง + งานที่ยังไม่ระบุสาขา
-  const branchScopedJobs = useMemo(() => {
-    const byBranch = (currentUser.role === "Owner" || !currentUser.branch)
-      ? jobs
-      : jobs.filter((job) => !job.productionBranch || job.productionBranch === currentUser.branch);
-    // ฝ่ายผลิต (ดีไซเนอร์/ผลิต/แพ็ก) เห็นเฉพาะงานที่ยืนยันมัดจำแล้ว
-    // งานเก่าที่ไม่มีสลิป (ก่อนมีระบบนี้) ไม่ถูกกั้น เพื่อไม่ให้งานเดิมหายจากคิว
-    const depositOk = (job: Job) => job.depositConfirmed || (!job.depositSlip && !job.depositWaived);
-    const unassigned = (name?: string) => !name || name === "Unassigned";
-    // ดีไซเนอร์: เห็นงานของตัวเอง + งานใหม่ที่ยังไม่มีคนรับ (กราฟิกแบ่งกันเอง กด "รับงาน") — งานที่คนอื่นรับแล้วจะไม่เห็น
-    if (currentUser.role === "Designer") {
-      return byBranch.filter((job) => depositOk(job) && (job.assignedDesigner === currentUser.name || unassigned(job.assignedDesigner)));
-    }
-    // ฝ่ายผลิต: เห็นเฉพาะงานที่มอบหมายให้ตัวเอง หรือยังไม่ได้มอบหมาย (กันงานหลุดถ้ายังไม่ระบุคน)
-    if (currentUser.role === "Production Staff") {
-      return byBranch.filter((job) => depositOk(job) && (job.assignedProduction === currentUser.name || unassigned(job.assignedProduction)));
-    }
-    // ฝ่ายแพ็ก: เห็นงานทั้งสาขา (ไม่มีการมอบหมายรายคน)
-    if (currentUser.role === "Packing Staff") {
-      return byBranch.filter(depositOk);
-    }
-    return byBranch;
-  }, [jobs, currentUser.role, currentUser.branch, currentUser.name]);
+  // นโยบายใหม่ (สาขาเดียว): ทุกบทบาท "ดู" ได้ทุกงาน + ทุกสถานะ — ไม่ซ่อนงานจากใคร
+  // สิ่งที่จำกัดตามบทบาทคือ "ปุ่มลงมือ" (ย้ายสถานะ/การเงิน) ไม่ใช่การมองเห็น
+  // "งานของฉัน" ยังกรองเฉพาะงานที่มอบหมายให้ตัวเองใน MyJobsView ตามเดิม
+  const branchScopedJobs = jobs;
 
   const filteredJobs = useMemo(() => {
     const normalized = query.trim().toLowerCase();
@@ -2220,16 +2244,12 @@ export default function Page() {
     setPendingMove({ jobId, from: job.status, to: nextStatus });
   }
 
-  // ยอมรับงานได้: เจ้าของ (ทุกสาขา) หรือ ผจก./แอดมิน เฉพาะงานที่ผลิตที่สาขาตัวเองเท่านั้น (ต้องตรงเป๊ะ)
-  // ไม่มี fallback "งานไม่มีสาขา = เห็นทุกคน" อีก เพื่อกันงานสาขาอื่น (เช่น DTG พระรามเก้า) เด้งให้ผจก.พะเยา
+  // ยอมรับงานได้: เจ้าของ / ผจก. / แอดมิน — สาขาเดียวแล้ว ไม่ต้องเทียบสาขาอีก (งานทุกงานอยู่สำนักงานใหญ่)
   function canAcceptJob(job: Job) {
+    void job;
     // ใช้บทบาทรวม (บทบาทหลัก + บทบาทเสริม) — กันเคสเจ้าของที่ตั้ง Owner เป็นบทบาทเสริม แล้วกดอนุมัติไม่ได้
     const roles: Role[] = [currentUser.role, ...(currentUser.roles ?? [])];
-    if (roles.includes("Owner")) return true;
-    if (roles.includes("Manager") || roles.includes("Admin")) {
-      return !!currentUser.branch && job.productionBranch === currentUser.branch;
-    }
-    return false;
+    return roles.includes("Owner") || roles.includes("Manager") || roles.includes("Admin");
   }
 
   async function acceptJob(jobId: string) {
@@ -4362,6 +4382,7 @@ export default function Page() {
                   customers={customerRecords}
                   jobs={jobs}
                   canDelete={can("delete_customer")}
+                  canSeeMoney={canSeeMoney}
                   onAddCustomer={addCustomer}
                   onUpdateCustomer={updateCustomer}
                   onRemoveCustomer={removeCustomer}
@@ -4410,7 +4431,7 @@ export default function Page() {
                   <>
                   <LineInvitePanel job={selectedJob} customer={customerRecords.find((item) => item.id === selectedJob.customerId)} onMarkFriend={markCustomerLineFriend} />
                   <HandoffPanel job={selectedJob} currentUser={currentUser} onSubmit={submitHandoff} onAccept={acceptHandoff} onReject={rejectHandoff} />
-                  <JobDetail job={selectedJob} companyProfile={companyProfile} canSeeMoney={canSeeMoney} canEditPayment={can("edit_payment")} canDeleteJob={can("delete_job")} canConfirmDeposit={can("manage_finance") || ["Owner", "Manager", "Admin"].includes(currentUser.role)} canApproveWaiver={currentUser.role === "Owner"} onPayment={updatePayment} onConfirmDeposit={confirmDeposit} onReceiveBalance={receiveBalance} onComment={addComment} onMove={requestMove} onDelete={removeJob} teamMembers={teamMembers} canAssign={can("assign_staff") && canAcceptJob(selectedJob)} onAssign={assignStaff} canEditJob={can("edit_job") && (currentUser.role === "Owner" || !["Ready for Production", "In Production", "QC", "Packing", "Delivered / Picked Up", "Completed", "Cancelled"].includes(selectedJob.status))} onUpdateJob={updateJob} canAttach={can("edit_job")} onUploadFile={uploadJobFile} onDeleteFile={removeJobFile} customer={customerRecords.find((c) => c.id === selectedJob.customerId)} canArtwork={can("edit_job") || (currentUser.role === "Designer" && selectedJob.assignedDesigner === currentUser.name)} onUploadArtworkImage={uploadArtworkImage} onSaveArtwork={saveJobArtwork} canAccept={canAcceptJob(selectedJob)} onAcceptJob={acceptJob} onRejectJob={rejectJob} />
+                  <JobDetail job={selectedJob} currentUser={currentUser} companyProfile={companyProfile} canSeeMoney={canSeeMoney} canEditPayment={can("edit_payment")} canDeleteJob={can("delete_job")} canConfirmDeposit={can("manage_finance") || ["Owner", "Manager", "Admin"].includes(currentUser.role)} canApproveWaiver={currentUser.role === "Owner"} onPayment={updatePayment} onConfirmDeposit={confirmDeposit} onReceiveBalance={receiveBalance} onComment={addComment} onMove={requestMove} onDelete={removeJob} teamMembers={teamMembers} canAssign={can("assign_staff") && canAcceptJob(selectedJob)} onAssign={assignStaff} canEditJob={can("edit_job") && (currentUser.role === "Owner" || !["Ready for Production", "In Production", "QC", "Packing", "Delivered / Picked Up", "Completed", "Cancelled"].includes(selectedJob.status))} onUpdateJob={updateJob} canAttach={can("edit_job")} onUploadFile={uploadJobFile} onDeleteFile={removeJobFile} customer={customerRecords.find((c) => c.id === selectedJob.customerId)} canArtwork={can("edit_job") || (currentUser.role === "Designer" && selectedJob.assignedDesigner === currentUser.name)} onUploadArtworkImage={uploadArtworkImage} onSaveArtwork={saveJobArtwork} canAccept={canAcceptJob(selectedJob)} onAcceptJob={acceptJob} onRejectJob={rejectJob} />
                   </>
                 ) : (
                   <EmptyState title="ยังไม่มีงานในระบบ" text="เริ่มจากสร้างลูกค้าและสร้างงานแรกได้เลย" action={() => setActiveView("Create Job")} />
@@ -5595,6 +5616,8 @@ function JobRow({ job, canSeeMoney, onSelect }: { job: Job; canSeeMoney: boolean
         </div>
         <p className="font-semibold">{job.title}</p>
         <p className="text-sm text-k2-muted">{job.customerName}</p>
+        {/* ขั้นถัดไปต้องทำอะไร — 1 บรรทัด */}
+        <p className="mt-1.5 w-fit rounded-lg bg-sky-50 px-2 py-0.5 text-[11px] font-bold text-sky-800">👉 {nextStepText(job)}</p>
       </div>
       <span className={`w-fit rounded-full px-3 py-1 text-xs font-bold ${statusTint[job.status]}`}>{statusLabel[job.status]}</span>
       <div className="flex flex-col gap-1 text-sm text-k2-muted">
@@ -5713,6 +5736,8 @@ function Board({
                     </div>
                     <p className="font-semibold leading-5">{job.title}</p>
                     <p className="mt-1 text-sm text-k2-muted">{job.customerName}</p>
+                    {/* ขั้นถัดไปต้องทำอะไร — 1 บรรทัดต่อการ์ด ให้รู้ว่างานค้างที่ใคร */}
+                    <p className="mt-2 rounded-lg bg-sky-50 px-2 py-1 text-[11px] font-bold text-sky-800">👉 {nextStepText(job)}</p>
                     {!job.depositConfirmed && (job.depositSlip || job.depositWaived) ? (
                       <span className="mt-2 inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-bold text-amber-700">{job.depositWaived ? "รอเจ้าของอนุมัติ" : "รอยืนยันมัดจำ"}</span>
                     ) : null}
@@ -6110,7 +6135,7 @@ function WorkOrderDoc({ job, company, docNumber, customer, onClick }: { job: Job
             <td style={valueCell}>{jobTypeLabel[job.type]}</td>
           </tr>
           <tr>
-            <td style={labelCell}>อ้างอิงใบเสนอราคา</td>
+            <td style={labelCell}>เลขอ้างอิงเอกสาร</td>
             <td style={valueCell}>{job.quoteNumber || docNumber || "-"}</td>
             <td style={labelCell}>ประวัติลูกค้า</td>
             <td style={valueCell}>{customer ? `ลูกค้าเก่า ${customer.totalOrders || 0} ออเดอร์${customer.lastOrderDate ? `  ·  ล่าสุด ${customer.lastOrderDate}` : ""}` : "ลูกค้าใหม่"}</td>
@@ -6215,7 +6240,8 @@ function JobDetail({
   onSaveArtwork,
   canAccept,
   onAcceptJob,
-  onRejectJob
+  onRejectJob,
+  currentUser
 }: {
   job: Job;
   companyProfile: CompanyProfile;
@@ -6245,6 +6271,7 @@ function JobDetail({
   canAccept: boolean;
   onAcceptJob: (jobId: string) => void;
   onRejectJob: (jobId: string, reason: string) => void;
+  currentUser: TeamMember;
 }) {
   const [comment, setComment] = useState("");
   const [rejectingJob, setRejectingJob] = useState(false);
@@ -6278,6 +6305,43 @@ function JobDetail({
   const [statusMenuOpen, setStatusMenuOpen] = useState(false);
   const workOrderNumber = job.quoteNumber ?? quoteNumberFor(Number(job.id.replace(/\D/g, "").slice(-4)) || 1, companyProfile.quotePrefix);
   const dueInfo = dueUrgency(job.dueDate, job.status);
+
+  // ===== ปุ่มหลักปุ่มเดียวตามบทบาท + สถานะ (ลดความงง — ปุ่ม/เมนูที่ไม่เกี่ยวกับบทบาทซ่อนหมด) =====
+  const isBoss = userHasAnyRole(currentUser, ["Owner", "Manager", "Admin"]);
+  const isDesignerRole = userHasRole(currentUser, "Designer");
+  const isProductionRole = userHasRole(currentUser, "Production Staff");
+  const isPackingRole = userHasRole(currentUser, "Packing Staff");
+  // กล่องการเงิน: เห็นเฉพาะเจ้าของ/ฝ่ายการเงินเท่านั้น (บทบาทอื่นไม่เห็น — ลดความรก)
+  const canFinanceBox = userHasRole(currentUser, "Owner") || userHasRole(currentUser, "Accounting");
+  // ช่วงรออนุมัติ/รอตรวจรับ: ปุ่มอยู่ที่แถบอนุมัติด้านบน + กล่อง "ส่ง–รับงาน" (เลน handoff) — ไม่ซ้ำปุ่มที่นี่
+  const primaryAction: { label: string; to: JobStatus } | null = (() => {
+    if (job.acceptance === "pending" || job.handoffStatus === "pending") return null;
+    if (job.status === "Designing") return null; // กราฟิกใช้ปุ่ม "ส่งงานให้เซลตรวจ" ในกล่องส่ง–รับงาน
+    const mineAsDesigner = isDesignerRole && job.assignedDesigner === currentUser.name;
+    const mineAsProduction = isProductionRole && (job.assignedProduction === currentUser.name || job.assignedProduction === "Unassigned");
+    if (job.status === "New Order" && (mineAsDesigner || (isBoss && job.assignedDesigner !== "Unassigned"))) {
+      return { label: "▶ เริ่มออกแบบ", to: "Designing" };
+    }
+    if (job.status === "Waiting for File" && (mineAsDesigner || isBoss)) {
+      return { label: "▶ ได้ไฟล์แล้ว — เริ่มออกแบบ", to: "Designing" };
+    }
+    if (job.status === "Ready for Production" && (mineAsProduction || isBoss)) {
+      return { label: "▶ เริ่มผลิต", to: "In Production" };
+    }
+    if (job.status === "In Production" && (mineAsProduction || isBoss)) {
+      return { label: "✅ ผลิตเสร็จ — ส่งตรวจ QC", to: "QC" };
+    }
+    if (job.status === "QC" && (mineAsProduction || isPackingRole || isBoss)) {
+      return { label: "✅ ผ่าน QC — ส่งแพ็กของ", to: "Packing" };
+    }
+    if (job.status === "Packing" && (isPackingRole || mineAsProduction || isBoss)) {
+      return { label: "📦 แพ็กเสร็จ — ส่งมอบ/นัดรับ", to: "Delivered / Picked Up" };
+    }
+    if (job.status === "Delivered / Picked Up" && isBoss) {
+      return { label: "✔ ปิดงาน (เสร็จสิ้น)", to: "Completed" };
+    }
+    return null;
+  })();
   // เปลี่ยนสถานะ — มีกล่องยืนยัน "ยืนยันการย้ายสถานะ" ต่ออีกชั้น (กันมือไปโดน)
   function handleStatusPick(next: JobStatus) {
     setStatusMenuOpen(false);
@@ -6350,10 +6414,13 @@ function JobDetail({
                 </div>
               </div>
             ) : (
-              <div className="mt-3 flex gap-2">
-                <button type="button" onClick={() => onAcceptJob(job.id)} className="flex-1 rounded-2xl bg-emerald-500 px-4 py-2.5 text-sm font-extrabold text-white shadow">✅ อนุมัติเข้าผลิต</button>
-                <button type="button" onClick={() => setRejectingJob(true)} className="rounded-2xl bg-rose-100 px-4 py-2.5 text-sm font-bold text-rose-700">ตีกลับ</button>
-              </div>
+              <>
+                <div className="mt-3 flex gap-2">
+                  <button type="button" onClick={() => onAcceptJob(job.id)} className="flex-1 rounded-2xl bg-emerald-500 px-4 py-2.5 text-sm font-extrabold text-white shadow">✅ รับ + มอบหมาย</button>
+                  <button type="button" onClick={() => setRejectingJob(true)} className="rounded-2xl bg-rose-100 px-4 py-2.5 text-sm font-bold text-rose-700">ตีกลับ</button>
+                </div>
+                <p className="mt-2 text-xs font-semibold text-amber-700">กด “รับ” แล้วเลื่อนลงมอบหมายกราฟิก/ฝ่ายผลิตที่กล่อง “มอบหมายผู้รับผิดชอบ” ด้านล่าง</p>
+              </>
             )}
           </div>
         ) : job.acceptance === "pending" ? (
@@ -6380,6 +6447,8 @@ function JobDetail({
             </div>
             <h3 className="text-3xl font-semibold">{job.title}</h3>
             <p className="mt-2 text-k2-muted">{job.id} - {jobTypeLabel[job.type]} - {job.quantity} ชิ้น</p>
+            {/* ขั้นถัดไปต้องทำอะไร — 1 บรรทัด ชัดๆ */}
+            <p className="mt-2 w-fit rounded-xl bg-sky-50 px-3 py-1.5 text-sm font-bold text-sky-800 ring-1 ring-sky-200">👉 ขั้นถัดไป: {nextStepText(job)}</p>
             {/* พิมพ์เอกสาร PDF */}
             <div className="mt-3 flex flex-wrap items-center gap-2">
               <span className="text-xs font-bold text-k2-muted">🖨️ พิมพ์:</span>
@@ -6388,7 +6457,19 @@ function JobDetail({
               {canSeeMoney ? <button type="button" onClick={() => setPrintType("receipt")} className="rounded-xl bg-white/80 px-3 py-1.5 text-xs font-bold text-k2-ink shadow-sm">ใบเสร็จ</button> : null}
             </div>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            {/* ปุ่มหลักปุ่มเดียวตามบทบาท+สถานะ — คนหน้างานเห็นแค่ปุ่มนี้ปุ่มเดียว */}
+            {primaryAction ? (
+              <button
+                type="button"
+                onClick={() => onMove(job.id, primaryAction.to)}
+                className="rounded-2xl bg-emerald-600 px-6 py-3.5 text-base font-extrabold text-white shadow-lg shadow-emerald-600/30 transition hover:bg-emerald-500"
+              >
+                {primaryAction.label}
+              </button>
+            ) : null}
+            {/* dropdown สถานะทั้งหมด = ทางลัดของหัวหน้า (เจ้าของ/ผจก./แอดมิน) เท่านั้น — บทบาทอื่นซ่อนไว้กันงง */}
+            {isBoss ? (
             <div className="relative">
               <button
                 type="button"
@@ -6418,6 +6499,7 @@ function JobDetail({
                 </>
               ) : null}
             </div>
+            ) : null}
             {canDeleteJob ? (
               <button
                 type="button"
@@ -6664,8 +6746,13 @@ function JobDetail({
       </section>
 
       <aside className="space-y-4">
+        {/* กล่องการเงินรวม (มัดจำ/สลิป/ยกเว้น/รับยอดคงเหลือ) — เห็นเฉพาะเจ้าของ/ฝ่ายการเงิน บทบาทอื่นซ่อนทั้งกล่อง */}
+        {canFinanceBox ? (
         <section className="glass rounded-[1.5rem] p-5">
-          <h4 className="mb-4 text-xl font-semibold">การชำระเงิน</h4>
+          <div className="mb-4">
+            <h4 className="text-xl font-semibold">💰 การเงิน</h4>
+            <p className="text-xs font-bold text-k2-muted">มัดจำ · สลิป · ยกเว้นมัดจำ · รับยอดคงเหลือ — เห็นเฉพาะเจ้าของ/ฝ่ายการเงิน</p>
+          </div>
           <div className="grid gap-3">
             <MoneyLine label="ราคารวม" value={job.price} visible={canSeeMoney} />
             {normalizeVatMode(job.vatMode) !== "none" ? (
@@ -6782,6 +6869,7 @@ function JobDetail({
             </div>
           )}
         </section>
+        ) : null}
 
         <section className="glass rounded-[1.5rem] p-5">
           <h4 className="mb-4 text-xl font-semibold">คอมเมนต์</h4>
@@ -7628,29 +7716,18 @@ function CreateJobView({
             </select>
           </label>
           <label className="space-y-2">
-            <span className="text-sm font-semibold text-k2-muted">เพจที่รับงาน (กำหนดสาขารายได้)</span>
+            <span className="text-sm font-semibold text-k2-muted">เพจที่รับงาน (ช่องทางขาย)</span>
             <select
               value={form.salesPage}
               onChange={(event) => pickSalesPage(event.target.value)}
               className="w-full rounded-2xl border border-white/80 bg-white/80 px-4 py-3 outline-none"
             >
               <option value="">— ไม่ผ่านเพจ —</option>
-              <optgroup label="พะเยา">
-                {SALES_PAGES.filter((p) => p.branch === "พะเยา").map((p) => (
-                  <option key={p.page} value={p.page}>{p.page}</option>
-                ))}
-              </optgroup>
-              <optgroup label="พระรามเก้า">
-                {SALES_PAGES.filter((p) => p.branch === "พระรามเก้า").map((p) => (
-                  <option key={p.page} value={p.page}>{p.page}</option>
-                ))}
-              </optgroup>
+              {SALES_PAGES.map((p) => (
+                <option key={p.page} value={p.page}>{p.page}</option>
+              ))}
             </select>
-            {form.salesPage ? (
-              <p className="text-xs font-bold text-k2-ink">💰 รายได้เข้าสาขา <span className="text-emerald-700">{PAGE_TO_BRANCH[form.salesPage]}</span></p>
-            ) : (
-              <p className="text-xs font-semibold text-k2-muted">ไม่ได้มาจากเพจ — รายได้จะเข้าสาขาที่ผลิต</p>
-            )}
+            <p className="text-xs font-semibold text-k2-muted">ใช้บันทึกช่องทางขาย — สาขาเดียว รายได้เข้า{MAIN_BRANCH_LABEL}ทั้งหมด</p>
           </label>
           <label className="space-y-2">
             <span className="text-sm font-semibold text-k2-muted">เบอร์โทร</span>
@@ -7944,10 +8021,10 @@ function CreateJobView({
                 className="w-full rounded-2xl border border-white/80 bg-white/80 px-4 py-3 outline-none"
               >
                 {branchOptions.map((branch) => (
-                  <option key={branch}>{branch}</option>
+                  <option key={branch} value={branch}>{branchDisplay(branch)}</option>
                 ))}
               </select>
-              <p className="text-xs font-semibold text-k2-muted">🏭 ตั้งอัตโนมัติจากประเภทงาน ({jobTypeLabel[form.type]} → {branchForJobType(form.type)}) · แก้เองได้</p>
+              <p className="text-xs font-semibold text-k2-muted">🏭 สาขาเดียว — งานทุกประเภทผลิตที่{MAIN_BRANCH_LABEL}</p>
             </label>
             <label className="space-y-2 md:col-span-2">
               <span className="text-sm font-semibold text-k2-muted">วิธีรับ/จัดส่งสินค้า</span>
@@ -8530,7 +8607,7 @@ function SettingsView({
           >
             <option value="">— สาขา —</option>
             {newMemberBranchOptions.map((branch) => (
-              <option key={branch} value={branch}>{branch}</option>
+              <option key={branch} value={branch}>{branchDisplay(branch)}</option>
             ))}
           </select>
           <button
@@ -8631,7 +8708,7 @@ function SettingsView({
                         >
                           <option value="">— เลือกสาขาประจำ —</option>
                           {memberBranchOptions.map((branch) => (
-                            <option key={branch} value={branch}>{branch}</option>
+                            <option key={branch} value={branch}>{branchDisplay(branch)}</option>
                           ))}
                         </select>
                       ) : null}
@@ -9000,6 +9077,7 @@ function CustomersView({
   customers,
   jobs,
   canDelete,
+  canSeeMoney,
   onAddCustomer,
   onUpdateCustomer,
   onRemoveCustomer,
@@ -9008,6 +9086,7 @@ function CustomersView({
   customers: Customer[];
   jobs: Job[];
   canDelete: boolean;
+  canSeeMoney: boolean;
   onAddCustomer: (customer: Omit<Customer, "id" | "totalOrders" | "lifetimeValue" | "lastOrderDate">) => void;
   onUpdateCustomer: (customerId: string, updates: Pick<Customer, "name" | "phone" | "lineId" | "email" | "companyName" | "taxId" | "branch" | "billingAddress" | "accountingEmail" | "requiresInvoice" | "notes" | "sourceChannel" | "sourcePage" | "lineFriend" | "loyaltyPoints">) => void;
   onRemoveCustomer: (customerId: string) => void;
@@ -9630,8 +9709,8 @@ function CustomersView({
               </div>
             </div>
 
-            {/* สลิปมัดจำย้อนหลัง */}
-            {customerJobs.some((job) => job.depositSlip) ? (
+            {/* สลิปมัดจำย้อนหลัง — ข้อมูลการเงิน เห็นเฉพาะเจ้าของ/ฝ่ายการเงิน */}
+            {canSeeMoney && customerJobs.some((job) => job.depositSlip) ? (
               <div className="mt-5">
                 <p className="mb-2 text-sm font-bold text-k2-muted">สลิปมัดจำย้อนหลัง</p>
                 <div className="flex flex-wrap gap-2">
