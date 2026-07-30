@@ -765,7 +765,7 @@ function nextStepText(job: Job): string {
     case "Designing":
       return `กราฟิก${job.assignedDesigner !== "Unassigned" ? ` (${job.assignedDesigner})` : ""}ออกแบบอยู่ — เสร็จแล้วกด "ส่งแบบให้ตรวจ"`;
     case "Waiting for Customer Approval":
-      return "รอลูกค้า/เซลยืนยันแบบ";
+      return "รอลูกค้าเซ็น \"ใบยืนยันแบบ\" — กราฟิก/เซลส่งใบให้ลูกค้าทาง LINE";
     case "Ready for Production":
       return job.assignedProduction === "Unassigned" ? "รอฝ่ายผลิตกดรับงานแล้วเริ่มผลิต" : `รอฝ่ายผลิต (${job.assignedProduction}) กด "เริ่มผลิต"`;
     case "In Production":
@@ -1040,7 +1040,10 @@ function sanitizeArtwork(raw: unknown): ArtworkItem[] {
         url,
         label: typeof obj.label === "string" ? obj.label : "",
         qty: Number(obj.qty) > 0 ? Number(obj.qty) : undefined,
-        note: typeof obj.note === "string" ? obj.note : ""
+        note: typeof obj.note === "string" ? obj.note : "",
+        sizeW: Number(obj.sizeW) > 0 ? Number(obj.sizeW) : undefined,
+        sizeH: Number(obj.sizeH) > 0 ? Number(obj.sizeH) : undefined,
+        sizeUnit: typeof obj.sizeUnit === "string" ? obj.sizeUnit : undefined
       } as ArtworkItem;
     })
     .filter((item): item is ArtworkItem => item !== null);
@@ -5906,18 +5909,41 @@ function HandoffPanel({ job, currentUser, onSubmit, onAccept, onReject }: {
   );
 }
 
-type PrintDocType = "quote" | "workorder" | "receipt";
+type PrintDocType = "quote" | "workorder" | "receipt" | "approval";
 
 const printDocTitle: Record<PrintDocType, { th: string; en: string }> = {
   quote: { th: "ใบเสนอราคา", en: "QUOTATION" },
   workorder: { th: "ใบสั่งงาน", en: "WORK ORDER" },
-  receipt: { th: "ใบเสร็จรับเงิน / บิลเงินสด", en: "RECEIPT" }
+  receipt: { th: "ใบเสร็จรับเงิน / บิลเงินสด", en: "RECEIPT" },
+  approval: { th: "ใบยืนยันแบบ", en: "DESIGN APPROVAL" }
 };
+
+// หน่วยขนาดอาร์ตเวิร์ก + ข้อความขนาด "กว้าง × สูง หน่วย" (ใช้ทั้งใบยืนยันแบบและใบสั่งงาน — ข้อมูลชุดเดียวกัน)
+const ARTWORK_SIZE_UNITS = ["ซม.", "นิ้ว", "มม."];
+function artworkSizeText(item: ArtworkItem): string | null {
+  if (!item.sizeW || !item.sizeH) return null;
+  return `${item.sizeW} × ${item.sizeH} ${item.sizeUnit || "ซม."}`;
+}
+
+// ดึงค่าสเปกจากบล็อก "สเปกใบสั่งงาน" ที่ฝังใน description ตอนสร้างงาน (เช่น "วัสดุ: อะคริลิค")
+function specLine(description: string, ...labels: string[]): string {
+  for (const line of description.split("\n")) {
+    const trimmed = line.trim();
+    for (const label of labels) {
+      if (trimmed.startsWith(label)) {
+        const value = trimmed.slice(label.length).replace(/^[:：]\s*/, "").trim();
+        if (value && value !== "-") return value;
+      }
+    }
+  }
+  return "-";
+}
 
 function PrintableDoc({ job, company, docType, docNumber, customer, onClose }: { job: Job; company: CompanyProfile; docType: PrintDocType; docNumber: string; customer?: Customer; onClose: () => void }) {
   const title = printDocTitle[docType];
   const isReceipt = docType === "receipt";
   const isWorkOrder = docType === "workorder";
+  const isApproval = docType === "approval";
   const today = new Date().toLocaleDateString("th-TH", { year: "numeric", month: "long", day: "numeric" });
   const vatMode = normalizeVatMode(job.vatMode);
   const hasVat = vatMode !== "none";
@@ -5972,6 +5998,8 @@ function PrintableDoc({ job, company, docType, docNumber, customer, onClose }: {
 
         {isWorkOrder ? (
           <WorkOrderDoc job={job} company={company} docNumber={docNumber} customer={customer} onClick={(e) => e.stopPropagation()} />
+        ) : isApproval ? (
+          <ApprovalDoc job={job} company={company} onClick={(e) => e.stopPropagation()} />
         ) : (
         <div id="print-doc" className="mx-auto bg-white p-8 text-slate-900 shadow-2xl" onClick={(e) => e.stopPropagation()} style={{ fontSize: "13px", lineHeight: 1.5 }}>
           <div className="flex items-start justify-between gap-4 border-b-2 border-slate-800 pb-4">
@@ -6168,6 +6196,8 @@ function WorkOrderDoc({ job, company, docNumber, customer, onClick }: { job: Job
                   <p style={{ fontWeight: 800, fontSize: 12.5, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                     <span style={{ color: "#64748b" }}>#{index + 1}</span>  {item.label || "รายการงาน"}
                   </p>
+                  {/* ขนาดชุดเดียวกับใบยืนยันแบบ — ฝ่ายผลิตใช้ตัดชิ้นงาน */}
+                  {artworkSizeText(item) ? <p style={{ fontWeight: 900, fontSize: 12, color: "#14383d" }}>📐 {artworkSizeText(item)}</p> : null}
                   {item.note ? <p style={{ color: "#64748b", fontSize: 11, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{item.note}</p> : null}
                 </div>
                 {item.qty ? <span style={{ border: `1.5px solid ${ink}`, color: ink, borderRadius: 3, padding: "2px 10px", fontWeight: 900, fontSize: 13.5, whiteSpace: "nowrap" }}>{item.qty} ชิ้น</span> : null}
@@ -6203,6 +6233,136 @@ function WorkOrderDoc({ job, company, docNumber, customer, onClick }: { job: Job
           <div key={role} style={{ textAlign: "center" }}>
             <div style={{ height: 30 }} />
             <div style={{ borderTop: "1px solid #334155", paddingTop: 4 }}>{role}</div>
+            <div style={{ color: "#94a3b8", fontSize: 10.5 }}>ลงชื่อ / วันที่</div>
+          </div>
+        ))}
+      </div>
+      <p style={{ marginTop: 16, fontSize: 10, color: "#94a3b8", textAlign: "center", borderTop: "1px solid #e2e8f0", paddingTop: 6 }}>เอกสารนี้ออกโดยระบบ {company.name || "K2 Manager"} · {today} · เลขที่งาน {job.id}</p>
+    </div>
+  );
+}
+
+// ===== ใบยืนยันแบบ (Design Approval) — ให้ลูกค้าเซ็นยืนยันแบบก่อนเข้าผลิต =====
+// กราฟิกส่งใบนี้ให้ลูกค้าทาง LINE ตอนสถานะ "รอลูกค้าอนุมัติ" — ลูกค้าเซ็นกลับ → ผ่าน → เข้าผลิต
+// ดึงภาพ + ขนาด "ชุดเดียวกัน" กับใบสั่งงาน (jobs.artwork) — ไม่มีข้อมูลราคา
+function ApprovalDoc({ job, company, onClick }: { job: Job; company: CompanyProfile; onClick: (e: React.MouseEvent) => void }) {
+  const today = new Date().toLocaleDateString("th-TH", { year: "numeric", month: "long", day: "numeric" });
+  const ink = "#14383d";
+  const rule = "#1f2937";
+  const artwork: ArtworkItem[] = (job.artwork && job.artwork.length > 0)
+    ? job.artwork
+    : job.files.filter((file) => file.type === "image" && file.url).map((file) => ({ id: file.id, url: file.url as string, label: "", qty: undefined, note: "" }));
+  const labelCell: React.CSSProperties = { border: "1px solid #94a3b8", padding: "6px 10px", background: "#f1f5f4", fontWeight: 800, fontSize: 11.5, color: ink, whiteSpace: "nowrap", verticalAlign: "top", width: 92 };
+  const valueCell: React.CSSProperties = { border: "1px solid #94a3b8", padding: "6px 10px", fontSize: 12.5, verticalAlign: "top" };
+  // สเปกจากบล็อก "สเปกใบสั่งงาน" ใน description (กรอกตอนสร้างงาน)
+  const material = specLine(job.description, "วัสดุ");
+  const colorSpec = specLine(job.description, "สี / สเปกสี", "สี");
+  const sides = specLine(job.description, "จำนวนด้าน");
+  return (
+    <div id="print-doc" className="mx-auto bg-white text-slate-900 shadow-2xl" onClick={onClick} style={{ fontSize: "13px", lineHeight: 1.5, padding: "30px 34px", fontFamily: "'Sarabun','Noto Sans Thai',sans-serif" }}>
+      {/* หัวเอกสาร */}
+      <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 20 }}>
+        <div style={{ display: "flex", alignItems: "flex-start", gap: 14 }}>
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src="/assets/k2smart-logo.png" alt="logo" style={{ width: 74, height: 74, objectFit: "contain" }} />
+          <div>
+            <p style={{ fontSize: 21, fontWeight: 900, letterSpacing: 0.3, color: ink }}>{company.name || "K2Smart"}</p>
+            {company.legalName ? <p style={{ color: "#334155", fontSize: 12.5 }}>{company.legalName}</p> : null}
+            {company.phone ? <p style={{ color: "#475569", fontSize: 11.5 }}>โทร {company.phone}</p> : null}
+          </div>
+        </div>
+        <div style={{ textAlign: "right", minWidth: 190 }}>
+          <div style={{ border: `2px solid ${ink}`, borderRadius: 4, padding: "8px 16px", textAlign: "center" }}>
+            <p style={{ fontSize: 20, fontWeight: 900, color: ink, lineHeight: 1.15 }}>ใบยืนยันแบบ</p>
+            <p style={{ letterSpacing: 3, fontSize: 10.5, color: "#64748b", fontWeight: 700 }}>DESIGN APPROVAL</p>
+          </div>
+          <table style={{ marginTop: 8, marginLeft: "auto", fontSize: 12 }}>
+            <tbody>
+              <tr><td style={{ color: "#64748b", textAlign: "right", paddingRight: 8 }}>เลขที่งาน</td><td style={{ fontWeight: 800, textAlign: "right" }}>{job.id}</td></tr>
+              <tr><td style={{ color: "#64748b", textAlign: "right", paddingRight: 8 }}>วันที่ออก</td><td style={{ fontWeight: 700, textAlign: "right" }}>{today}</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+      <div style={{ borderTop: `3px solid ${rule}`, borderBottom: `1px solid ${rule}`, height: 3, marginTop: 12 }} />
+
+      {/* รายละเอียดงาน: ลูกค้า / งาน / จำนวน / วัสดุ / สี / จำนวนด้าน / กำหนดส่ง */}
+      <table style={{ width: "100%", borderCollapse: "collapse", marginTop: 16 }}>
+        <tbody>
+          <tr>
+            <td style={labelCell}>ลูกค้า</td>
+            <td style={valueCell}><b>{job.customerName || "-"}</b>{job.phone ? `  ·  โทร ${job.phone}` : ""}</td>
+            <td style={labelCell}>กำหนดส่ง</td>
+            <td style={{ ...valueCell, fontWeight: 800 }}>{job.dueDate || "-"}{job.isExpress ? "  (ด่วน)" : ""}</td>
+          </tr>
+          <tr>
+            <td style={labelCell}>งาน</td>
+            <td style={valueCell}><b>{job.title}</b></td>
+            <td style={labelCell}>จำนวน</td>
+            <td style={{ ...valueCell, fontWeight: 800 }}>{job.quantity} ชิ้น</td>
+          </tr>
+          <tr>
+            <td style={labelCell}>วัสดุ</td>
+            <td style={valueCell}>{material}</td>
+            <td style={labelCell}>สี</td>
+            <td style={valueCell}>{colorSpec}</td>
+          </tr>
+          <tr>
+            <td style={labelCell}>จำนวนด้าน</td>
+            <td style={valueCell} colSpan={3}>{sides}</td>
+          </tr>
+        </tbody>
+      </table>
+
+      {/* ภาพอาร์ตเวิร์กขนาดใหญ่ + ขนาดต่อรูป (เด่นชัด) */}
+      <div style={{ marginTop: 18, marginBottom: 8, display: "flex", alignItems: "baseline", justifyContent: "space-between", borderBottom: `2px solid ${ink}`, paddingBottom: 4 }}>
+        <p style={{ fontWeight: 900, fontSize: 13.5, color: ink, letterSpacing: 0.3 }}>แบบงานที่ต้องยืนยัน</p>
+        <p style={{ fontSize: 11, color: "#64748b", fontWeight: 700 }}>ทั้งหมด {artwork.length} รายการ</p>
+      </div>
+      {artwork.length > 0 ? (
+        <div style={{ display: "grid", gridTemplateColumns: artwork.length <= 1 ? "1fr" : "repeat(auto-fill, minmax(300px, 1fr))", gap: 12 }}>
+          {artwork.map((item, index) => {
+            const sizeText = artworkSizeText(item);
+            return (
+              <div key={item.id} style={{ border: "1.5px solid #94a3b8", overflow: "hidden", breakInside: "avoid" }}>
+                <div style={{ background: "#f8fafc", display: "flex", alignItems: "center", justifyContent: "center", height: artwork.length <= 1 ? 420 : 300, borderBottom: "1px solid #cbd5e1" }}>
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img src={item.url} alt={item.label || "artwork"} style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain" }} />
+                </div>
+                <div style={{ padding: "8px 12px" }}>
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+                    <p style={{ fontWeight: 800, fontSize: 12.5 }}>
+                      <span style={{ color: "#64748b" }}>#{index + 1}</span>  {item.label || "รายการงาน"}
+                    </p>
+                    {item.qty ? <span style={{ border: `1.5px solid ${ink}`, color: ink, borderRadius: 3, padding: "1px 8px", fontWeight: 900, fontSize: 12, whiteSpace: "nowrap" }}>{item.qty} ชิ้น</span> : null}
+                  </div>
+                  <p style={{ marginTop: 4, fontWeight: 900, fontSize: 15, color: sizeText ? ink : "#b91c1c" }}>
+                    📐 ขนาด: {sizeText ?? "ยังไม่ระบุ — กรุณายืนยันขนาดกับร้าน"}
+                  </p>
+                  {item.note ? <p style={{ color: "#64748b", fontSize: 11.5 }}>{item.note}</p> : null}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      ) : (
+        <div style={{ border: "1px dashed #94a3b8", padding: "28px 0", textAlign: "center", color: "#94a3b8", fontWeight: 700 }}>— ยังไม่มีแบบงาน (ให้กราฟิกวางอาร์ตเวิร์กในงานก่อน) —</div>
+      )}
+
+      {/* คำเตือนก่อนเซ็น */}
+      <div style={{ marginTop: 16, border: "2px solid #b91c1c", background: "#fef2f2", padding: "10px 14px", borderRadius: 4 }}>
+        <p style={{ fontWeight: 900, color: "#b91c1c", fontSize: 13 }}>
+          ⚠️ กรุณาตรวจ ขนาด / สี / ตัวสะกด / QR ให้ครบก่อนเซ็น — ทางร้านจะเริ่มผลิตหลังลูกค้าอนุมัติแบบนี้เท่านั้น
+        </p>
+        <p style={{ color: "#7f1d1d", fontSize: 11.5 }}>หากพบจุดต้องแก้ กรุณาแจ้งกลับก่อนเซ็น · แบบที่อนุมัติแล้วถือเป็นข้อสรุปสำหรับการผลิต</p>
+      </div>
+
+      {/* ช่องเซ็น: ลูกค้าอนุมัติแบบ + ผู้ออกแบบ */}
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 28, marginTop: 34, fontSize: 12 }}>
+        {["ลูกค้าอนุมัติแบบ", "ผู้ออกแบบ"].map((role) => (
+          <div key={role} style={{ textAlign: "center" }}>
+            <div style={{ height: 34 }} />
+            <div style={{ borderTop: "1px solid #334155", paddingTop: 4, fontWeight: 800 }}>{role}</div>
             <div style={{ color: "#94a3b8", fontSize: 10.5 }}>ลงชื่อ / วันที่</div>
           </div>
         ))}
@@ -6452,7 +6612,8 @@ function JobDetail({
             {/* พิมพ์เอกสาร PDF */}
             <div className="mt-3 flex flex-wrap items-center gap-2">
               <span className="text-xs font-bold text-k2-muted">🖨️ พิมพ์:</span>
-              {/* ใบเสนอราคา: ตัดออก — ฝ่ายการเงินออกใบเสนอราคาเองนอกระบบ (เหลือใบสั่งงาน + ใบเสร็จ) */}
+              {/* ใบเสนอราคา: ตัดออก — ฝ่ายการเงินออกใบเสนอราคาเองนอกระบบ (เหลือใบยืนยันแบบ + ใบสั่งงาน + ใบเสร็จ) */}
+              <button type="button" onClick={() => setPrintType("approval")} className={`rounded-xl px-3 py-1.5 text-xs font-bold shadow-sm ${job.status === "Waiting for Customer Approval" ? "bg-violet-600 text-white" : "bg-white/80 text-k2-ink"}`}>✍️ ใบยืนยันแบบ (ลูกค้าเซ็น)</button>
               <button type="button" onClick={() => setPrintType("workorder")} className="rounded-xl bg-white/80 px-3 py-1.5 text-xs font-bold text-k2-ink shadow-sm">ใบสั่งงาน</button>
               {canSeeMoney ? <button type="button" onClick={() => setPrintType("receipt")} className="rounded-xl bg-white/80 px-3 py-1.5 text-xs font-bold text-k2-ink shadow-sm">ใบเสร็จ</button> : null}
             </div>
@@ -6723,14 +6884,24 @@ function JobDetail({
                   {canArtwork ? (
                     <div className="space-y-2">
                       <input value={item.label ?? ""} onChange={(event) => patchArtwork(item.id, { label: event.target.value })} placeholder="ชื่อ/รายการ เช่น สแตนดี้, พวงกุญแจลายเขียว" className="w-full rounded-xl border border-violet-100 bg-violet-50/40 px-3 py-2 text-sm font-semibold outline-none" />
+                      {/* ขนาดต่อรูป (กว้าง × สูง + หน่วย) — ใช้ในใบยืนยันแบบ + ใบสั่งงาน */}
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-xs font-bold text-k2-muted">📐 ขนาด</span>
+                        <input type="number" min={0} step="any" value={item.sizeW ?? ""} onChange={(event) => patchArtwork(item.id, { sizeW: event.target.value ? Number(event.target.value) : undefined })} placeholder="กว้าง" className="w-20 rounded-xl border border-violet-100 bg-violet-50/40 px-2 py-2 text-sm font-semibold outline-none" />
+                        <span className="text-sm font-bold text-k2-muted">×</span>
+                        <input type="number" min={0} step="any" value={item.sizeH ?? ""} onChange={(event) => patchArtwork(item.id, { sizeH: event.target.value ? Number(event.target.value) : undefined })} placeholder="สูง" className="w-20 rounded-xl border border-violet-100 bg-violet-50/40 px-2 py-2 text-sm font-semibold outline-none" />
+                        <select value={item.sizeUnit ?? "ซม."} onChange={(event) => patchArtwork(item.id, { sizeUnit: event.target.value })} className="rounded-xl border border-violet-100 bg-violet-50/40 px-2 py-2 text-sm font-semibold outline-none">
+                          {ARTWORK_SIZE_UNITS.map((unit) => (<option key={unit} value={unit}>{unit}</option>))}
+                        </select>
+                      </div>
                       <div className="flex gap-2">
                         <input type="number" min={0} value={item.qty ?? ""} onChange={(event) => patchArtwork(item.id, { qty: event.target.value ? Number(event.target.value) : undefined })} placeholder="จำนวน" className="w-28 rounded-xl border border-violet-100 bg-violet-50/40 px-3 py-2 text-sm font-semibold outline-none" />
-                        <input value={item.note ?? ""} onChange={(event) => patchArtwork(item.id, { note: event.target.value })} placeholder="โน้ตผลิต (ขนาด/วัสดุ/สี)" className="flex-1 rounded-xl border border-violet-100 bg-violet-50/40 px-3 py-2 text-sm outline-none" />
+                        <input value={item.note ?? ""} onChange={(event) => patchArtwork(item.id, { note: event.target.value })} placeholder="โน้ตผลิต (วัสดุ/สี)" className="flex-1 rounded-xl border border-violet-100 bg-violet-50/40 px-3 py-2 text-sm outline-none" />
                       </div>
                     </div>
                   ) : (
                     <div className="flex items-baseline justify-between gap-2">
-                      <p className="truncate font-semibold">{item.label || "—"}</p>
+                      <p className="truncate font-semibold">{item.label || "—"}{artworkSizeText(item) ? ` · 📐 ${artworkSizeText(item)}` : ""}</p>
                       {item.qty ? <span className="shrink-0 font-bold text-violet-700">{item.qty} ชิ้น</span> : null}
                     </div>
                   )}

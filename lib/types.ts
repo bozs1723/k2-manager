@@ -190,7 +190,10 @@ export type ArtworkItem = {
   url: string;
   label?: string;   // เช่น "สแตนดี้", "พวงกุญแจลายเขียว"
   qty?: number;      // จำนวนชิ้นของรายการนี้
-  note?: string;     // โน้ตการผลิต (ขนาด/วัสดุ/สี)
+  note?: string;     // โน้ตการผลิต (วัสดุ/สี)
+  sizeW?: number;    // ขนาด: กว้าง
+  sizeH?: number;    // ขนาด: สูง
+  sizeUnit?: string; // หน่วยของขนาด: ซม. / นิ้ว / มม.
 };
 
 export type StatusEvent = {
