@@ -1989,7 +1989,8 @@ export default function Page() {
       },
       {
         label: "ยอดค้างชำระ",
-        value: money.format(jobs.reduce((sum, job) => sum + job.remainingBalance, 0)),
+        // นับเฉพาะงานที่ยังเดินอยู่ — งานยกเลิก/ปิดงานแล้วไม่ใช่ยอดค้างจริง (เคยรวมแล้วตัวเลขบวมจากงานยกเลิก)
+        value: money.format(activeJobs.reduce((sum, job) => sum + job.remainingBalance, 0)),
         icon: WalletCards,
         tone: "bg-white"
       },
@@ -8353,7 +8354,9 @@ const PaymentsView = memo(function PaymentsView({
   canSeeMoney: boolean;
   onSelect: (id: string) => void;
 }) {
-  const totals = jobs.reduce(
+  // ติดตามเฉพาะงานที่ยังเดินอยู่ — งานยกเลิก/ปิดงานแล้วไม่ต้องตามเก็บ ไม่นับเข้ายอดค้างชำระ
+  const trackable = jobs.filter((job) => job.status !== "Cancelled" && job.status !== "Completed");
+  const totals = trackable.reduce(
     (sum, job) => ({
       price: sum.price + job.price,
       deposit: sum.deposit + job.deposit,
@@ -8381,7 +8384,10 @@ const PaymentsView = memo(function PaymentsView({
       <section className="glass rounded-[1.5rem] p-5">
         <h3 className="mb-4 text-2xl font-semibold">ติดตามการชำระเงิน</h3>
         <div className="space-y-3">
-          {jobs.map((job) => (
+          {trackable.length === 0 ? (
+            <p className="rounded-2xl bg-white/60 px-4 py-6 text-center text-sm font-semibold text-k2-muted">ไม่มีงานที่ต้องติดตามการชำระเงิน</p>
+          ) : null}
+          {trackable.map((job) => (
             <button key={job.id} onClick={() => onSelect(job.id)} className="grid w-full gap-3 rounded-2xl bg-white/65 p-4 text-left hover:bg-white md:grid-cols-[1fr_auto_auto] md:items-center">
               <div>
                 <p className="font-semibold">{job.id} - {job.title}</p>
